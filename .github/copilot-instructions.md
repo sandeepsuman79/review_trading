@@ -1,0 +1,6 @@
+- copilot-instructions.md created.
+- React.js project scaffolded with Vite + TypeScript.
+- Dependencies installed successfully.
+- Project build verified successfully.
+- README created with startup instructions.
+- VS Code launch task added in `.vscode/tasks.json`.
