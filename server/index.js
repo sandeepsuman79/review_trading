@@ -70,7 +70,7 @@ const server = createServer(async (request, response) => {
 
     const privateKey = process.env.ANGELONE_PRIVATE_KEY
     if (!privateKey) {
-      sendJson(response, 500, { message: 'ANGELONE_PRIVATE_KEY is not configured on the server.' })
+      sendJson(response, 503, { message: 'ANGELONE_PRIVATE_KEY is not configured on the server.' })
       return
     }
 
