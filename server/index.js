@@ -90,11 +90,13 @@ const server = createServer(async (request, response) => {
     })
 
     const responseText = await angelResponse.text()
-    let responseBody
-    try {
-      responseBody = JSON.parse(responseText)
-    } catch {
-      responseBody = { message: responseText || 'Angel One returned an invalid response.' }
+    let responseBody = { message: 'Angel One returned an empty response.' }
+    if (responseText.trim()) {
+      try {
+        responseBody = JSON.parse(responseText)
+      } catch {
+        responseBody = { message: responseText }
+      }
     }
     sendJson(response, angelResponse.status, responseBody)
   } catch (error) {
