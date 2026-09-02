@@ -6,6 +6,7 @@ import ProfilePage from './pages/ProfilePage'
 import FeedPage from './pages/FeedPage'
 import PostDetail from './pages/PostDetail'
 import PredictionPage from './pages/PredictionPage'
+import AngelOneLoginPage from './pages/AngelOneLoginPage'
 import { postsData } from './data/posts'
 import type { PostItem, CommentItem } from './data/posts'
 
@@ -51,6 +52,7 @@ export default function App() {
           element={<PostDetail posts={posts} onVote={handleVote} onReaction={handleReaction} onComment={handleComment} />}
         />
         <Route path="/prediction" element={<PredictionPage />} />
+        <Route path="/angelone/login" element={<AngelOneLoginPage />} />
       </Routes>
     </Router>
   )

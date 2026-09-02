@@ -7,6 +7,7 @@ export default function Navbar() {
     { to: '/', label: 'Profile' },
     { to: '/feed', label: 'Feed' },
     { to: '/prediction', label: 'Traders Prediction' },
+    { to: '/angelone/login', label: 'Angel One Login' },
   ]
 
   return (
