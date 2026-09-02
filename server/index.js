@@ -12,6 +12,17 @@ if (existsSync('.env')) {
 
 const port = Number(process.env.PORT || 3001)
 const angelOneUrl = 'https://apiconnect.angelone.in/rest/auth/angelbroking/user/v1/loginByPassword'
+const angelOneRefreshUrl = 'https://apiconnect.angelone.in/rest/auth/angelbroking/jwt/v1/generateTokens'
+const angelOneProfileUrl = 'https://apiconnect.angelone.in/rest/secure/angelbroking/user/v1/getProfile'
+const angelOneRmsUrl = 'https://apiconnect.angelone.in/rest/secure/angelbroking/user/v1/getRMS'
+const angelOneLogoutUrl = 'https://apiconnect.angelone.in/rest/secure/angelbroking/user/v1/logout'
+const angelOneGttUrls = {
+  create: 'https://apiconnect.angelone.in/rest/secure/angelbroking/gtt/v1/createRule',
+  modify: 'https://apiconnect.angelone.in/rest/secure/angelbroking/gtt/v1/modifyRule',
+  cancel: 'https://apiconnect.angelone.in/rest/secure/angelbroking/gtt/v1/cancelRule',
+  details: 'https://apiconnect.angelone.in/rest/secure/angelbroking/gtt/v1/ruleDetails',
+  list: 'https://apiconnect.angelone.in/rest/secure/angelbroking/gtt/v1/ruleList',
+}
 
 function sendJson(response, status, body) {
   response.writeHead(status, {
@@ -44,6 +55,184 @@ const server = createServer(async (request, response) => {
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
     })
     response.end()
+    return
+  }
+
+  if (request.method === 'POST' && request.url === '/api/angelone/refresh') {
+    const authorization = request.headers.authorization
+    const privateKey = process.env.ANGELONE_PRIVATE_KEY
+    if (!authorization?.startsWith('Bearer ')) {
+      sendJson(response, 401, { message: 'Angel One authorization token is required.' })
+      return
+    }
+    if (!privateKey) {
+      sendJson(response, 503, { message: 'ANGELONE_PRIVATE_KEY is not configured on the server.' })
+      return
+    }
+
+    if (request.method === 'POST' && request.url === '/api/angelone/logout') {
+      const authorization = request.headers.authorization
+      const privateKey = process.env.ANGELONE_PRIVATE_KEY
+      if (!authorization?.startsWith('Bearer ')) return sendJson(response, 401, { message: 'Angel One authorization token is required.' })
+      if (!privateKey) return sendJson(response, 503, { message: 'ANGELONE_PRIVATE_KEY is not configured on the server.' })
+      try {
+        const input = JSON.parse(await readBody(request))
+        if (typeof input?.clientcode !== 'string' || !input.clientcode.trim()) return sendJson(response, 400, { message: 'clientcode is required.' })
+        const angelResponse = await fetch(angelOneLogoutUrl, { method: 'POST', headers: { Authorization: authorization, Accept: 'application/json', 'Content-Type': 'application/json', 'X-ClientLocalIP': process.env.ANGELONE_CLIENT_LOCAL_IP || '', 'X-ClientPublicIP': process.env.ANGELONE_CLIENT_PUBLIC_IP || '', 'X-MACAddress': process.env.ANGELONE_MAC_ADDRESS || '', 'X-PrivateKey': privateKey, 'X-SourceID': 'WEB', 'X-UserType': 'USER' }, body: JSON.stringify({ clientcode: input.clientcode.trim() }) })
+        const text = await angelResponse.text()
+        let body
+        try { body = JSON.parse(text) } catch { body = { message: text || 'Angel One returned an invalid response.' } }
+        sendJson(response, angelResponse.status, body)
+      } catch (error) {
+        sendJson(response, error instanceof SyntaxError ? 400 : 502, { message: error instanceof SyntaxError ? 'Request body must be valid JSON.' : 'Unable to connect to Angel One.' })
+      }
+      return
+    }
+
+    if (request.method === 'POST' && request.url?.startsWith('/api/angelone/gtt/')) {
+      const action = request.url.split('/').pop()
+      const authorization = request.headers.authorization
+      const privateKey = process.env.ANGELONE_PRIVATE_KEY
+      if (!angelOneGttUrls[action]) return sendJson(response, 404, { message: 'Unknown GTT operation.' })
+      if (!authorization?.startsWith('Bearer ')) return sendJson(response, 401, { message: 'Angel One authorization token is required.' })
+      if (!privateKey) return sendJson(response, 503, { message: 'ANGELONE_PRIVATE_KEY is not configured on the server.' })
+      try {
+        const input = JSON.parse(await readBody(request))
+        if (!input || typeof input !== 'object' || Array.isArray(input)) return sendJson(response, 400, { message: 'GTT request must be a JSON object.' })
+        if (action === 'create' && (!['NSE', 'BSE'].includes(input.exchange) || !['DELIVERY', 'MARGIN'].includes(input.producttype))) return sendJson(response, 400, { message: 'GTT supports only NSE/BSE and DELIVERY/MARGIN.' })
+        const angelResponse = await fetch(angelOneGttUrls[action], { method: 'POST', headers: { Authorization: authorization, Accept: 'application/json', 'Content-Type': 'application/json', 'X-ClientLocalIP': process.env.ANGELONE_CLIENT_LOCAL_IP || '', 'X-ClientPublicIP': process.env.ANGELONE_CLIENT_PUBLIC_IP || '', 'X-MACAddress': process.env.ANGELONE_MAC_ADDRESS || '', 'X-PrivateKey': privateKey, 'X-SourceID': 'WEB', 'X-UserType': 'USER' }, body: JSON.stringify(input) })
+        const text = await angelResponse.text()
+        let body
+        try { body = JSON.parse(text) } catch { body = { message: text || 'Angel One returned an invalid response.' } }
+        sendJson(response, angelResponse.status, body)
+      } catch (error) {
+        sendJson(response, error instanceof SyntaxError ? 400 : 502, { message: error instanceof SyntaxError ? 'Request body must be valid JSON.' : 'Unable to connect to Angel One.' })
+      }
+      return
+    }
+
+    if (request.method === 'POST' && request.url === '/api/angelone/logout') {
+      const authorization = request.headers.authorization
+      const privateKey = process.env.ANGELONE_PRIVATE_KEY
+      if (!authorization?.startsWith('Bearer ')) {
+        sendJson(response, 401, { message: 'Angel One authorization token is required.' })
+        return
+      }
+      if (!privateKey) {
+        sendJson(response, 503, { message: 'ANGELONE_PRIVATE_KEY is not configured on the server.' })
+        return
+      }
+      try {
+        const input = JSON.parse(await readBody(request))
+        if (typeof input?.clientcode !== 'string' || !input.clientcode.trim()) {
+          sendJson(response, 400, { message: 'clientcode is required.' })
+          return
+        }
+        const angelResponse = await fetch(angelOneLogoutUrl, {
+          method: 'POST',
+          headers: {
+            Authorization: authorization,
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            'X-ClientLocalIP': process.env.ANGELONE_CLIENT_LOCAL_IP || '',
+            'X-ClientPublicIP': process.env.ANGELONE_CLIENT_PUBLIC_IP || '',
+            'X-MACAddress': process.env.ANGELONE_MAC_ADDRESS || '',
+            'X-PrivateKey': privateKey,
+            'X-SourceID': 'WEB',
+            'X-UserType': 'USER',
+          },
+          body: JSON.stringify({ clientcode: input.clientcode.trim() }),
+        })
+        const responseText = await angelResponse.text()
+        let responseBody
+        try {
+          responseBody = JSON.parse(responseText)
+        } catch {
+          responseBody = { message: responseText || 'Angel One returned an invalid response.' }
+        }
+        sendJson(response, angelResponse.status, responseBody)
+      } catch (error) {
+        sendJson(response, error instanceof SyntaxError ? 400 : 502, {
+          message: error instanceof SyntaxError ? 'Request body must be valid JSON.' : 'Unable to connect to Angel One.',
+        })
+      }
+      return
+    }
+
+    try {
+      const input = JSON.parse(await readBody(request))
+      if (typeof input?.refreshToken !== 'string' || !input.refreshToken.trim()) {
+        sendJson(response, 400, { message: 'refreshToken is required.' })
+        return
+      }
+      const angelResponse = await fetch(angelOneRefreshUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: authorization,
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-ClientLocalIP': process.env.ANGELONE_CLIENT_LOCAL_IP || '',
+          'X-ClientPublicIP': process.env.ANGELONE_CLIENT_PUBLIC_IP || '',
+          'X-MACAddress': process.env.ANGELONE_MAC_ADDRESS || '',
+          'X-PrivateKey': privateKey,
+          'X-SourceID': 'WEB',
+          'X-UserType': 'USER',
+        },
+        body: JSON.stringify({ refreshToken: input.refreshToken.trim() }),
+      })
+      const responseText = await angelResponse.text()
+      let responseBody
+      try {
+        responseBody = JSON.parse(responseText)
+      } catch {
+        responseBody = { message: responseText || 'Angel One returned an invalid response.' }
+      }
+      sendJson(response, angelResponse.status, responseBody)
+    } catch (error) {
+      sendJson(response, error instanceof SyntaxError ? 400 : 502, {
+        message: error instanceof SyntaxError ? 'Request body must be valid JSON.' : 'Unable to connect to Angel One.',
+      })
+    }
+    return
+  }
+
+  if (request.method === 'GET' && (request.url === '/api/angelone/profile' || request.url === '/api/angelone/rms')) {
+    const authorization = request.headers.authorization
+    const privateKey = process.env.ANGELONE_PRIVATE_KEY
+    if (!authorization?.startsWith('Bearer ')) {
+      sendJson(response, 401, { message: 'Angel One authorization token is required.' })
+      return
+    }
+    if (!privateKey) {
+      sendJson(response, 503, { message: 'ANGELONE_PRIVATE_KEY is not configured on the server.' })
+      return
+    }
+
+    try {
+      const angelResponse = await fetch(request.url === '/api/angelone/rms' ? angelOneRmsUrl : angelOneProfileUrl, {
+        headers: {
+          Authorization: authorization,
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-ClientLocalIP': process.env.ANGELONE_CLIENT_LOCAL_IP || '',
+          'X-ClientPublicIP': process.env.ANGELONE_CLIENT_PUBLIC_IP || '',
+          'X-MACAddress': process.env.ANGELONE_MAC_ADDRESS || '',
+          'X-PrivateKey': privateKey,
+          'X-SourceID': 'WEB',
+          'X-UserType': 'USER',
+        },
+      })
+      const responseText = await angelResponse.text()
+      let responseBody
+      try {
+        responseBody = JSON.parse(responseText)
+      } catch {
+        responseBody = { message: responseText || 'Angel One returned an invalid response.' }
+      }
+      sendJson(response, angelResponse.status, responseBody)
+    } catch {
+      sendJson(response, 502, { message: 'Unable to connect to Angel One.' })
+    }
     return
   }
 

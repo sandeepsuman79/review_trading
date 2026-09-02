@@ -15,6 +15,14 @@ export default function AngelOneLoginPage() {
     setLoading(true)
     try {
       const result = await loginToAngelOne({ clientcode, password, totp, state })
+      localStorage.setItem('angelone_clientcode', clientcode.trim())
+      if (result.data?.jwtToken) {
+        localStorage.setItem('angelone_jwt_token', result.data.jwtToken)
+      }
+      if (result.data?.refreshToken) {
+        localStorage.setItem('angelone_refresh_token', result.data.refreshToken)
+      }
+      window.dispatchEvent(new Event('angelone-auth-changed'))
       setMessage(result.status ? 'Angel One login successful.' : result.message || 'Angel One login failed.')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Angel One login failed.')
