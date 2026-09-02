@@ -42,3 +42,10 @@ When configured, the Prediction page will:
 - fetch live quotes from TwelveData for Indian indices
 - show current price and intraday change
 - optionally generate updated predictions using OpenAI or another compatible LLM endpoint
+
+## Angel One login
+
+Run the frontend and backend in separate terminals with `npm run dev` and `npm run server`.
+Set the backend-only `ANGELONE_*` variables from `.env.example`; never expose the private
+key in frontend code. The login request always sends an explicit `state` value (defaulting
+to `live`) to avoid an undefined variable error.
