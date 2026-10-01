@@ -1,5 +1,7 @@
 import { createServer } from 'node:http'
 import { existsSync, readFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import { extname, join, resolve, sep } from 'node:path'
 
 if (existsSync('.env')) {
   for (const line of readFileSync('.env', 'utf8').split(/\r?\n/)) {
@@ -32,6 +34,19 @@ const angelOneHistoricalUrls = {
 const historicalResponseCache = new Map()
 const historicalCacheTtlMs = 30_000
 const geminiApiBaseUrl = 'https://generativelanguage.googleapis.com/v1beta/models'
+const staticDirectory = resolve('dist')
+const contentTypes = {
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.ico': 'image/x-icon',
+  '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.svg': 'image/svg+xml',
+  '.webp': 'image/webp',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+}
 const ohlcIntervals = {
   FIVE_MINUTE: 5 * 60_000,
   FIFTEEN_MINUTE: 15 * 60_000,
@@ -61,6 +76,52 @@ function readBody(request) {
   })
 }
 
+async function serveFrontend(request, response) {
+  if (!['GET', 'HEAD'].includes(request.method)) {
+    sendJson(response, 404, { message: 'Not found.' })
+    return
+  }
+
+  let pathname
+  try {
+    pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname)
+  } catch {
+    sendJson(response, 400, { message: 'Invalid URL path.' })
+    return
+  }
+
+  const relativePath = pathname === '/' ? '/index.html' : pathname
+  let filePath = resolve(staticDirectory, `.${relativePath}`)
+  if (filePath !== staticDirectory && !filePath.startsWith(`${staticDirectory}${sep}`)) {
+    sendJson(response, 404, { message: 'Not found.' })
+    return
+  }
+
+  let content
+  try {
+    content = await readFile(filePath)
+  } catch (error) {
+    if (error.code !== 'ENOENT' || extname(pathname)) {
+      sendJson(response, error.code === 'ENOENT' ? 404 : 500, { message: error.code === 'ENOENT' ? 'Not found.' : 'Unable to read frontend build.' })
+      return
+    }
+    filePath = join(staticDirectory, 'index.html')
+    try {
+      content = await readFile(filePath)
+    } catch {
+      sendJson(response, 503, { message: 'Frontend build is unavailable. Run the production build before starting the service.' })
+      return
+    }
+  }
+
+  const extension = extname(filePath)
+  response.writeHead(200, {
+    'Content-Type': contentTypes[extension] || 'application/octet-stream',
+    'Cache-Control': extension === '.html' ? 'no-cache' : 'public, max-age=31536000, immutable',
+  })
+  response.end(request.method === 'HEAD' ? undefined : content)
+}
+
 const server = createServer(async (request, response) => {
   if (request.method === 'OPTIONS') {
     response.writeHead(204, {
@@ -82,6 +143,11 @@ const server = createServer(async (request, response) => {
     } catch {
       sendJson(response, 502, { message: 'Unable to fetch instrument master.' })
     }
+    return
+  }
+
+  if (request.method === 'GET' && request.url === '/api/health') {
+    sendJson(response, 200, { status: 'ok' })
     return
   }
 
@@ -470,7 +536,11 @@ const server = createServer(async (request, response) => {
   }
 
   if (request.method !== 'POST' || request.url !== '/api/angelone/login') {
-    sendJson(response, 404, { message: 'Not found.' })
+    if (request.url?.startsWith('/api/')) {
+      sendJson(response, 404, { message: 'Not found.' })
+      return
+    }
+    await serveFrontend(request, response)
     return
   }
 
@@ -526,5 +596,5 @@ const server = createServer(async (request, response) => {
 })
 
 server.listen(port, () => {
-  console.log(`Angel One API server listening on http://localhost:${port}`)
+  console.log(`Review Wala app and API listening on port ${port}`)
 })
