@@ -4,6 +4,12 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  overscroll-behavior-x: none;
+}
+
 :root {
   --primary: #6C63FF;
   --primary-dark: #5A52D5;

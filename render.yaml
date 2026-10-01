@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: review-wala
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm run server
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: VITE_ANGELONE_API_KEY
+        sync: false
+      - key: ANGELONE_PRIVATE_KEY
+        sync: false
+      - key: ANGELONE_CLIENT_LOCAL_IP
+        sync: false
+      - key: ANGELONE_CLIENT_PUBLIC_IP
+        sync: false
+      - key: ANGELONE_MAC_ADDRESS
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash-lite
