@@ -28,20 +28,44 @@ A React + TypeScript app scaffolded with Vite.
 
 Open the workspace and run the `Run Review Wala` task, or use `npm run dev` in the terminal.
 
-## Live Market Data and LLM Predictions
+## Live Market Data
 
-The Traders Prediction page can show live Indian index quotes and optional LLM-generated outlooks.
+The Traders Prediction page displays live Nifty 50, Sensex, and Bank Nifty data
+from the Angel One SmartAPI WebSocket stream. Log in with a valid Angel One
+session and restart the frontend after changing `.env`.
 
-1. Create a `.env` file in the project root.
-2. Add your API keys using the example in `.env.example`:
-   - `VITE_TWELVEDATA_API_KEY` for live index quotes
-   - `VITE_OPENAI_API_KEY` for optional prediction generation
-3. Restart the Vite dev server after changing `.env`.
+Chart history is cached in the browser's local storage separately for each
+index and timeframe. A timeframe is fetched from Angel One only when no local
+cache exists; live stream ticks update saved candles for already-cached
+timeframes. This cache remains on the same browser/device across refreshes and
+Angel One logout, but is not shared between browsers or devices.
 
-When configured, the Prediction page will:
-- fetch live quotes from TwelveData for Indian indices
-- show current price and intraday change
-- optionally generate updated predictions using OpenAI or another compatible LLM endpoint
+## Optional Gemini AI candle commentary
+
+The candle panel can request a second opinion from Google's Gemini API. Google
+currently lists a free tier for select models, including `gemini-2.5-flash-lite`;
+availability, quotas, eligible models, and terms can change. Check the current
+[Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) before use.
+
+1. Create an API key in [Google AI Studio](https://aistudio.google.com/apikey).
+2. Add `GEMINI_API_KEY=your_key` to the project-root `.env` file. Keep it on the
+   backend: do not use a `VITE_` prefix, commit the key, or paste it into chat.
+3. Optionally set `GEMINI_MODEL=gemini-2.5-flash-lite` in `.env`.
+4. Restart `npm run server`, then use **Analyze with Gemini AI** in the candle
+   panel. No local model installation is required.
+
+This sends recent candle OHLC data and rule-based context to Google. Review
+Google's current terms and data-use policy before enabling it. The AI opinion is
+experimental commentary; it does not set entry/target/stop-loss levels, is not a
+calibrated probability, and never overrides the deterministic trade decision.
+Free-tier limits may be reached; the chart's rule-based analysis continues to
+work if AI is unconfigured or unavailable.
+
+The AI opinion is experimental commentary based only on recent completed OHLC
+candles and the rule-based context. It does not set entry/target/stop-loss
+levels, is not a calibrated probability, and never overrides the rule-based
+trade decision. Model output can be wrong; do not rely on it as financial
+advice. The first response may take longer while the model downloads/loads.
 
 ## Angel One login
 

@@ -22,6 +22,9 @@ export default function AngelOneLoginPage() {
       if (result.data?.refreshToken) {
         localStorage.setItem('angelone_refresh_token', result.data.refreshToken)
       }
+      if (result.data?.feedToken) {
+        localStorage.setItem('angelone_feed_token', result.data.feedToken)
+      }
       window.dispatchEvent(new Event('angelone-auth-changed'))
       setMessage(result.status ? 'Angel One login successful.' : result.message || 'Angel One login failed.')
     } catch (error) {

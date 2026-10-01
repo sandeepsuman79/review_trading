@@ -30,6 +30,7 @@ export default function Navbar() {
       }
       localStorage.removeItem('angelone_jwt_token')
       localStorage.removeItem('angelone_refresh_token')
+      localStorage.removeItem('angelone_feed_token')
       localStorage.removeItem('angelone_clientcode')
       window.dispatchEvent(new Event('angelone-auth-changed'))
       navigate('/angelone/login')
