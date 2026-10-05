@@ -5,6 +5,8 @@ import type { AngelOneStreamTick } from '../api/angelOne'
 import type { AngelOneCandle, AngelOneGttRule, AngelOneProfile, AngelOneRms } from '../api/angelOne'
 import { getAiPriceAction, type AiPriceAction } from '../api/ai'
 import { analyzePriceAction, type PriceActionAnalysis } from '../analysis/priceAction'
+import { calculateMovingAverageSeries } from '../analysis/movingAverages'
+import { calculateTechnicalIndicatorSeries } from '../analysis/technicalIndicators'
 
 const trackedInstruments = [
   { name: 'Nifty 50', exchange: 'NSE', symbol: 'Nifty 50', token: '99926000' },
@@ -76,6 +78,17 @@ function intervalLabel(interval: ChartInterval) {
 
 function intervalMilliseconds(interval: ChartInterval) {
   return interval === 'FIVE_MINUTE' ? 5 * 60 * 1000 : interval === 'FIFTEEN_MINUTE' ? 15 * 60 * 1000 : 60 * 60 * 1000
+}
+
+function mergeCandles(existing: AngelOneCandle[], incoming: AngelOneCandle[]): AngelOneCandle[] {
+  const candlesByTime = new Map<number, AngelOneCandle>()
+  for (const candle of [...existing, ...incoming]) {
+    const timestamp = new Date(candle[0]).getTime()
+    if (Number.isFinite(timestamp)) candlesByTime.set(timestamp, candle)
+  }
+  return [...candlesByTime.entries()]
+    .sort(([timeA], [timeB]) => timeA - timeB)
+    .map(([, candle]) => candle)
 }
 
 function chartHistoryWindowDays(interval: ChartInterval) {
@@ -216,6 +229,43 @@ function CandleChart({ candles, name, interval, tick }: { candles: AngelOneCandl
   const xStep = chartWidth / Math.max(candles.length, 1)
   const candleWidth = Math.max(4, Math.min(10, xStep * 0.58))
   const y = (value: number) => padding.top + ((maximum - value) / range) * chartHeight
+  const movingAverageSeries = calculateMovingAverageSeries(candles.map((candle) => candle[4]))
+  const ma20Points = movingAverageSeries
+    .map((point, index) => point.sma20 === undefined ? undefined : `${padding.left + index * xStep + xStep / 2},${y(point.sma20)}`)
+    .filter((point): point is string => point !== undefined)
+    .join(' ')
+  const ema50Points = movingAverageSeries
+    .map((point, index) => point.ema50 === undefined ? undefined : `${padding.left + index * xStep + xStep / 2},${y(point.ema50)}`)
+    .filter((point): point is string => point !== undefined)
+    .join(' ')
+  const technicalIndicators = calculateTechnicalIndicatorSeries(
+    candles.map((candle) => candle[2]),
+    candles.map((candle) => candle[3]),
+    candles.map((candle) => candle[4]),
+  )
+  const supertrendSegments = technicalIndicators.reduce<Array<{ direction: 'UP' | 'DOWN'; points: string[] }>>((segments, point, index) => {
+    if (point.supertrend10 === undefined || point.supertrendDirection === undefined) return segments
+    const coordinate = `${padding.left + index * xStep + xStep / 2},${y(point.supertrend10)}`
+    const lastSegment = segments[segments.length - 1]
+    if (lastSegment?.direction === point.supertrendDirection) {
+      lastSegment.points.push(coordinate)
+    } else {
+      segments.push({ direction: point.supertrendDirection, points: [coordinate] })
+    }
+    return segments
+  }, [])
+  const supertrendFlips = technicalIndicators.flatMap((point, index) => {
+    if (index === 0 || point.supertrend10 === undefined || point.supertrendDirection === undefined) return []
+    const previous = technicalIndicators[index - 1]
+    if (previous.supertrend10 === undefined || previous.supertrendDirection === undefined || previous.supertrendDirection === point.supertrendDirection) return []
+    const centerX = padding.left + index * xStep + xStep / 2
+    return [{
+      x: centerX,
+      fromY: y(previous.supertrend10),
+      toY: y(point.supertrend10),
+      direction: point.supertrendDirection,
+    }]
+  })
   const labelStep = Math.max(1, Math.ceil(candles.length / 8))
   const labelIndexes = candles.map((_, index) => index).filter((index) => index % labelStep === 0 || index === candles.length - 1)
   const livePriceY = tick?.ltp == null ? undefined : y(tick.ltp)
@@ -288,6 +338,41 @@ function CandleChart({ candles, name, interval, tick }: { candles: AngelOneCandl
               </g>
             )
           })}
+          {ma20Points && <polyline points={ma20Points} fill="none" stroke="#F59E0B" strokeWidth="2" vectorEffect="non-scaling-stroke" />}
+          {ema50Points && <polyline points={ema50Points} fill="none" stroke="#2563EB" strokeWidth="2" vectorEffect="non-scaling-stroke" />}
+          {supertrendSegments.map((segment, index) => (
+            <g key={`supertrend-${segment.direction}-${index}`}>
+              {segment.points.length > 1 ? (
+                <polyline
+                  points={segment.points.join(' ')}
+                  fill="none"
+                  stroke={segment.direction === 'UP' ? '#16A34A' : '#DC2626'}
+                  strokeWidth="2.5"
+                  vectorEffect="non-scaling-stroke"
+                />
+              ) : (
+                <circle
+                  cx={Number(segment.points[0].split(',')[0])}
+                  cy={Number(segment.points[0].split(',')[1])}
+                  r="2.5"
+                  fill={segment.direction === 'UP' ? '#16A34A' : '#DC2626'}
+                  vectorEffect="non-scaling-stroke"
+                />
+              )}
+            </g>
+          ))}
+          {supertrendFlips.map((flip, index) => (
+            <line
+              key={`supertrend-flip-${index}`}
+              x1={flip.x}
+              x2={flip.x}
+              y1={flip.fromY}
+              y2={flip.toY}
+              stroke={flip.direction === 'UP' ? '#16A34A' : '#DC2626'}
+              strokeWidth="2.5"
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
         </svg>
 
         <div style={{ position: 'sticky', left: 0, bottom: 0, zIndex: 2, width: `${width}px`, background: 'var(--card)' }}>
@@ -370,6 +455,15 @@ function PriceActionAgent({ candles, interval, now, instrument }: { candles: Ang
   const color = analysis.side === 'CALL' ? '#15803D' : analysis.side === 'PUT' ? '#B91C1C' : '#92400E'
   const background = analysis.side === 'CALL' ? '#DCFCE7' : analysis.side === 'PUT' ? '#FEE2E2' : '#FEF3C7'
   const formatPrice = (value?: number) => value === undefined ? '—' : value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const earlyDirection = analysis.earlyBias === 'BULLISH' ? 'BUY' : analysis.earlyBias === 'BEARISH' ? 'SELL' : 'NEUTRAL'
+  const earlyViewLabel = analysis.earlyBias === 'NEUTRAL'
+    ? 'NEUTRAL'
+    : analysis.earlyStage === 'TRIGGER'
+      ? `${earlyDirection} TRIGGER`
+      : analysis.earlyStage === 'CONFIRMED'
+        ? `CONFIRMED ${earlyDirection}`
+        : `EARLY ${earlyDirection}`
+  const earlyColor = analysis.earlyBias === 'BULLISH' ? '#15803D' : analysis.earlyBias === 'BEARISH' ? '#B91C1C' : '#92400E'
   const details = [
     ['Structure', analysis.structure],
     ['Location', analysis.location],
@@ -382,19 +476,45 @@ function PriceActionAgent({ candles, interval, now, instrument }: { candles: Ang
       <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <div>
           <strong style={{ fontSize: 15 }}>Candle Price-Action Agent</strong>
-          <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>OHLC-only · {intervalLabel(interval)} · {analysis.analyzedCandles} completed candles</div>
+          <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>OHLC + SMA(20)/EMA(20,50) + RSI(14) + Supertrend(10,3) · {intervalLabel(interval)} · {analysis.analyzedCandles} completed candles</div>
         </div>
         <span style={{ padding: '5px 10px', borderRadius: 999, color, background, fontSize: 12, fontWeight: 700 }}>
           {analysis.side === 'WAIT' ? 'WAIT — NO TRADE' : analysis.side === 'CALL' ? 'BULLISH — CALL SETUP' : 'BEARISH — PUT SETUP'}
         </span>
       </div>
       <div style={{ marginBottom: 10, padding: '10px 12px', borderRadius: 8, background: 'var(--card)', fontSize: 12, lineHeight: 1.7 }}>
-        <strong>Early outlook: {analysis.earlyStage} {analysis.earlyBias}</strong>
-        <div>Bullish score: {analysis.bullishScore}/100 · Bearish score: {analysis.bearishScore}/100 <span style={{ color: 'var(--text-secondary)' }}>(heuristic evidence score, not probability)</span></div>
+        <strong style={{ color: earlyColor }}>Early market view: {earlyViewLabel}</strong>
+        <span style={{ color: 'var(--text-secondary)' }}> · {analysis.earlyStrength.replace(/_/g, ' ')}</span>
+        <div>Bullish score: {analysis.bullishScore}/100 · Bearish score: {analysis.bearishScore}/100 <span style={{ color: 'var(--text-secondary)' }}>(weighted evidence score, not probability)</span></div>
+        {(analysis.bullishEvidence.length > 0 || analysis.bearishEvidence.length > 0) && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 8, marginTop: 4 }}>
+            <div><strong style={{ color: '#15803D' }}>Bullish evidence</strong>{analysis.bullishEvidence.length ? <ul style={{ margin: '2px 0', paddingLeft: 18 }}>{analysis.bullishEvidence.map((item) => <li key={item}>{item}</li>)}</ul> : <div>None currently</div>}</div>
+            <div><strong style={{ color: '#B91C1C' }}>Bearish evidence</strong>{analysis.bearishEvidence.length ? <ul style={{ margin: '2px 0', paddingLeft: 18 }}>{analysis.bearishEvidence.map((item) => <li key={item}>{item}</li>)}</ul> : <div>None currently</div>}</div>
+          </div>
+        )}
+        <div>
+          <span style={{ color: '#D97706' }}>SMA(20): {formatPrice(analysis.movingAverage20)}</span>
+          {' · '}
+          <span style={{ color: '#EA580C' }}>EMA(20): {formatPrice(analysis.exponentialMovingAverage20)}</span>
+          {' · '}
+          <span style={{ color: '#2563EB' }}>EMA(50): {formatPrice(analysis.exponentialMovingAverage50)}</span>
+          {analysis.exponentialMovingAverage50 === undefined && <span style={{ color: 'var(--text-secondary)' }}> · EMA(50) needs at least 50 candles</span>}
+        </div>
+        <div>
+          <span style={{ color: 'var(--text-primary)' }}>RSI(14): {analysis.rsi14?.toFixed(2) ?? '—'}{analysis.rsi14Momentum !== undefined ? ` · Δ3 ${analysis.rsi14Momentum >= 0 ? '+' : ''}${analysis.rsi14Momentum.toFixed(2)}` : ''}</span>
+          {' · '}
+          <span style={{ color: analysis.supertrendDirection === 'UP' ? '#15803D' : analysis.supertrendDirection === 'DOWN' ? '#B91C1C' : 'var(--text-secondary)' }}>
+            Supertrend(10,3): {formatPrice(analysis.supertrend10)} {analysis.supertrendDirection ?? ''}
+          </span>
+        </div>
+        <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--border)' }}>
+          <strong>Trade status: {analysis.tradeStatus}</strong>
+        </div>
         {(analysis.bullishTrigger !== undefined || analysis.bearishTrigger !== undefined) && (
           <div style={{ color: 'var(--text-secondary)' }}>
-            {analysis.bullishTrigger !== undefined && <>Upside trigger: {formatPrice(analysis.bullishTrigger)} · invalidation: {formatPrice(analysis.bullishInvalidation)}{analysis.bearishTrigger !== undefined ? ' | ' : ''}</>}
-            {analysis.bearishTrigger !== undefined && <>Downside trigger: {formatPrice(analysis.bearishTrigger)} · invalidation: {formatPrice(analysis.bearishInvalidation)}</>}
+            Current close: {formatPrice(analysis.currentPrice)} · {' '}
+            {analysis.bullishTrigger !== undefined && <>Upside trigger: {formatPrice(analysis.bullishTrigger)} · {formatPrice(analysis.distanceToBullishTrigger)} away · invalidation: {formatPrice(analysis.bullishInvalidation)}{analysis.bearishTrigger !== undefined ? ' | ' : ''}</>}
+            {analysis.bearishTrigger !== undefined && <>Downside trigger: {formatPrice(analysis.bearishTrigger)} · {formatPrice(analysis.distanceToBearishTrigger)} away · invalidation: {formatPrice(analysis.bearishInvalidation)}</>}
           </div>
         )}
       </div>
@@ -484,6 +604,8 @@ export default function PredictionPage() {
   const [orderUpdates, setOrderUpdates] = useState<AngelOneOrderUpdate[]>([])
   const [heartbeat, setHeartbeat] = useState(Date.now())
   const chartInitialised = useRef(false)
+  const chartIntervalRef = useRef(chartInterval)
+  chartIntervalRef.current = chartInterval
 
   useEffect(() => {
     fetchAngelProfile()
@@ -495,7 +617,14 @@ export default function PredictionPage() {
     const socket = connectAngelOneStream((tick) => setStreamTicks((current) => ({ ...current, [tick.token]: tick })), setStreamStatus)
     if (socket) setStreamSocket(socket)
     const orderSocket = connectAngelOneOrderStream((update) => setOrderUpdates((current) => [update, ...current].slice(0, 20)), setOrderStatus)
+    const synchronizeAfterLogin = () => {
+      fetchAngelProfile()
+      fetchInstrumentQuotes()
+      void fetchChartCandles(chartIntervalRef.current)
+    }
+    window.addEventListener('angelone-auth-changed', synchronizeAfterLogin)
     return () => {
+      window.removeEventListener('angelone-auth-changed', synchronizeAfterLogin)
       socket?.close()
       orderSocket?.close()
     }
@@ -533,24 +662,25 @@ export default function PredictionPage() {
     setChartCandles(cacheForInterval)
     setChartInterval(interval)
     try {
-      const missing = trackedInstruments.filter((instrument) => !cachedCandles.get(instrument.name))
-      if (!missing.length) {
-        setChartError('')
-        return
-      }
-
       const token = localStorage.getItem('angelone_jwt_token')
       if (!token) {
-        setChartError(`Showing saved chart data. Log in to load ${missing.map((item) => item.name).join(', ')} for this timeframe.`)
+        setChartError('Showing saved chart data. Log in to synchronize the latest candles.')
         return
       }
 
       const to = new Date()
-      const from = new Date(to)
-      from.setDate(from.getDate() - chartHistoryWindowDays(interval))
+      const todaySessionStart = new Date(to)
+      todaySessionStart.setHours(9, 0, 0, 0)
       const errors: string[] = []
-      for (const [index, instrument] of missing.entries()) {
+      for (const [index, instrument] of trackedInstruments.entries()) {
         if (index > 0) await wait(2500)
+        const cached = cachedCandles.get(instrument.name) || []
+        const latestCachedTime = cached.length
+          ? Math.max(...cached.map((candle) => new Date(candle[0]).getTime()).filter(Number.isFinite))
+          : undefined
+        const from = latestCachedTime === undefined
+          ? new Date(to.getTime() - chartHistoryWindowDays(interval) * 24 * 60 * 60 * 1000)
+          : new Date(Math.min(todaySessionStart.getTime(), latestCachedTime - intervalMilliseconds(interval)))
         let loaded = false
         for (let attempt = 0; attempt < 3 && !loaded; attempt += 1) {
           try {
@@ -562,8 +692,17 @@ export default function PredictionPage() {
               todate: formatHistoricalDate(to),
             })
             const candles = Array.isArray(result.data) ? result.data : []
-            setChartCandles((current) => ({ ...current, [instrument.name]: candles }))
-            if (!candles.length) errors.push(`${instrument.name}: no candles returned.`)
+            if (!candles.length) {
+              errors.push(`${instrument.name}: no candles returned for the requested sync range.`)
+            } else {
+              const merged = mergeCandles(cached, candles)
+              setChartCandles((current) => ({ ...current, [instrument.name]: merged }))
+              try {
+                localStorage.setItem(chartCacheKey(instrument.token, interval), JSON.stringify(merged))
+              } catch (error) {
+                setChartCacheError(error instanceof Error ? `Unable to save synchronized ${instrument.name} candles locally: ${error.message}` : `Unable to save synchronized ${instrument.name} candles locally.`)
+              }
+            }
             loaded = true
           } catch (error) {
             if (isHistoricalRateLimit(error) && attempt < 2) {
