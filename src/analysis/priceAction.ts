@@ -1,11 +1,13 @@
 import type { AngelOneCandle } from '../api/angelOne'
+import { calculateMovingAverageSeries } from './movingAverages'
+import { calculateTechnicalIndicatorSeries } from './technicalIndicators'
 
 /**
  * 5-minute OHLC price-action AI agent.
  *
  * IMPORTANT:
- * - Uses ONLY candle OHLC + timestamps.
- * - No RSI, MACD, EMA, VWAP, ATR, volume or other indicator.
+ * - Uses candle OHLC + timestamps and SMA(20), EMA(50), RSI(14), Supertrend(10,3).
+ * - No MACD, VWAP, volume or other indicator.
  * - The "agent" is a deterministic, explainable price-action engine.
  * - It never treats one candle pattern as a standalone signal.
  * - The live/incomplete candle is excluded from decisions.
@@ -63,6 +65,13 @@ export type PriceActionAnalysis = {
   previousDayClose?: number
   todayHigh?: number
   todayLow?: number
+  movingAverage20?: number
+  exponentialMovingAverage20?: number
+  exponentialMovingAverage50?: number
+  rsi14Momentum?: number
+  rsi14?: number
+  supertrend10?: number
+  supertrendDirection?: 'UP' | 'DOWN'
 
   confidence: number
   confluence: string[]
@@ -71,8 +80,15 @@ export type PriceActionAnalysis = {
 
   earlyBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
   earlyStage: 'EARLY' | 'TRIGGER' | 'CONFIRMED' | 'NEUTRAL'
+  earlyStrength: 'NO_BIAS' | 'WEAK' | 'CONFLICTED' | 'EARLY' | 'STRONG_EARLY' | 'HIGH_CONVICTION' | 'EXTREME'
   bullishScore: number
   bearishScore: number
+  bullishEvidence: string[]
+  bearishEvidence: string[]
+  tradeStatus: string
+  currentPrice?: number
+  distanceToBullishTrigger?: number
+  distanceToBearishTrigger?: number
   bullishTrigger?: number
   bearishTrigger?: number
   bullishInvalidation?: number
@@ -492,13 +508,35 @@ function earlyMoveOutlook(
   compression: boolean,
   priorRangeHigh: number | undefined,
   priorRangeLow: number | undefined,
-  signalSide?: Exclude<PriceActionSide, 'WAIT'>,
-  confirmed = false,
+  sma20: number | undefined,
+  ema20: number | undefined,
+  ema50: number | undefined,
+  ema20Slope: number | undefined,
+  rsi14: number | undefined,
+  rsi14Momentum: number | undefined,
+  supertrendDirection: 'UP' | 'DOWN' | undefined,
+  tradeReadySide?: Exclude<PriceActionSide, 'WAIT'>,
+  confirmedSetup = false,
 ): Pick<PriceActionAnalysis,
   'earlyBias' | 'earlyStage' | 'bullishScore' | 'bearishScore' |
+  'earlyStrength' | 'bullishEvidence' | 'bearishEvidence' | 'tradeStatus' |
+  'currentPrice' | 'distanceToBullishTrigger' | 'distanceToBearishTrigger' |
   'bullishTrigger' | 'bearishTrigger' | 'bullishInvalidation' | 'bearishInvalidation'> {
-  let bullish = 35
-  let bearish = 35
+  let bullish = 0
+  let bearish = 0
+  const bullishEvidence: string[] = []
+  const bearishEvidence: string[] = []
+  const addEvidence = (signedStrength: number, weight: number, bullishReason: string, bearishReason: string) => {
+    const strength = Math.max(-1, Math.min(1, signedStrength))
+    if (strength > 0.08) {
+      bullish += weight * strength
+      if (strength >= 0.2) bullishEvidence.push(bullishReason)
+    } else if (strength < -0.08) {
+      bearish += weight * -strength
+      if (strength <= -0.2) bearishEvidence.push(bearishReason)
+    }
+  }
+  const clamp = (value: number, minimum = -1, maximum = 1) => Math.max(minimum, Math.min(maximum, value))
   const recent = candles.slice(-5)
   const earlier = candles.slice(-10, -5)
   const avg = (items: OHLC[], pick: (candle: OHLC) => number) =>
@@ -508,25 +546,69 @@ function earlyMoveOutlook(
     const candleRange = range(candle)
     return candleRange > 0 ? (candle.close > candle.open ? 1 : candle.close < candle.open ? -1 : 0) * body(candle) / candleRange : 0
   })
-
-  bullish += Math.max(0, closePressure) * 24 + Math.max(0, signedBodyPressure) * 18
-  bearish += Math.max(0, -closePressure) * 24 + Math.max(0, -signedBodyPressure) * 18
-
   const recentCloseLocation = avg(recent, closeLocation)
   const earlierCloseLocation = avg(earlier, closeLocation)
-  if (recentCloseLocation - earlierCloseLocation >= 0.08) bullish += 8
-  if (earlierCloseLocation - recentCloseLocation >= 0.08) bearish += 8
+  const pressureChange = recentCloseLocation - earlierCloseLocation
 
-  if (phase === 'UPTREND') bullish += 12
-  if (phase === 'DOWNTREND') bearish += 12
-
+  // 30%: confirmed swing structure.
+  let structureDirection = phase === 'UPTREND' ? 1 : phase === 'DOWNTREND' ? -1 : 0
   const lastLows = lows.slice(-3)
   const lastHighs = highs.slice(-3)
   const risingLows = lastLows.length >= 2 && lastLows[lastLows.length - 1].price > lastLows[lastLows.length - 2].price
+  const fallingLows = lastLows.length >= 2 && lastLows[lastLows.length - 1].price < lastLows[lastLows.length - 2].price
+  const risingHighs = lastHighs.length >= 2 && lastHighs[lastHighs.length - 1].price > lastHighs[lastHighs.length - 2].price
   const fallingHighs = lastHighs.length >= 2 && lastHighs[lastHighs.length - 1].price < lastHighs[lastHighs.length - 2].price
-  if (risingLows) bullish += 9
-  if (fallingHighs) bearish += 9
+  if (phase === 'TRANSITION') {
+    structureDirection = (Number(risingHighs) + Number(risingLows) - Number(fallingHighs) - Number(fallingLows)) / 2
+  }
+  addEvidence(structureDirection, 30, 'Higher highs / higher lows support bullish structure', 'Lower highs / lower lows support bearish structure')
 
+  // 20%: close strength, signed body force and whether candle pressure is improving.
+  const candleMomentum = clamp(closePressure * 1.4 + signedBodyPressure * 0.4 + pressureChange * 1.5)
+  addEvidence(candleMomentum, 20, 'Recent candles are closing stronger with bullish pressure increasing', 'Recent candles are closing weaker with bearish pressure increasing')
+  const priorBearBody = avg(earlier, (candle) => candle.close < candle.open ? body(candle) : 0)
+  const recentBearBody = avg(recent, (candle) => candle.close < candle.open ? body(candle) : 0)
+  const priorBullBody = avg(earlier, (candle) => candle.close > candle.open ? body(candle) : 0)
+  const recentBullBody = avg(recent, (candle) => candle.close > candle.open ? body(candle) : 0)
+  const weakeningSelling = priorBearBody > 0 && recentBearBody < priorBearBody * 0.65 && closePressure >= 0
+  const weakeningBuying = priorBullBody > 0 && recentBullBody < priorBullBody * 0.65 && closePressure <= 0
+  if (weakeningSelling) bullishEvidence.push('Recent selling candles are shrinking; downside pressure is easing')
+  if (weakeningBuying) bearishEvidence.push('Recent buying candles are shrinking; upside pressure is easing')
+
+  // 15%: price, SMA/EMA ordering and short EMA slope.
+  const latest = candles[candles.length - 1]
+  let maDirection = 0
+  let maFactors = 0
+  if (ema20 !== undefined && latest) {
+    maDirection += latest.close > ema20 ? 1 : latest.close < ema20 ? -1 : 0
+    maFactors += 1
+  }
+  if (ema20 !== undefined && sma20 !== undefined) {
+    maDirection += ema20 > sma20 ? 1 : ema20 < sma20 ? -1 : 0
+    maFactors += 1
+  }
+  if (ema20 !== undefined && ema50 !== undefined) {
+    maDirection += ema20 > ema50 ? 1 : ema20 < ema50 ? -1 : 0
+    maFactors += 1
+  }
+  if (ema20Slope !== undefined) {
+    maDirection += ema20Slope > 0 ? 1 : ema20Slope < 0 ? -1 : 0
+    maFactors += 1
+  }
+  const maSignal = maFactors ? maDirection / maFactors : 0
+  addEvidence(maSignal, 15, 'Price/EMA/SMA alignment and EMA slope support the bullish trend', 'Price/EMA/SMA alignment and EMA slope support the bearish trend')
+
+  // 10%: RSI level plus change over the last three closed candles.
+  const rsiSignal = rsi14 !== undefined
+    ? clamp(((rsi14 - 50) / 20) * 0.45 + (rsi14Momentum === undefined ? 0 : (rsi14Momentum / 12) * 0.55))
+    : 0
+  addEvidence(rsiSignal, 10, 'RSI(14) momentum is strengthening upward', 'RSI(14) momentum is weakening')
+
+  // 10%: Supertrend confirms direction, but never drives the signal alone.
+  addEvidence(supertrendDirection === 'UP' ? 1 : supertrendDirection === 'DOWN' ? -1 : 0, 10,
+    'Supertrend is bullish', 'Supertrend is bearish')
+
+  // 10%: repeated level tests, with higher lows favoring an upside break and lower highs favoring downside.
   const recentTen = candles.slice(-10)
   const resistanceTests = resistance === undefined ? 0 : recentTen.filter((candle) =>
     candle.high >= resistance - tolerance && candle.close <= resistance + tolerance,
@@ -534,52 +616,71 @@ function earlyMoveOutlook(
   const supportTests = support === undefined ? 0 : recentTen.filter((candle) =>
     candle.low <= support + tolerance && candle.close >= support - tolerance,
   ).length
-  if (resistanceTests >= 2) bullish += risingLows ? 10 : 5
-  if (supportTests >= 2) bearish += fallingHighs ? 10 : 5
+  const resistancePressure = resistanceTests >= 2 ? (risingLows ? 0.65 : closePressure < 0 ? -0.65 : 0.25) * Math.min(1, resistanceTests / 3) : 0
+  const supportPressure = supportTests >= 2 ? (fallingHighs ? -0.65 : closePressure > 0 ? 0.65 : -0.25) * Math.min(1, supportTests / 3) : 0
+  const levelSignal = Math.abs(resistancePressure) > Math.abs(supportPressure) ? resistancePressure : supportPressure
+  addEvidence(levelSignal, 10, 'Repeated resistance tests with rising lows favor an upside break', 'Repeated support tests with lower highs favor a downside break')
 
-  if (compression && closePressure > 0 && resistanceTests > 0) bullish += 5
-  if (compression && closePressure < 0 && supportTests > 0) bearish += 5
+  // 5%: compression only adds direction when candle pressure provides a side.
+  addEvidence(compression ? clamp(candleMomentum * 1.5) : 0, 5,
+    'Range is compressing with bullish pressure building', 'Range is compressing with bearish pressure building')
 
-  const latest = candles[candles.length - 1]
   const breakoutUp = priorRangeHigh !== undefined && latest.close > priorRangeHigh && latest.close > latest.open
   const breakoutDown = priorRangeLow !== undefined && latest.close < priorRangeLow && latest.close < latest.open
-  if (breakoutUp) bullish += 10
-  if (breakoutDown) bearish += 10
-  if (signalSide === 'CALL') bullish += confirmed ? 20 : 12
-  if (signalSide === 'PUT') bearish += confirmed ? 20 : 12
-
   bullish = Math.min(100, Math.round(bullish))
   bearish = Math.min(100, Math.round(bearish))
 
   let earlyBias: PriceActionAnalysis['earlyBias'] = 'NEUTRAL'
   let earlyStage: PriceActionAnalysis['earlyStage'] = 'NEUTRAL'
-  if (confirmed && signalSide) {
-    earlyBias = signalSide === 'CALL' ? 'BULLISH' : 'BEARISH'
+  if (bullish >= 50 && bullish - bearish >= 15) {
+    earlyBias = 'BULLISH'
+  } else if (bearish >= 50 && bearish - bullish >= 15) {
+    earlyBias = 'BEARISH'
+  }
+
+  if (confirmedSetup && tradeReadySide && earlyBias === (tradeReadySide === 'CALL' ? 'BULLISH' : 'BEARISH')) {
     earlyStage = 'CONFIRMED'
-  } else if (signalSide) {
-    earlyBias = signalSide === 'CALL' ? 'BULLISH' : 'BEARISH'
+  } else if (breakoutUp && bullish >= 50 && bullish > bearish) {
     earlyStage = 'TRIGGER'
-  } else if (breakoutUp && bullish >= 65 && bullish > bearish) {
-    earlyBias = 'BULLISH'
+  } else if (breakoutDown && bearish >= 50 && bearish > bullish) {
     earlyStage = 'TRIGGER'
-  } else if (breakoutDown && bearish >= 65 && bearish > bullish) {
-    earlyBias = 'BEARISH'
-    earlyStage = 'TRIGGER'
-  } else if (bullish >= 60 && bullish - bearish >= 10) {
-    earlyBias = 'BULLISH'
-    earlyStage = 'EARLY'
-  } else if (bearish >= 60 && bearish - bullish >= 10) {
-    earlyBias = 'BEARISH'
+  } else if (earlyBias !== 'NEUTRAL') {
     earlyStage = 'EARLY'
   }
+
+  const dominantScore = Math.max(bullish, bearish)
+  const earlyStrength: PriceActionAnalysis['earlyStrength'] = earlyBias === 'NEUTRAL'
+    ? dominantScore >= 50 ? 'CONFLICTED' : dominantScore >= 30 ? 'WEAK' : 'NO_BIAS'
+    : dominantScore >= 90 ? 'EXTREME'
+      : dominantScore >= 80 ? 'HIGH_CONVICTION'
+        : dominantScore >= 65 ? 'STRONG_EARLY'
+          : 'EARLY'
+
+  const tradeStatus = tradeReadySide
+    ? `${tradeReadySide} SETUP READY — risk/reward filter passed`
+    : earlyBias !== 'NEUTRAL'
+      ? `WAIT — ${earlyBias === 'BULLISH' ? 'upside breakout' : 'support breakdown'} confirmation pending`
+      : breakoutUp || breakoutDown
+        ? 'WAIT — breakout detected but directional evidence is not aligned'
+        : 'WAIT — no clear directional edge'
+  const bullishTrigger = priorRangeHigh !== undefined ? priorRangeHigh + buffer : resistance === undefined ? undefined : resistance + buffer
+  const bearishTrigger = priorRangeLow !== undefined ? priorRangeLow - buffer : support === undefined ? undefined : support - buffer
+  const currentPrice = latest?.close
 
   return {
     earlyBias,
     earlyStage,
+    earlyStrength,
     bullishScore: bullish,
     bearishScore: bearish,
-    bullishTrigger: priorRangeHigh !== undefined ? priorRangeHigh + buffer : resistance === undefined ? undefined : resistance + buffer,
-    bearishTrigger: priorRangeLow !== undefined ? priorRangeLow - buffer : support === undefined ? undefined : support - buffer,
+    bullishEvidence: [...new Set(bullishEvidence)],
+    bearishEvidence: [...new Set(bearishEvidence)],
+    tradeStatus,
+    currentPrice,
+    distanceToBullishTrigger: currentPrice !== undefined && bullishTrigger !== undefined ? Math.max(0, bullishTrigger - currentPrice) : undefined,
+    distanceToBearishTrigger: currentPrice !== undefined && bearishTrigger !== undefined ? Math.max(0, currentPrice - bearishTrigger) : undefined,
+    bullishTrigger,
+    bearishTrigger,
     bullishInvalidation: lastLows.length ? lastLows[lastLows.length - 1].price - buffer : support === undefined ? undefined : support - buffer,
     bearishInvalidation: lastHighs.length ? lastHighs[lastHighs.length - 1].price + buffer : resistance === undefined ? undefined : resistance + buffer,
   }
@@ -594,8 +695,10 @@ function makeCandidate(
     'target' | 'target2' | 'riskReward' | 'confidence' |
     'confluence' | 'invalidation' | 'analyzedCandles' |
     'pattern' | 'warnings' | 'earlyBias' | 'earlyStage' |
+    'earlyStrength' | 'bullishEvidence' | 'bearishEvidence' | 'tradeStatus' |
     'bullishScore' | 'bearishScore' | 'bullishTrigger' | 'bearishTrigger' |
-    'bullishInvalidation' | 'bearishInvalidation'
+    'bullishInvalidation' | 'bearishInvalidation' | 'distanceToBullishTrigger' |
+    'distanceToBearishTrigger' | 'currentPrice'
   >,
 ): PriceActionAnalysis {
   const risk = Math.abs(candidate.entry - candidate.stopLoss)
@@ -625,8 +728,12 @@ function makeCandidate(
       invalidation: 'No trade until a valid structure and target are available.',
       earlyBias: 'NEUTRAL',
       earlyStage: 'NEUTRAL',
+      earlyStrength: 'NO_BIAS',
       bullishScore: 0,
       bearishScore: 0,
+      bullishEvidence: [],
+      bearishEvidence: [],
+      tradeStatus: 'WAIT — no confirmed setup',
       analyzedCandles,
     }
   }
@@ -648,8 +755,12 @@ function makeCandidate(
     invalidation: candidate.invalidation,
     earlyBias: 'NEUTRAL',
     earlyStage: 'NEUTRAL',
+    earlyStrength: 'NO_BIAS',
     bullishScore: 0,
     bearishScore: 0,
+    bullishEvidence: [],
+    bearishEvidence: [],
+    tradeStatus: `${candidate.side} SETUP READY — risk/reward filter passed`,
     analyzedCandles,
   }
 }
@@ -670,6 +781,22 @@ export function analyzePriceAction(
 
   // Keep enough history to calculate structure, session levels and ranges.
   const completed = parsed.slice(-180)
+  const movingAverageSeries = calculateMovingAverageSeries(completed.map((candle) => candle.close))
+  const latestMovingAverages = movingAverageSeries[movingAverageSeries.length - 1]
+  const indicatorSeries = calculateTechnicalIndicatorSeries(
+    completed.map((candle) => candle.high),
+    completed.map((candle) => candle.low),
+    completed.map((candle) => candle.close),
+  )
+  const latestIndicators = indicatorSeries[indicatorSeries.length - 1]
+  const threeCandlesAgoIndicators = indicatorSeries[Math.max(0, indicatorSeries.length - 4)]
+  const threeCandlesAgoMovingAverages = movingAverageSeries[Math.max(0, movingAverageSeries.length - 4)]
+  const latestMovingAverage20Slope = latestMovingAverages?.ema20 !== undefined && threeCandlesAgoMovingAverages?.ema20 !== undefined
+    ? latestMovingAverages.ema20 - threeCandlesAgoMovingAverages.ema20
+    : undefined
+  const latestRsi14Momentum = latestIndicators?.rsi14 !== undefined && threeCandlesAgoIndicators?.rsi14 !== undefined
+    ? latestIndicators.rsi14 - threeCandlesAgoIndicators.rsi14
+    : undefined
 
   const empty = (
     reason: string,
@@ -690,8 +817,19 @@ export function analyzePriceAction(
     invalidation: 'No trade until the price-action structure is confirmed.',
     earlyBias: extra.earlyBias ?? 'NEUTRAL',
     earlyStage: extra.earlyStage ?? 'NEUTRAL',
+    earlyStrength: extra.earlyStrength ?? 'NO_BIAS',
     bullishScore: extra.bullishScore ?? 0,
     bearishScore: extra.bearishScore ?? 0,
+    bullishEvidence: extra.bullishEvidence ?? [],
+    bearishEvidence: extra.bearishEvidence ?? [],
+    tradeStatus: extra.tradeStatus ?? 'WAIT — no confirmed setup',
+    movingAverage20: extra.movingAverage20 ?? latestMovingAverages?.sma20,
+    exponentialMovingAverage20: extra.exponentialMovingAverage20 ?? latestMovingAverages?.ema20,
+    exponentialMovingAverage50: extra.exponentialMovingAverage50 ?? latestMovingAverages?.ema50,
+    rsi14: extra.rsi14 ?? latestIndicators?.rsi14,
+    rsi14Momentum: extra.rsi14Momentum,
+    supertrend10: extra.supertrend10 ?? latestIndicators?.supertrend10,
+    supertrendDirection: extra.supertrendDirection ?? latestIndicators?.supertrendDirection,
     analyzedCandles: completed.length,
     latestCandleTime: completed.length
       ? new Date(completed[completed.length - 1].time).toISOString()
@@ -710,10 +848,6 @@ export function analyzePriceAction(
 
   const highs = findSwings(completed, 'HIGH', 2)
   const lows = findSwings(completed, 'LOW', 2)
-
-  if (highs.length < 2 || lows.length < 2) {
-    return empty('Not enough confirmed swing highs/lows to establish structure.')
-  }
 
   const structureStateResult = structureState(highs, lows)
   const {
@@ -797,6 +931,14 @@ export function analyzePriceAction(
   const priorRangeLow = priorWindow.length
     ? Math.min(...priorWindow.map((candle) => candle.low))
     : undefined
+
+  const movingAverage20 = latestMovingAverages?.sma20
+  const exponentialMovingAverage20 = latestMovingAverages?.ema20
+  const exponentialMovingAverage50 = latestMovingAverages?.ema50
+  const rsi14 = latestIndicators?.rsi14
+  const rsi14Momentum = latestRsi14Momentum
+  const supertrend10 = latestIndicators?.supertrend10
+  const supertrendDirection = latestIndicators?.supertrendDirection
 
   const bullishClose = latest.close > latest.open
   const bearishClose = latest.close < latest.open
@@ -1272,6 +1414,8 @@ export function analyzePriceAction(
     const outlook = earlyMoveOutlook(
       completed, phase, highs, lows, support, resistance, tolerance, buffer,
       compression, priorRangeHigh, priorRangeLow,
+      movingAverage20, exponentialMovingAverage20, exponentialMovingAverage50,
+      latestMovingAverage20Slope, rsi14, rsi14Momentum, supertrendDirection,
     )
     const warnings: string[] = []
 
@@ -1313,6 +1457,13 @@ export function analyzePriceAction(
         todayHigh: session.todayHigh,
         todayLow: session.todayLow,
         warnings,
+        movingAverage20,
+        exponentialMovingAverage20,
+        exponentialMovingAverage50,
+        rsi14,
+        rsi14Momentum,
+        supertrend10,
+        supertrendDirection,
         ...outlook,
       },
     )
@@ -1328,6 +1479,8 @@ export function analyzePriceAction(
     const outlook = earlyMoveOutlook(
       completed, phase, highs, lows, support, resistance, tolerance, buffer,
       compression, priorRangeHigh, priorRangeLow,
+      movingAverage20, exponentialMovingAverage20, exponentialMovingAverage50,
+      latestMovingAverage20Slope, rsi14, rsi14Momentum, supertrendDirection,
     )
     return empty(
       'A price-action pattern was detected, but every candidate was rejected because its target offers less than 1.5:1 reward-to-risk.',
@@ -1349,11 +1502,56 @@ export function analyzePriceAction(
           'Do not widen the stop only to manufacture a better-looking target.',
         ],
         ...outlook,
+        tradeStatus: 'WAIT — detected setup rejected by minimum 1.5:1 reward-to-risk filter',
+        movingAverage20,
+        exponentialMovingAverage20,
+        exponentialMovingAverage50,
+        rsi14,
+        rsi14Momentum,
+        supertrend10,
+        supertrendDirection,
       },
     )
   }
 
   // Highest-quality candidate wins. The engine is deterministic and explainable.
+  for (const candidate of eligibleCandidates) {
+    const alignedBullish = candidate.side === 'CALL'
+      && exponentialMovingAverage20 !== undefined
+      && movingAverage20 !== undefined
+      && exponentialMovingAverage50 !== undefined
+      && latest.close > exponentialMovingAverage20
+      && exponentialMovingAverage20 > movingAverage20
+      && exponentialMovingAverage20 > exponentialMovingAverage50
+    const alignedBearish = candidate.side === 'PUT'
+      && exponentialMovingAverage20 !== undefined
+      && movingAverage20 !== undefined
+      && exponentialMovingAverage50 !== undefined
+      && latest.close < exponentialMovingAverage20
+      && exponentialMovingAverage20 < movingAverage20
+      && exponentialMovingAverage20 < exponentialMovingAverage50
+    if (alignedBullish || alignedBearish) {
+      candidate.score += 5
+      candidate.confluence.push(alignedBullish ? 'Price above EMA(20) above SMA(20) and EMA(50)' : 'Price below EMA(20) below SMA(20) and EMA(50)')
+    }
+
+    const trendAligned = candidate.side === 'CALL'
+      ? supertrendDirection === 'UP'
+      : supertrendDirection === 'DOWN'
+    if (trendAligned) {
+      candidate.score += 6
+      candidate.confluence.push(`Supertrend(10,3) ${supertrendDirection?.toLowerCase()} trend`)
+    }
+
+    const momentumAligned = candidate.side === 'CALL'
+      ? rsi14 !== undefined && rsi14 >= 55 && rsi14 < 75
+      : rsi14 !== undefined && rsi14 <= 45 && rsi14 > 25
+    if (momentumAligned) {
+      candidate.score += 4
+      candidate.confluence.push(`RSI(14) supports ${candidate.side === 'CALL' ? 'bullish' : 'bearish'} momentum`)
+    }
+  }
+
   eligibleCandidates.sort((a, b) => {
     const rrA =
       Math.abs(a.entry - a.stopLoss) > 0
@@ -1383,6 +1581,13 @@ export function analyzePriceAction(
     previousDayClose: session.previousDayClose,
     todayHigh: session.todayHigh,
     todayLow: session.todayLow,
+    movingAverage20,
+    exponentialMovingAverage20,
+    exponentialMovingAverage50,
+    rsi14,
+    rsi14Momentum,
+    supertrend10,
+    supertrendDirection,
     latestCandleTime: new Date(latest.time).toISOString(),
   }
 
@@ -1411,6 +1616,13 @@ export function analyzePriceAction(
       compression,
       priorRangeHigh,
       priorRangeLow,
+      movingAverage20,
+      exponentialMovingAverage20,
+      exponentialMovingAverage50,
+      latestMovingAverage20Slope,
+      rsi14,
+      rsi14Momentum,
+      supertrendDirection,
       selected.side,
       confirmedPattern,
     ),

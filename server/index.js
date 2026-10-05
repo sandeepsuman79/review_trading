@@ -204,12 +204,25 @@ const server = createServer(async (request, response) => {
         })),
         ruleBasedContext: {
           decision: ['CALL', 'PUT', 'WAIT'].includes(rules.decision) ? rules.decision : 'WAIT',
+          earlyBias: ['BULLISH', 'BEARISH', 'NEUTRAL'].includes(rules.earlyBias) ? rules.earlyBias : 'NEUTRAL',
+          earlyStage: ['EARLY', 'TRIGGER', 'CONFIRMED', 'NEUTRAL'].includes(rules.earlyStage) ? rules.earlyStage : 'NEUTRAL',
+          earlyStrength: typeof rules.earlyStrength === 'string' ? rules.earlyStrength.slice(0, 24) : 'NO_BIAS',
+          tradeStatus: typeof rules.tradeStatus === 'string' ? rules.tradeStatus.slice(0, 120) : 'WAIT',
           phase: typeof rules.phase === 'string' ? rules.phase.slice(0, 40) : 'UNKNOWN',
           structure: typeof rules.structure === 'string' ? rules.structure.slice(0, 100) : '',
+          bullishEvidence: Array.isArray(rules.bullishEvidence) ? rules.bullishEvidence.slice(0, 6).map((item) => String(item).slice(0, 120)) : [],
+          bearishEvidence: Array.isArray(rules.bearishEvidence) ? rules.bearishEvidence.slice(0, 6).map((item) => String(item).slice(0, 120)) : [],
           support: Number.isFinite(rules.support) ? rules.support : null,
           resistance: Number.isFinite(rules.resistance) ? rules.resistance : null,
           bullishScore: Number.isFinite(rules.bullishScore) ? rules.bullishScore : null,
           bearishScore: Number.isFinite(rules.bearishScore) ? rules.bearishScore : null,
+          sma20: Number.isFinite(rules.movingAverage20) ? rules.movingAverage20 : null,
+          ema20: Number.isFinite(rules.exponentialMovingAverage20) ? rules.exponentialMovingAverage20 : null,
+          ema50: Number.isFinite(rules.exponentialMovingAverage50) ? rules.exponentialMovingAverage50 : null,
+          rsi14: Number.isFinite(rules.rsi14) ? rules.rsi14 : null,
+          rsi14Momentum: Number.isFinite(rules.rsi14Momentum) ? rules.rsi14Momentum : null,
+          supertrend10: Number.isFinite(rules.supertrend10) ? rules.supertrend10 : null,
+          supertrendDirection: ['UP', 'DOWN'].includes(rules.supertrendDirection) ? rules.supertrendDirection : null,
         },
       }
 
@@ -219,7 +232,7 @@ const server = createServer(async (request, response) => {
         signal: AbortSignal.timeout(60_000),
         body: JSON.stringify({
           systemInstruction: {
-            parts: [{ text: 'You are a cautious OHLC-only price-action analyst. Analyze only the supplied completed candles and rule-based context. Do not invent levels or prices. Do not claim calibrated probabilities or provide entry, target, stop-loss, or options advice. If evidence conflicts or is weak, use WAIT. Treat rule-based context as evidence, not certainty. This is an experimental second opinion and never overrides deterministic trade filters.' }],
+            parts: [{ text: 'You are a cautious candle price-action analyst and validator. The rule-based early market view and separate trade status are primary; do not override them. Assess whether supplied completed OHLC candles support or contradict the early bias. Consider structure and candle pressure first, then SMA(20), EMA(20/50), RSI(14) momentum, Supertrend(10,3), repeated level tests and compression as supporting confluence only. Do not invent levels or prices. Do not claim calibrated probabilities or provide entry, target, stop-loss, or options advice. Lack of breakout confirmation means the trade status can remain WAIT, but does not by itself invalidate a supported EARLY_BULLISH or EARLY_BEARISH bias. If evidence conflicts or is weak, state that clearly in the caveat. This is an experimental second opinion and never overrides deterministic trade filters.' }],
           },
           contents: [{ parts: [{ text: JSON.stringify(promptData) }] }],
           generationConfig: {
