@@ -1,7 +1,10 @@
+import type { MarketContext, MarketOutlook } from './marketContext'
 import type { AngelOneCandle } from './angelOne'
 import type { PriceActionAnalysis, PriceActionInterval } from '../analysis/priceAction'
 
 export type AiPriceAction = {
+  marketContext?: MarketContext
+  marketOutlook?: MarketOutlook
   model: string
   bias: 'CALL' | 'PUT' | 'WAIT'
   stage: 'EARLY' | 'TRIGGER' | 'CONFIRMED' | 'NEUTRAL'
@@ -21,6 +24,7 @@ export async function getAiPriceAction(
   candles: AngelOneCandle[],
   rules: PriceActionAnalysis,
   signal?: AbortSignal,
+  includeMarketContext = false,
 ): Promise<AiPriceAction> {
   const response = await fetch('/api/ai/price-action', {
     method: 'POST',
@@ -29,6 +33,7 @@ export async function getAiPriceAction(
     body: JSON.stringify({
       instrument,
       interval,
+      includeMarketContext,
       candles: candles.slice(-60),
       rules: {
         decision: rules.side,

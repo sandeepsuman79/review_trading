@@ -80,7 +80,7 @@ export default function FeedPage({ posts, onVote, onReaction, onComment }: FeedP
                 <FilterBtn key={t} label={t === 'All' ? 'All Types' : t} active={typeFilter === t} onClick={() => setTypeFilter(t)} />
               ))}
             </div>
-            <div style={{ display: 'flex', gap: 6 }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               {FREQS.map((f) => (
                 <FilterBtn key={f} label={f === 'All' ? 'All Schedules' : f} active={freqFilter === f} onClick={() => setFreqFilter(f)} />
               ))}
@@ -96,7 +96,7 @@ export default function FeedPage({ posts, onVote, onReaction, onComment }: FeedP
             <p style={{ fontSize: 16 }}>No posts match your filters.</p>
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: 20 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 360px), 1fr))', gap: 20 }}>
             {filtered.map((post) => (
               <PostCard key={post.id} post={post} onVote={onVote} onReaction={onReaction} onComment={onComment} />
             ))}
