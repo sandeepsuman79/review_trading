@@ -1,10 +1,9 @@
 import type { AngelOneCandle } from '../api/angelOne'
-import { completedCandles } from './candleData'
 import { calculateMovingAverageSeries } from './movingAverages'
 import { calculateTechnicalIndicatorSeries } from './technicalIndicators'
 
 /**
- * OHLC price-action agent for the selected chart timeframe.
+ * 5-minute OHLC price-action AI agent.
  *
  * IMPORTANT:
  * - Uses candle OHLC + timestamps and SMA(20), EMA(50), RSI(14), Supertrend(10,3).
@@ -97,6 +96,12 @@ export type PriceActionAnalysis = {
 
   analyzedCandles: number
   latestCandleTime?: string
+}
+
+const intervalMilliseconds: Record<PriceActionInterval, number> = {
+  FIVE_MINUTE: 5 * 60 * 1000,
+  FIFTEEN_MINUTE: 15 * 60 * 1000,
+  ONE_HOUR: 60 * 60 * 1000,
 }
 
 type OHLC = {
@@ -620,10 +625,8 @@ function earlyMoveOutlook(
   addEvidence(compression ? clamp(candleMomentum * 1.5) : 0, 5,
     'Range is compressing with bullish pressure building', 'Range is compressing with bearish pressure building')
 
-  const bullishTrigger = priorRangeHigh !== undefined ? priorRangeHigh + buffer : resistance === undefined ? undefined : resistance + buffer
-  const bearishTrigger = priorRangeLow !== undefined ? priorRangeLow - buffer : support === undefined ? undefined : support - buffer
-  const breakoutUp = bullishTrigger !== undefined && latest.close > bullishTrigger && latest.close > latest.open
-  const breakoutDown = bearishTrigger !== undefined && latest.close < bearishTrigger && latest.close < latest.open
+  const breakoutUp = priorRangeHigh !== undefined && latest.close > priorRangeHigh && latest.close > latest.open
+  const breakoutDown = priorRangeLow !== undefined && latest.close < priorRangeLow && latest.close < latest.open
   bullish = Math.min(100, Math.round(bullish))
   bearish = Math.min(100, Math.round(bearish))
 
@@ -637,9 +640,9 @@ function earlyMoveOutlook(
 
   if (confirmedSetup && tradeReadySide && earlyBias === (tradeReadySide === 'CALL' ? 'BULLISH' : 'BEARISH')) {
     earlyStage = 'CONFIRMED'
-  } else if (breakoutUp && earlyBias === 'BULLISH') {
+  } else if (breakoutUp && bullish >= 50 && bullish > bearish) {
     earlyStage = 'TRIGGER'
-  } else if (breakoutDown && earlyBias === 'BEARISH') {
+  } else if (breakoutDown && bearish >= 50 && bearish > bullish) {
     earlyStage = 'TRIGGER'
   } else if (earlyBias !== 'NEUTRAL') {
     earlyStage = 'EARLY'
@@ -660,6 +663,8 @@ function earlyMoveOutlook(
       : breakoutUp || breakoutDown
         ? 'WAIT — breakout detected but directional evidence is not aligned'
         : 'WAIT — no clear directional edge'
+  const bullishTrigger = priorRangeHigh !== undefined ? priorRangeHigh + buffer : resistance === undefined ? undefined : resistance + buffer
+  const bearishTrigger = priorRangeLow !== undefined ? priorRangeLow - buffer : support === undefined ? undefined : support - buffer
   const currentPrice = latest?.close
 
   return {
@@ -765,19 +770,23 @@ export function analyzePriceAction(
   interval: PriceActionInterval = 'FIVE_MINUTE',
   now = Date.now(),
 ): PriceActionAnalysis {
-  const timeframeLabel = interval === 'FIVE_MINUTE' ? '5-minute' : interval === 'FIFTEEN_MINUTE' ? '15-minute' : '1-hour'
-  const parsed = completedCandles(candles, interval, now)
+  const parsed = candles
     .map(toOHLC)
     .filter((candle): candle is OHLC => Boolean(candle))
+    .filter(
+      (candle) =>
+        candle.time + intervalMilliseconds[interval] <= now,
+    )
+    .sort((a, b) => a.time - b.time)
 
   // Keep enough history to calculate structure, session levels and ranges.
   const completed = parsed.slice(-180)
-  const movingAverageSeries = calculateMovingAverageSeries(parsed.map((candle) => candle.close))
+  const movingAverageSeries = calculateMovingAverageSeries(completed.map((candle) => candle.close))
   const latestMovingAverages = movingAverageSeries[movingAverageSeries.length - 1]
   const indicatorSeries = calculateTechnicalIndicatorSeries(
-    parsed.map((candle) => candle.high),
-    parsed.map((candle) => candle.low),
-    parsed.map((candle) => candle.close),
+    completed.map((candle) => candle.high),
+    completed.map((candle) => candle.low),
+    completed.map((candle) => candle.close),
   )
   const latestIndicators = indicatorSeries[indicatorSeries.length - 1]
   const threeCandlesAgoIndicators = indicatorSeries[Math.max(0, indicatorSeries.length - 4)]
@@ -830,7 +839,7 @@ export function analyzePriceAction(
 
   if (completed.length < 25) {
     return empty(
-      `Waiting for at least 25 completed ${timeframeLabel} candles. The live/incomplete candle is excluded.`,
+      `Waiting for at least 25 completed ${interval === 'FIVE_MINUTE' ? '5-minute' : interval} candles. The live/incomplete candle is excluded.`,
     )
   }
 
@@ -1076,7 +1085,7 @@ export function analyzePriceAction(
         ...(expansion ? ['Range expansion'] : []),
       ],
       invalidation:
-        `A decisive ${timeframeLabel} close back below the breakout level invalidates the setup.`,
+        'A decisive 5-minute close back below the breakout level invalidates the setup.',
     })
   }
 
@@ -1107,7 +1116,7 @@ export function analyzePriceAction(
         ...(expansion ? ['Range expansion'] : []),
       ],
       invalidation:
-        `A decisive ${timeframeLabel} close back above the breakdown level invalidates the setup.`,
+        'A decisive 5-minute close back above the breakdown level invalidates the setup.',
     })
   }
 
@@ -1136,7 +1145,7 @@ export function analyzePriceAction(
         'Bullish confirmation',
       ],
       invalidation:
-        `A ${timeframeLabel} close back below the failed-break level invalidates the setup.`,
+        'A 5-minute close back below the failed-break level invalidates the setup.',
     })
   }
 
@@ -1164,7 +1173,7 @@ export function analyzePriceAction(
         'Bearish confirmation',
       ],
       invalidation:
-        `A ${timeframeLabel} close back above the failed-break level invalidates the setup.`,
+        'A 5-minute close back above the failed-break level invalidates the setup.',
     })
   }
 
@@ -1198,7 +1207,7 @@ export function analyzePriceAction(
         'Two-candle confirmation',
       ],
       invalidation:
-        `A ${timeframeLabel} close below the support/rejection low invalidates the setup.`,
+        'A 5-minute close below the support/rejection low invalidates the setup.',
     })
   }
 
@@ -1231,7 +1240,7 @@ export function analyzePriceAction(
         'Two-candle confirmation',
       ],
       invalidation:
-        `A ${timeframeLabel} close above the resistance/rejection high invalidates the setup.`,
+        'A 5-minute close above the resistance/rejection high invalidates the setup.',
     })
   }
 
@@ -1249,7 +1258,7 @@ export function analyzePriceAction(
       pattern: 'BULLISH_PULLBACK_CONTINUATION',
       setup: 'Bullish trend pullback + confirmation',
       reason:
-        `The ${timeframeLabel} structure is bullish, price pulled into support, and the latest candle reclaimed the prior candle high.`,
+        'The 5-minute structure is bullish, price pulled into support, and the latest candle reclaimed the prior candle high.',
       entry,
       stopLoss,
       target,
@@ -1260,7 +1269,7 @@ export function analyzePriceAction(
         'Bullish confirmation',
       ],
       invalidation:
-        `A ${timeframeLabel} close below the latest confirmed higher-low area invalidates the continuation thesis.`,
+        'A 5-minute close below the latest confirmed higher-low area invalidates the continuation thesis.',
     })
   }
 
@@ -1277,7 +1286,7 @@ export function analyzePriceAction(
       pattern: 'BEARISH_PULLBACK_CONTINUATION',
       setup: 'Bearish trend pullback + confirmation',
       reason:
-        `The ${timeframeLabel} structure is bearish, price pulled into resistance, and the latest candle broke the prior candle low.`,
+        'The 5-minute structure is bearish, price pulled into resistance, and the latest candle broke the prior candle low.',
       entry,
       stopLoss,
       target,
@@ -1288,7 +1297,7 @@ export function analyzePriceAction(
         'Bearish confirmation',
       ],
       invalidation:
-        `A ${timeframeLabel} close above the latest confirmed lower-high area invalidates the continuation thesis.`,
+        'A 5-minute close above the latest confirmed lower-high area invalidates the continuation thesis.',
     })
   }
 
@@ -1317,7 +1326,7 @@ export function analyzePriceAction(
         'Bullish confirmation',
       ],
       invalidation:
-        `A ${timeframeLabel} close below the range low invalidates the setup.`,
+        'A 5-minute close below the range low invalidates the setup.',
     })
   }
 
@@ -1345,7 +1354,7 @@ export function analyzePriceAction(
         'Bearish confirmation',
       ],
       invalidation:
-        `A ${timeframeLabel} close above the range high invalidates the setup.`,
+        'A 5-minute close above the range high invalidates the setup.',
     })
   }
 
@@ -1371,7 +1380,7 @@ export function analyzePriceAction(
         'Bullish close',
       ],
       invalidation:
-        `A ${timeframeLabel} close back inside the compressed range invalidates the breakout.`,
+        'A 5-minute close back inside the compressed range invalidates the breakout.',
     })
   }
 
@@ -1396,7 +1405,7 @@ export function analyzePriceAction(
         'Bearish close',
       ],
       invalidation:
-        `A ${timeframeLabel} close back inside the compressed range invalidates the breakdown.`,
+        'A 5-minute close back inside the compressed range invalidates the breakdown.',
     })
   }
 

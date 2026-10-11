@@ -1,36 +1,12 @@
-import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { FormEvent, WheelEvent as ReactWheelEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { connectAngelOneOrderStream, connectAngelOneStream, createGttRule, getAngelOneLtp, getAngelOneProfile, getAngelOneRms, getGttRuleDetails, getHistoricalCandles, getHistoricalOi, getInstrumentMaster, listGttRules, modifyGttRule, cancelGttRule, refreshAngelOneToken } from '../api/angelOne'
 import type { AngelOneOrderUpdate } from '../api/angelOne'
 import type { AngelOneStreamTick } from '../api/angelOne'
 import type { AngelOneCandle, AngelOneGttRule, AngelOneProfile, AngelOneRms } from '../api/angelOne'
 import { getAiPriceAction, type AiPriceAction } from '../api/ai'
 import { analyzePriceAction, type PriceActionAnalysis } from '../analysis/priceAction'
-import { applyLiveTick, completedCandles, tickTimestamp } from '../analysis/candleData'
-import MarketContextPanel from '../components/MarketContextPanel'
-import { useMarketContext } from '../hooks/useMarketContext'
-import ErrorToast from '../components/ErrorToast'
-import CandleChart from '../components/CandleChart'
-import { buildEarlyPrediction, type EarlyPrediction, type PredictionPlan } from '../analysis/earlyPrediction'
-import { usePredictionHistory } from '../hooks/usePredictionHistory'
-import PredictionHistory from '../components/PredictionHistory'
-import PredictionHeader from '../components/PredictionHeader'
-import PredictionNotifications from '../components/PredictionNotifications'
-import type { PredictionEvent } from '../analysis/predictionEvents'
-
-function isInvalidToken(message: string) {
-  return /invalid[\s_-]*token|token[\s_-]*invalid/i.test(message)
-}
-
-function ConnectionStatus({ label, status }: { label: string; status: string }) {
-  const connected = status === 'Connected'
-  const connection = connected ? 'Connected' : 'Disconnected'
-  return (
-    <span className="prediction-connection" role="status" aria-label={`${label}: ${connection}`} title={`${label}: ${status}`}>
-      <span className={`connection-dot ${connected ? 'is-connected' : 'is-disconnected'}`} aria-hidden="true" />
-      <span className="prediction-connection-text"><span className="prediction-connection-label">{label === 'WebSocket stream' ? 'Stream' : 'Orders'}</span><strong>{connection}</strong></span>
-    </span>
-  )
-}
+import { calculateMovingAverageSeries } from '../analysis/movingAverages'
+import { calculateTechnicalIndicatorSeries } from '../analysis/technicalIndicators'
 
 const trackedInstruments = [
   { name: 'Nifty 50', exchange: 'NSE', symbol: 'Nifty 50', token: '99926000' },
@@ -131,65 +107,353 @@ function candleBucket(timestamp: number, interval: ChartInterval) {
   return Math.floor((normalizedTimestamp - alignment) / intervalMs) * intervalMs + alignment
 }
 
-function PriceActionAgent({ candles, interval, now, instrument, onError, onPrediction }: { candles: AngelOneCandle[]; interval: ChartInterval; now: number; instrument: string; onError: (message: string) => void; onPrediction: (plan: PredictionPlan) => void }) {
-  const market = useMarketContext(instrument)
-  useEffect(() => { if (market.error) onError(market.error) }, [market.error, onError])
-  const marketRevision = market.context?.revision
-  const snapshot = completedCandles(candles, interval, now)
-  const analysis: PriceActionAnalysis = analyzePriceAction(snapshot, interval, now)
-  const snapshotKey = JSON.stringify(snapshot)
-  const chartCurrent = Boolean(analysis.latestCandleTime && now - Date.parse(analysis.latestCandleTime) <= 2 * intervalMilliseconds(interval))
+function liveTickTimestamp(tick: AngelOneStreamTick, now: number) {
+  const exchangeTimestamp = tick.timestamp < 1_000_000_000_000 ? tick.timestamp * 1000 : tick.timestamp
+  return Math.max(exchangeTimestamp, now)
+}
+
+function addInProgressCandle(candles: AngelOneCandle[], tick: AngelOneStreamTick | undefined, interval: ChartInterval, now: number) {
+  if (!tick?.ltp) return candles
+  const bucketTime = candleBucket(liveTickTimestamp(tick, now), interval)
+  const last = candles[candles.length - 1]
+  if (last && candleBucket(new Date(last[0]).getTime(), interval) === bucketTime) {
+    const updatedCandle: AngelOneCandle = [last[0], last[1], Math.max(last[2], tick.ltp), Math.min(last[3], tick.ltp), tick.ltp, tick.volume ?? last[5]]
+    return [...candles.slice(0, -1), updatedCandle]
+  }
+  const inProgressCandle: AngelOneCandle = [new Date(bucketTime).toISOString(), tick.ltp, tick.ltp, tick.ltp, tick.ltp, tick.volume ?? 0]
+  return [...candles, inProgressCandle]
+}
+
+function CandleChart({ candles, name, interval, tick }: { candles: AngelOneCandle[]; name: string; interval: ChartInterval; tick?: AngelOneStreamTick }) {
+  const rightGutter = 32
+  const axisWidth = 100
+  const minVisibleWidth = 900
+  const candleSpacing = 14
+  const width = Math.max(minVisibleWidth, candles.length * candleSpacing + rightGutter)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const followLatestRef = useRef(true)
+  const initialPositionedRef = useRef(false)
+
+  const getMaxScrollLeft = () => {
+    const viewport = scrollRef.current
+    if (!viewport) return 0
+    return Math.max(0, viewport.scrollWidth - viewport.clientWidth)
+  }
+
+  const positionAtLatest = () => {
+    const viewport = scrollRef.current
+    if (!viewport) return
+    viewport.scrollLeft = getMaxScrollLeft()
+  }
+
+  const handleScroll = () => {
+    const viewport = scrollRef.current
+    if (!viewport) return
+    const maxScrollLeft = getMaxScrollLeft()
+    const distanceFromLatest = maxScrollLeft - viewport.scrollLeft
+    // If the user manually moves away from the latest edge, stop following live candles.
+    // Returning to the right edge re-enables live auto-follow.
+    followLatestRef.current = distanceFromLatest <= 24
+  }
+
+  const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    const horizontalDelta = Math.abs(event.deltaX) > Math.abs(event.deltaY)
+      ? event.deltaX
+      : event.shiftKey ? event.deltaY : 0
+    if (horizontalDelta === 0) return
+
+    event.preventDefault()
+    event.stopPropagation()
+    const viewport = scrollRef.current
+    if (viewport) viewport.scrollLeft += horizontalDelta
+  }
+
+  // Initial load / timeframe change: always show the current/latest date at the right.
+  useLayoutEffect(() => {
+    initialPositionedRef.current = false
+    followLatestRef.current = true
+
+    let firstFrame = 0
+    let secondFrame = 0
+    const position = () => {
+      if (!followLatestRef.current) return
+      positionAtLatest()
+      firstFrame = window.requestAnimationFrame(() => {
+        if (!followLatestRef.current) return
+        positionAtLatest()
+        secondFrame = window.requestAnimationFrame(() => {
+          if (!followLatestRef.current) return
+          positionAtLatest()
+          initialPositionedRef.current = true
+        })
+      })
+    }
+
+    position()
+    const retry = window.setTimeout(position, 250)
+    return () => {
+      window.cancelAnimationFrame(firstFrame)
+      window.cancelAnimationFrame(secondFrame)
+      window.clearTimeout(retry)
+    }
+  }, [interval, width])
+
+  // When a NEW candle is appended, keep the latest candle visible only if the
+  // user was already following the latest edge. If they are reading history,
+  // their horizontal position is preserved.
+  useLayoutEffect(() => {
+    if (!initialPositionedRef.current || !followLatestRef.current) return
+    positionAtLatest()
+  }, [candles.length])
+
+  // A live tick updates the current candle every second, but should not yank a
+  // user back to today/latest when they have intentionally scrolled left.
+  useLayoutEffect(() => {
+    if (followLatestRef.current) positionAtLatest()
+  }, [tick?.timestamp])
+
+  if (!candles.length) return <div style={{ color: 'var(--text-secondary)', padding: 24 }}>No candle data returned.</div>
+
+  const height = 460
+  const padding = { top: 18, bottom: 34, left: 58 }
+  const candleValues = candles.flatMap((candle) => [candle[2], candle[3]])
+  const rawMinimum = Math.min(...candleValues, tick?.ltp ?? Number.POSITIVE_INFINITY)
+  const rawMaximum = Math.max(...candleValues, tick?.ltp ?? Number.NEGATIVE_INFINITY)
+  const rawRange = rawMaximum - rawMinimum || Math.max(rawMaximum * 0.002, 1)
+  const scalePadding = rawRange * 0.05
+  const minimum = rawMinimum - scalePadding
+  const maximum = rawMaximum + scalePadding
+  const range = maximum - minimum
+  const chartWidth = width - padding.left - rightGutter
+  const chartHeight = height - padding.top - padding.bottom
+  const xStep = chartWidth / Math.max(candles.length, 1)
+  const candleWidth = Math.max(4, Math.min(10, xStep * 0.58))
+  const y = (value: number) => padding.top + ((maximum - value) / range) * chartHeight
+  const movingAverageSeries = calculateMovingAverageSeries(candles.map((candle) => candle[4]))
+  const ma20Points = movingAverageSeries
+    .map((point, index) => point.sma20 === undefined ? undefined : `${padding.left + index * xStep + xStep / 2},${y(point.sma20)}`)
+    .filter((point): point is string => point !== undefined)
+    .join(' ')
+  const ema50Points = movingAverageSeries
+    .map((point, index) => point.ema50 === undefined ? undefined : `${padding.left + index * xStep + xStep / 2},${y(point.ema50)}`)
+    .filter((point): point is string => point !== undefined)
+    .join(' ')
+  const technicalIndicators = calculateTechnicalIndicatorSeries(
+    candles.map((candle) => candle[2]),
+    candles.map((candle) => candle[3]),
+    candles.map((candle) => candle[4]),
+  )
+  const supertrendSegments = technicalIndicators.reduce<Array<{ direction: 'UP' | 'DOWN'; points: string[] }>>((segments, point, index) => {
+    if (point.supertrend10 === undefined || point.supertrendDirection === undefined) return segments
+    const coordinate = `${padding.left + index * xStep + xStep / 2},${y(point.supertrend10)}`
+    const lastSegment = segments[segments.length - 1]
+    if (lastSegment?.direction === point.supertrendDirection) {
+      lastSegment.points.push(coordinate)
+    } else {
+      segments.push({ direction: point.supertrendDirection, points: [coordinate] })
+    }
+    return segments
+  }, [])
+  const supertrendFlips = technicalIndicators.flatMap((point, index) => {
+    if (index === 0 || point.supertrend10 === undefined || point.supertrendDirection === undefined) return []
+    const previous = technicalIndicators[index - 1]
+    if (previous.supertrend10 === undefined || previous.supertrendDirection === undefined || previous.supertrendDirection === point.supertrendDirection) return []
+    const centerX = padding.left + index * xStep + xStep / 2
+    return [{
+      x: centerX,
+      fromY: y(previous.supertrend10),
+      toY: y(point.supertrend10),
+      direction: point.supertrendDirection,
+    }]
+  })
+  const labelStep = Math.max(1, Math.ceil(candles.length / 8))
+  const labelIndexes = candles.map((_, index) => index).filter((index) => index % labelStep === 0 || index === candles.length - 1)
+  const livePriceY = tick?.ltp == null ? undefined : y(tick.ltp)
+  const liveCandle = candles[candles.length - 1]
+  const livePriceColor = liveCandle && liveCandle[4] >= liveCandle[1] ? '#16A34A' : '#DC2626'
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: `minmax(0, 1fr) ${axisWidth}px`, width: '100%', height: 490, overflow: 'hidden', border: '1px solid var(--border)', borderRadius: 10 }}>
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        onWheel={handleWheel}
+        style={{
+          width: '100%',
+          minWidth: 0,
+          height: 490,
+          overflowX: 'auto',
+          overflowY: 'hidden',
+          overscrollBehavior: 'contain',
+          touchAction: 'pan-x pan-y',
+          scrollbarGutter: 'stable',
+          WebkitOverflowScrolling: 'touch',
+        }}
+      >
+      <div style={{ position: 'relative', width: `${width}px`, minWidth: `${width}px`, height: 490, boxSizing: 'border-box' }}>
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          role="img"
+          aria-label={`${name} ${intervalLabel(interval)} candlestick chart`}
+          style={{ width: `${width}px`, maxWidth: 'none', height: `${height}px`, display: 'block' }}
+        >
+          {[0, 0.25, 0.5, 0.75, 1].map((fraction) => {
+            const lineY = padding.top + chartHeight * fraction
+            return <line key={fraction} x1={padding.left} x2={width - rightGutter} y1={lineY} y2={lineY} stroke="var(--border)" strokeDasharray="3 4" />
+          })}
+
+          {livePriceY !== undefined && (
+            <line
+              x1={padding.left}
+              x2={width - rightGutter}
+              y1={livePriceY}
+              y2={livePriceY}
+              stroke={livePriceColor}
+              strokeDasharray="4 3"
+              strokeWidth="1"
+            />
+          )}
+
+          {candles.map((candle, index) => {
+            const [timestamp, open, high, low, close] = candle
+            const centerX = padding.left + index * xStep + xStep / 2
+            const bullish = close >= open
+            const color = bullish ? '#16A34A' : '#DC2626'
+            const bodyTop = y(Math.max(open, close))
+            const bodyHeight = Math.max(4, Math.abs(y(open) - y(close)))
+            return (
+              <g key={`${timestamp}-${index}`}>
+                <title>{`${new Date(timestamp).toLocaleString()} | Open: ${open.toFixed(2)} | High: ${high.toFixed(2)} | Low: ${low.toFixed(2)} | Close: ${close.toFixed(2)} | Volume: ${candle[5]}`}</title>
+                <line x1={centerX} x2={centerX} y1={y(high)} y2={y(low)} stroke={color} strokeWidth="1.5" />
+                <rect
+                  x={centerX - candleWidth / 2}
+                  y={bodyTop}
+                  width={candleWidth}
+                  height={bodyHeight}
+                  fill={color}
+                  stroke={color}
+                  strokeWidth={0.5}
+                  rx="0"
+                />
+              </g>
+            )
+          })}
+          {ma20Points && <polyline points={ma20Points} fill="none" stroke="#F59E0B" strokeWidth="2" vectorEffect="non-scaling-stroke" />}
+          {ema50Points && <polyline points={ema50Points} fill="none" stroke="#2563EB" strokeWidth="2" vectorEffect="non-scaling-stroke" />}
+          {supertrendSegments.map((segment, index) => (
+            <g key={`supertrend-${segment.direction}-${index}`}>
+              {segment.points.length > 1 ? (
+                <polyline
+                  points={segment.points.join(' ')}
+                  fill="none"
+                  stroke={segment.direction === 'UP' ? '#16A34A' : '#DC2626'}
+                  strokeWidth="2.5"
+                  vectorEffect="non-scaling-stroke"
+                />
+              ) : (
+                <circle
+                  cx={Number(segment.points[0].split(',')[0])}
+                  cy={Number(segment.points[0].split(',')[1])}
+                  r="2.5"
+                  fill={segment.direction === 'UP' ? '#16A34A' : '#DC2626'}
+                  vectorEffect="non-scaling-stroke"
+                />
+              )}
+            </g>
+          ))}
+          {supertrendFlips.map((flip, index) => (
+            <line
+              key={`supertrend-flip-${index}`}
+              x1={flip.x}
+              x2={flip.x}
+              y1={flip.fromY}
+              y2={flip.toY}
+              stroke={flip.direction === 'UP' ? '#16A34A' : '#DC2626'}
+              strokeWidth="2.5"
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
+        </svg>
+
+        <div style={{ position: 'sticky', left: 0, bottom: 0, zIndex: 2, width: `${width}px`, background: 'var(--card)' }}>
+          <div style={{ height: 28, display: 'flex', alignItems: 'center', paddingLeft: padding.left, borderTop: '1px solid var(--border)', color: 'var(--text-secondary)', fontSize: 10 }}>
+            {labelIndexes.map((index) => {
+              const candle = candles[index]
+              const centerX = padding.left + index * xStep + xStep / 2
+              return (
+                <span key={`${candle[0]}-label`} style={{ position: 'absolute', left: `${centerX}px`, transform: 'translateX(-50%)', whiteSpace: 'nowrap' }}>
+                  {new Date(candle[0]).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}
+                </span>
+              )
+            })}
+          </div>
+
+        </div>
+      </div>
+      </div>
+      <div style={{ position: 'relative', width: axisWidth, height: height, boxSizing: 'border-box', background: 'var(--card)', borderLeft: '1px solid var(--border)', zIndex: 2, pointerEvents: 'none' }}>
+        {[0, 0.25, 0.5, 0.75, 1].map((fraction) => {
+          const value = maximum - range * fraction
+          const lineY = padding.top + chartHeight * fraction
+          return <div key={fraction} style={{ position: 'absolute', top: `${lineY - 6}px`, right: 8, fontSize: 10, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{value.toFixed(2)}</div>
+        })}
+        {tick?.ltp != null && livePriceY !== undefined && (
+          <div style={{
+            position: 'absolute',
+            top: `${Math.max(padding.top, Math.min(height - padding.bottom - 20, livePriceY - 10))}px`,
+            left: 4,
+            right: 4,
+            padding: '3px 4px',
+            borderRadius: 3,
+            background: livePriceColor,
+            color: '#fff',
+            fontSize: 11,
+            fontWeight: 700,
+            lineHeight: '16px',
+            textAlign: 'center',
+            whiteSpace: 'nowrap',
+          }}>
+            {tick.ltp.toFixed(2)}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PriceActionAgent({ candles, interval, now, instrument }: { candles: AngelOneCandle[]; interval: ChartInterval; now: number; instrument: string }) {
+  const analysis: PriceActionAnalysis = analyzePriceAction(candles, interval, now)
   const [aiAnalysis, setAiAnalysis] = useState<AiPriceAction | null>(null)
   const [aiError, setAiError] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
-  const [assessedSnapshot, setAssessedSnapshot] = useState('')
-  const assessmentKey = `${instrument}:${interval}:${snapshotKey}:${marketRevision || 'no-context'}`
   const requestController = useRef<AbortController | null>(null)
   const requestAiRef = useRef<() => Promise<void>>(async () => {})
   requestAiRef.current = async () => {
     requestController.current?.abort()
     const controller = new AbortController()
     requestController.current = controller
-    let timedOut = false
-    const timeout = window.setTimeout(() => { timedOut = true; controller.abort() }, 45_000)
-    setAiAnalysis(null)
-    setAssessedSnapshot('')
     setAiLoading(true)
     setAiError('')
     try {
-      const result = await getAiPriceAction(instrument, interval, snapshot, analysis, controller.signal, Boolean(market.context))
-      if (result.asOf !== analysis.latestCandleTime) throw new Error('AI analysis returned a different chart timestamp. Using the current chart only.')
-      if (!controller.signal.aborted) { setAiAnalysis(result); setAssessedSnapshot(assessmentKey); setAiError('') }
+      const result = await getAiPriceAction(instrument, interval, candles, analysis, controller.signal)
+      setAiAnalysis(result)
+      setAiError('')
     } catch (error) {
-      if (!controller.signal.aborted || timedOut) {
-        setAiError(timedOut ? 'AI news interpretation timed out. The early agent continues with chart evidence.' : error instanceof Error ? error.message : 'AI analysis failed.')
-        setAssessedSnapshot(assessmentKey)
+      if (!controller.signal.aborted) {
+        setAiError(error instanceof Error ? error.message : 'AI analysis failed.')
       }
     } finally {
-      window.clearTimeout(timeout)
-      if (!controller.signal.aborted || timedOut) setAiLoading(false)
+      if (!controller.signal.aborted) setAiLoading(false)
     }
   }
 
   useEffect(() => {
-    setAiAnalysis(null)
-    setAiError('')
-    setAiLoading(false)
-    if (analysis.analyzedCandles >= 25 && market.loaded) void requestAiRef.current()
+    if (analysis.latestCandleTime) void requestAiRef.current()
     return () => requestController.current?.abort()
-  }, [instrument, interval, snapshotKey, analysis.analyzedCandles, marketRevision, market.loaded, chartCurrent])
+  }, [instrument, interval, analysis.latestCandleTime])
 
-  const ready = market.loaded && !market.loading && !aiLoading && assessedSnapshot === assessmentKey && Boolean(aiAnalysis || aiError)
-  const prediction: EarlyPrediction = ready
-    ? buildEarlyPrediction(analysis, instrument, interval, now, aiAnalysis?.marketContext || market.context, aiAnalysis?.marketOutlook)
-    : { side: 'WAIT', reason: analysis.analyzedCandles < 25 ? 'Waiting for at least 25 completed candles.' : 'Checking completed chart data and available market context…' }
-  const plan = 'plan' in prediction ? prediction.plan : undefined
-  const planRef = useRef(plan)
-  planRef.current = plan
-  useEffect(() => { if (planRef.current) onPrediction(planRef.current) }, [plan?.id, onPrediction])
-  useEffect(() => { if (aiError) onError(aiError) }, [aiError, onError])
-  const color = prediction.side === 'CALL' ? '#15803D' : prediction.side === 'PUT' ? '#B91C1C' : '#92400E'
-  const background = prediction.side === 'CALL' ? '#DCFCE7' : prediction.side === 'PUT' ? '#FEE2E2' : '#FEF3C7'
+  const color = analysis.side === 'CALL' ? '#15803D' : analysis.side === 'PUT' ? '#B91C1C' : '#92400E'
+  const background = analysis.side === 'CALL' ? '#DCFCE7' : analysis.side === 'PUT' ? '#FEE2E2' : '#FEF3C7'
   const formatPrice = (value?: number) => value === undefined ? '—' : value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
   const earlyDirection = analysis.earlyBias === 'BULLISH' ? 'BUY' : analysis.earlyBias === 'BEARISH' ? 'SELL' : 'NEUTRAL'
   const earlyViewLabel = analysis.earlyBias === 'NEUTRAL'
@@ -208,35 +472,22 @@ function PriceActionAgent({ candles, interval, now, instrument, onError, onPredi
   ]
 
   return (
-    <section aria-label="Candle price-action agent" style={{ marginTop: 14, padding: 14, border: '1px solid var(--border)', borderRadius: 12, background: 'var(--surface)' }}>
+    <section aria-label="Candle price-action agent" style={{ marginTop: 14, padding: 14, border: '1px solid var(--border)', borderRadius: 12, background: 'var(--bg)' }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <div>
-          <strong style={{ fontSize: 15 }}>Early Prediction Agent</strong>
+          <strong style={{ fontSize: 15 }}>Candle Price-Action Agent</strong>
           <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>OHLC + SMA(20)/EMA(20,50) + RSI(14) + Supertrend(10,3) · {intervalLabel(interval)} · {analysis.analyzedCandles} completed candles</div>
         </div>
         <span style={{ padding: '5px 10px', borderRadius: 999, color, background, fontSize: 12, fontWeight: 700 }}>
-          {prediction.side === 'WAIT' ? 'WAIT — NO TRADE' : `${plan?.stage} ${prediction.side} SETUP`}
+          {analysis.side === 'WAIT' ? 'WAIT — NO TRADE' : analysis.side === 'CALL' ? 'BULLISH — CALL SETUP' : 'BEARISH — PUT SETUP'}
         </span>
-      </div>
-      <div className="early-prediction-result" style={{ background, color }} aria-live="polite">
-        <p>{prediction.reason}</p>
-        {plan && <><div className="early-prediction-levels">
-          <span>Index entry <strong>{formatPrice(plan.entry)}</strong></span>
-          <span>Target <strong>{formatPrice(plan.target)}</strong></span>
-          <span>Stop-loss <strong>{formatPrice(plan.stopLoss)}</strong></span>
-          <span>Reward:risk <strong>{plan.riskReward.toFixed(2)}:1</strong></span>
-        </div><small>{plan.contextMode === 'NEWS_ALIGNED' ? 'Chart + supporting public news' : 'Chart only; news alignment unavailable or neutral'} · Conditional entry · Entry expires after 3 × {intervalLabel(interval)} · Automatically recorded in History<br />{plan.targetBasis}</small></>}
-      </div>
-      <div style={{ color: 'var(--text-secondary)', fontSize: 12, marginBottom: 10 }}>
-        {analysis.latestCandleTime ? `Last completed candle: ${new Date(analysis.latestCandleTime).toLocaleString('en-GB', { timeZone: 'Asia/Kolkata' })} IST` : 'Waiting for completed candles'} · Forming candle excluded
-        {analysis.latestCandleTime && now - new Date(analysis.latestCandleTime).getTime() > 2 * intervalMilliseconds(interval) && <span> · Historical snapshot; waiting for recent completed candles</span>}
       </div>
       <div style={{ marginBottom: 10, padding: '10px 12px', borderRadius: 8, background: 'var(--card)', fontSize: 12, lineHeight: 1.7 }}>
         <strong style={{ color: earlyColor }}>Early market view: {earlyViewLabel}</strong>
         <span style={{ color: 'var(--text-secondary)' }}> · {analysis.earlyStrength.replace(/_/g, ' ')}</span>
         <div>Bullish score: {analysis.bullishScore}/100 · Bearish score: {analysis.bearishScore}/100 <span style={{ color: 'var(--text-secondary)' }}>(weighted evidence score, not probability)</span></div>
         {(analysis.bullishEvidence.length > 0 || analysis.bearishEvidence.length > 0) && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 210px), 1fr))', gap: 8, marginTop: 4 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 8, marginTop: 4 }}>
             <div><strong style={{ color: '#15803D' }}>Bullish evidence</strong>{analysis.bullishEvidence.length ? <ul style={{ margin: '2px 0', paddingLeft: 18 }}>{analysis.bullishEvidence.map((item) => <li key={item}>{item}</li>)}</ul> : <div>None currently</div>}</div>
             <div><strong style={{ color: '#B91C1C' }}>Bearish evidence</strong>{analysis.bearishEvidence.length ? <ul style={{ margin: '2px 0', paddingLeft: 18 }}>{analysis.bearishEvidence.map((item) => <li key={item}>{item}</li>)}</ul> : <div>None currently</div>}</div>
           </div>
@@ -257,7 +508,7 @@ function PriceActionAgent({ candles, interval, now, instrument, onError, onPredi
           </span>
         </div>
         <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--border)' }}>
-          <strong>Technical confirmation: {analysis.tradeStatus}</strong>
+          <strong>Trade status: {analysis.tradeStatus}</strong>
         </div>
         {(analysis.bullishTrigger !== undefined || analysis.bearishTrigger !== undefined) && (
           <div style={{ color: 'var(--text-secondary)' }}>
@@ -267,29 +518,36 @@ function PriceActionAgent({ candles, interval, now, instrument, onError, onPredi
           </div>
         )}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 150px), 1fr))', gap: '8px 14px', marginBottom: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '8px 14px', marginBottom: 10 }}>
         {details.map(([label, value]) => (
           <div key={label} style={{ fontSize: 13 }}>
             <span style={{ color: 'var(--text-secondary)' }}>{label}: </span><strong>{value}</strong>
           </div>
         ))}
       </div>
+      {analysis.side !== 'WAIT' && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, padding: '10px 12px', borderRadius: 8, background, color, fontSize: 13, fontWeight: 600 }}>
+          <span>Index entry: {formatPrice(analysis.entry)}</span>
+          <span>Target: {formatPrice(analysis.target)}</span>
+          <span>Stop loss: {formatPrice(analysis.stopLoss)}</span>
+          <span>Reward:risk: {analysis.riskReward?.toFixed(2)}:1</span>
+        </div>
+      )}
       <p style={{ marginTop: 9, color: 'var(--text-secondary)', fontSize: 12, lineHeight: 1.5 }}>{analysis.reason}</p>
       {analysis.warnings.length > 0 && (
         <ul style={{ margin: '6px 0 0', paddingLeft: 20, color: 'var(--text-secondary)', fontSize: 12, lineHeight: 1.5 }}>
           {analysis.warnings.map((warning) => <li key={warning}>{warning}</li>)}
         </ul>
       )}
-      <MarketContextPanel context={ready ? aiAnalysis?.marketContext || market.context : market.context} loading={market.loading} refresh={() => void market.refresh()} outlook={ready ? aiAnalysis?.marketOutlook : undefined} chartCurrent={chartCurrent} />
       <div style={{ marginTop: 12, padding: 12, border: '1px solid var(--border)', borderRadius: 9, background: 'var(--card)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <strong style={{ fontSize: 13 }}>Gemini AI second opinion</strong>
-          <button type="button" onClick={() => void requestAiRef.current()} disabled={aiLoading || !market.loaded || analysis.analyzedCandles < 25}>
+          <button type="button" onClick={() => void requestAiRef.current()} disabled={aiLoading || !analysis.latestCandleTime}>
             {aiLoading ? 'Analyzing…' : aiAnalysis ? 'Re-analyze' : 'Analyze with Gemini AI'}
           </button>
         </div>
         {aiLoading && !aiAnalysis && <p style={{ margin: '8px 0 0', color: 'var(--text-secondary)', fontSize: 12 }}>Requesting a second opinion from Gemini…</p>}
-        {aiError && <p style={{ margin: '8px 0 0', color: 'var(--text-secondary)', fontSize: 12 }}>News interpretation unavailable; the agent uses chart evidence.</p>}
+        {aiError && <p role="alert" style={{ margin: '8px 0 0', color: '#B91C1C', fontSize: 12 }}>{aiError}</p>}
         {aiAnalysis && (
           <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.55 }}>
             <strong>{aiAnalysis.stage} {aiAnalysis.bias}</strong>
@@ -302,7 +560,7 @@ function PriceActionAgent({ candles, interval, now, instrument, onError, onPredi
             {aiAnalysis.caveat && <div style={{ color: 'var(--text-secondary)' }}><strong>Caveat:</strong> {aiAnalysis.caveat}</div>}
           </div>
         )}
-        <div style={{ marginTop: 6, color: 'var(--text-muted)', fontSize: 11 }}>Completed candles and available public headlines are sent to Google Gemini. Its sourced news outlook can confirm or veto an early setup; entry, target and stop-loss are calculated from the chart.</div>
+        <div style={{ marginTop: 6, color: 'var(--text-muted)', fontSize: 11 }}>Experimental AI commentary only. Candle data is sent to Google Gemini. It does not set trade levels or override the rule-based decision.</div>
       </div>
       {(analysis.support !== undefined || analysis.resistance !== undefined) && (
         <div style={{ marginTop: 5, color: 'var(--text-secondary)', fontSize: 12 }}>
@@ -326,6 +584,7 @@ export default function PredictionPage() {
   const [gttForm, setGttForm] = useState({ id: '', tradingsymbol: '', symboltoken: '', exchange: 'NSE', transactiontype: 'BUY', producttype: 'DELIVERY', price: '', qty: '', triggerprice: '', disclosedqty: '0' })
   const [gttMessage, setGttMessage] = useState('')
   const [gttError, setGttError] = useState('')
+  const [instrumentQuotes, setInstrumentQuotes] = useState<Record<string, { ltp?: string; open?: string; high?: string; low?: string; close?: string }>>({})
   const [instrumentError, setInstrumentError] = useState('')
   const [instrumentLoading, setInstrumentLoading] = useState(false)
   const [historicalMode, setHistoricalMode] = useState<'candles' | 'oi'>('candles')
@@ -333,8 +592,6 @@ export default function PredictionPage() {
   const [historicalData, setHistoricalData] = useState<Array<unknown>>([])
   const [historicalError, setHistoricalError] = useState('')
   const [historicalLoading, setHistoricalLoading] = useState(false)
-  const [selectedIndexToken, setSelectedIndexToken] = useState(trackedInstruments[0].token)
-  const chartSectionRef = useRef<HTMLDivElement>(null)
   const [chartInterval, setChartInterval] = useState<ChartInterval>('FIVE_MINUTE')
   const [chartCandles, setChartCandles] = useState<Record<string, AngelOneCandle[]>>(() => getInitialChartCandles('FIVE_MINUTE'))
   const [chartLoading, setChartLoading] = useState(false)
@@ -345,52 +602,10 @@ export default function PredictionPage() {
   const [streamSocket, setStreamSocket] = useState<WebSocket | null>(null)
   const [orderStatus, setOrderStatus] = useState('Disconnected')
   const [orderUpdates, setOrderUpdates] = useState<AngelOneOrderUpdate[]>([])
-  const [errorToast, setErrorToast] = useState<{ message: string; id: number } | null>(null)
-  const showErrorToast = useCallback((message: string) => setErrorToast({ message, id: Date.now() }), [])
-  const [activeTab, setActiveTab] = useState<'live' | 'history'>('live')
-  const [predictionNotifications, setPredictionNotifications] = useState<PredictionEvent[]>([])
-  const showPredictionEvents = useCallback((events: PredictionEvent[]) => {
-    setPredictionNotifications(current => [...current, ...events.filter(event => !current.some(item => item.id === event.id))])
-  }, [])
-  const dismissPredictionEvent = useCallback((id: string) => setPredictionNotifications(current => current.filter(event => event.id !== id)), [])
-  const { records: predictionRecords, storageError: historyStorageError, recordPrediction, sync: syncPredictions, syncTick, exitEarly, acknowledgeEarlyExit } = usePredictionHistory(showErrorToast, showPredictionEvents)
-  const pendingEarlyExit = predictionRecords.find(record => record.status === 'EARLY_EXIT' && record.earlyExitAcknowledgedAt === undefined)
   const [heartbeat, setHeartbeat] = useState(Date.now())
   const chartInitialised = useRef(false)
   const chartIntervalRef = useRef(chartInterval)
   chartIntervalRef.current = chartInterval
-  const consumeTickRef = useRef<(tick: AngelOneStreamTick) => void>(() => {})
-  consumeTickRef.current = tick => {
-    const instrument = trackedInstruments.find(item => item.token === tick.token)
-    if (!instrument || !Number.isFinite(tickTimestamp(tick))) return
-    syncTick(instrument.name, tick, record => {
-      try { return record.interval === chartInterval ? chartCandles[instrument.name] || [] : readChartCache(instrument.token, record.interval) || [] }
-      catch { return [] }
-    }, Date.now())
-  }
-
-  useEffect(() => {
-    const cache = new Map<string, AngelOneCandle[]>()
-    syncPredictions(record => {
-      const instrument = trackedInstruments.find(item => item.name === record.instrument)!
-      const key = `${instrument.token}:${record.interval}`
-      if (!cache.has(key)) {
-        try { cache.set(key, record.interval === chartInterval ? chartCandles[instrument.name] || [] : readChartCache(instrument.token, record.interval) || []) }
-        catch { cache.set(key, []) }
-      }
-      return { candles: cache.get(key)!, tick: streamTicks[instrument.token] }
-    }, heartbeat)
-  }, [heartbeat, streamTicks, chartCandles, chartInterval, syncPredictions])
-
-  const previousErrors = useRef<string[]>([])
-  useEffect(() => {
-    const errors = [profileError, rmsError, gttError, instrumentError, historicalError, chartError, streamStatus, orderStatus]
-    const toastErrors = errors.filter((message, index) => message && (index < 5 || isInvalidToken(message)))
-    const hasNewError = errors.some((message, index) => message && (index < 5 || isInvalidToken(message)) && message !== previousErrors.current[index])
-    previousErrors.current = errors
-    if (hasNewError) setErrorToast({ message: [...new Set(toastErrors)].join(' · '), id: Date.now() })
-  }, [profileError, rmsError, gttError, instrumentError, historicalError, chartError, streamStatus, orderStatus])
-
 
   useEffect(() => {
     fetchAngelProfile()
@@ -399,15 +614,7 @@ export default function PredictionPage() {
       chartInitialised.current = true
       fetchChartCandles('FIVE_MINUTE')
     }
-    const socket = connectAngelOneStream((tick) => {
-      // Record every exchange quote before React batches chart updates, preserving stop/target ordering.
-      consumeTickRef.current(tick)
-      setStreamTicks((current) => {
-        const previous = current[tick.token]
-        if (!Number.isFinite(tickTimestamp(tick)) || previous && tickTimestamp(tick) < tickTimestamp(previous)) return current
-        return { ...current, [tick.token]: tick }
-      })
-    }, setStreamStatus)
+    const socket = connectAngelOneStream((tick) => setStreamTicks((current) => ({ ...current, [tick.token]: tick })), setStreamStatus)
     if (socket) setStreamSocket(socket)
     const orderSocket = connectAngelOneOrderStream((update) => setOrderUpdates((current) => [update, ...current].slice(0, 20)), setOrderStatus)
     const synchronizeAfterLogin = () => {
@@ -430,7 +637,7 @@ export default function PredictionPage() {
 
   useEffect(() => {
     const preventHorizontalHistorySwipe = (event: WheelEvent) => {
-      if (event.target instanceof Element && event.target.closest('.candle-chart') && Math.abs(event.deltaX) > Math.abs(event.deltaY)) event.preventDefault()
+      if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) event.preventDefault()
     }
     window.addEventListener('wheel', preventHorizontalHistorySwipe, { capture: true, passive: false })
     return () => window.removeEventListener('wheel', preventHorizontalHistorySwipe, true)
@@ -530,6 +737,7 @@ export default function PredictionPage() {
 
   useEffect(() => {
     const tickByToken = streamTicks
+    const now = Date.now()
     const activeIntervalCandles: Record<string, AngelOneCandle[]> = {}
     for (const instrument of trackedInstruments) {
       const tick = tickByToken[instrument.token]
@@ -538,7 +746,7 @@ export default function PredictionPage() {
         try {
           const savedCandles = readChartCache(instrument.token, interval)
           if (!savedCandles?.length) continue
-          const updatedCandles = applyLiveTick(savedCandles, tick, interval)
+          const updatedCandles = addInProgressCandle(savedCandles, tick, interval, now)
           const oldLast = savedCandles[savedCandles.length - 1]
           const newLast = updatedCandles[updatedCandles.length - 1]
           const changed = oldLast?.[0] !== newLast?.[0]
@@ -627,11 +835,14 @@ export default function PredictionPage() {
     setInstrumentError('')
     try {
       const master = await getInstrumentMaster()
-      await Promise.all(trackedInstruments.map(async (tracked) => {
+      const quotes = await Promise.all(trackedInstruments.map(async (tracked) => {
         const instrument = master.find((item) => item.token === tracked.token)
           || { token: tracked.token, symbol: tracked.symbol, exch_seg: tracked.exchange === 'BSE' ? 'bse_cm' : 'nse_cm' }
-        await getAngelOneLtp(token, instrument)
+        const result = await getAngelOneLtp(token, instrument)
+        const quote = Array.isArray(result.data) ? result.data[0] : undefined
+        return [tracked.name, quote || {}] as const
       }))
+      setInstrumentQuotes(Object.fromEntries(quotes))
     } catch (error) {
       setInstrumentError(error instanceof Error ? error.message : 'Unable to load index quotes from Angel One.')
     } finally {
@@ -734,98 +945,131 @@ export default function PredictionPage() {
   }
 
   return (
-    <div className="prediction-page" style={{ minHeight: '100vh', background: 'var(--bg)', paddingBottom: 40 }}>
-      <PredictionNotifications events={predictionNotifications} earlyExit={pendingEarlyExit} onDismiss={dismissPredictionEvent} onAcknowledge={id => {
-        acknowledgeEarlyExit(id)
-        setPredictionNotifications(current => current.filter(event => event.recordId !== id || event.reason !== 'Early exit'))
-      }} />
-      <ErrorToast message={errorToast?.message || ''} notificationId={errorToast?.id} onDismiss={() => setErrorToast(null)} />
-      <PredictionHeader>
-        <div className="container prediction-page-container">
-          <div className="prediction-heading-row">
-            <div className="prediction-heading-primary">
-              <div className="prediction-tabs" role="tablist" aria-label="Prediction views">
-                <button type="button" id="live-tab" role="tab" aria-selected={activeTab === 'live'} aria-controls="live-panel" onClick={() => setActiveTab('live')}>Live prediction</button>
-                <button type="button" id="history-tab" role="tab" aria-selected={activeTab === 'history'} aria-controls="history-panel" onClick={() => setActiveTab('history')}>History <span>{predictionRecords.length}</span></button>
-              </div>
-            </div>
-            <div className="prediction-heading-actions">
-              <label className="prediction-index-selector">
-                <select aria-label="Index" value={selectedIndexToken} onChange={(event) => setSelectedIndexToken(event.target.value)} aria-controls="live-index-candle-chart">
-                  {trackedInstruments.map((instrument) => <option key={instrument.token} value={instrument.token}>{instrument.name}</option>)}
-                </select>
-              </label>
-              <button type="button" className="prediction-refresh" onClick={fetchInstrumentQuotes} disabled={instrumentLoading} aria-label="Refresh Live Data" title="Refresh Live Data" aria-busy={instrumentLoading}>
-                <svg className={instrumentLoading ? 'refresh-spinning' : undefined} width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M20 7v5h-5M4 17v-5h5" />
-                  <path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 17.9 17" />
-                </svg>
-              </button>
-              <ConnectionStatus label="WebSocket stream" status={streamStatus} />
-              <ConnectionStatus label="Order updates" status={orderStatus} />
-            </div>
-          </div>
-          <p className="prediction-header-description" style={{ color: 'rgba(255,255,255,0.9)', fontSize: 14, maxWidth: 700, lineHeight: 1.7 }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg)', paddingBottom: 40 }}>
+      <div style={{ background: 'linear-gradient(135deg,#6C63FF,#FF6584)', padding: '32px 0 28px', marginBottom: 24 }}>
+        <div className="container">
+          <h1 style={{ color: '#fff', fontSize: 28, fontWeight: 700, marginBottom: 6 }}>Traders Prediction</h1>
+          <p style={{ color: 'rgba(255,255,255,0.9)', fontSize: 14, maxWidth: 700, lineHeight: 1.7 }}>
             Live Nifty 50, Sensex, and Bank Nifty prices from Angel One SmartAPI.
           </p>
         </div>
-      </PredictionHeader>
+      </div>
 
-      {gttMessage && <div className="container" style={{ marginBottom: 20 }}>
-        <div style={{ padding: 16, borderRadius: 18, background: '#D1FAE5', color: '#065F46' }}>{gttMessage}</div>
-      </div>}
-
-      <div className="container prediction-page-container" style={{ paddingBottom: 40 }}>
-        <div id="history-panel" role="tabpanel" aria-labelledby="history-tab" hidden={activeTab !== 'history'}>
-          <PredictionHistory records={predictionRecords} storageError={historyStorageError} now={heartbeat} onExitEarly={exitEarly} />
+      <div className="container" style={{ marginBottom: 20 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+          <button type="button" onClick={fetchInstrumentQuotes} disabled={instrumentLoading}>
+            {instrumentLoading ? 'Refreshing…' : 'Refresh Live Data'}
+          </button>
         </div>
-        <div id="live-panel" role="tabpanel" aria-labelledby="live-tab" hidden={activeTab !== 'live'}>
-          <div ref={chartSectionRef} id="live-index-candle-chart" className="live-index-chart-section" style={{ marginBottom: 18 }}>
+        <div style={{ display: 'grid', gap: 10, marginBottom: 16 }}>
+          {profileError && (
+            <div style={{ padding: 16, borderRadius: 18, background: '#FECACA', color: '#991B1B' }}>{profileError}</div>
+          )}
+          {rmsError && (
+            <div style={{ padding: 16, borderRadius: 18, background: '#FECACA', color: '#991B1B' }}>{rmsError}</div>
+          )}
+          {gttError && <div style={{ padding: 16, borderRadius: 18, background: '#FECACA', color: '#991B1B' }}>{gttError}</div>}
+          {gttMessage && <div style={{ padding: 16, borderRadius: 18, background: '#D1FAE5', color: '#065F46' }}>{gttMessage}</div>}
+          {instrumentError && <div style={{ padding: 16, borderRadius: 18, background: '#FECACA', color: '#991B1B' }}>{instrumentError}</div>}
+          {historicalError && <div style={{ padding: 16, borderRadius: 18, background: '#FECACA', color: '#991B1B' }}>{historicalError}</div>}
+          <div style={{ padding: 16, borderRadius: 18, background: streamStatus === 'Connected' ? '#D1FAE5' : '#FEF3C7', color: '#92400E' }}>WebSocket stream: <strong>{streamStatus}</strong></div>
+          <div style={{ padding: 16, borderRadius: 18, background: orderStatus === 'Connected' ? '#D1FAE5' : '#FEF3C7', color: '#92400E' }}>Order updates: <strong>{orderStatus}</strong></div>
+        </div>
+      </div>
+
+      <div className="container" style={{ paddingBottom: 40 }}>
+        <div className="card" style={{ padding: 24, marginBottom: 18 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1.2, textTransform: 'uppercase' }}>Angel One Instruments</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, margin: '8px 0 16px' }}>
+            <h2 style={{ margin: 0 }}>Nifty, Sensex & Bank Nifty</h2>
+            <button type="button" onClick={fetchInstrumentQuotes} disabled={instrumentLoading}>{instrumentLoading ? 'Refreshing…' : 'Refresh'}</button>
+          </div>
+          <div className="card" style={{ padding: 24, marginBottom: 18 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1.2, textTransform: 'uppercase' }}>WebSocket Order Status</div>
+            <h2 style={{ margin: '8px 0 16px' }}>Recent order updates</h2>
+            {orderUpdates.length === 0 ? <div style={{ color: 'var(--text-secondary)' }}>Waiting for order updates…</div> : (
+              <div style={{ display: 'grid', gap: 10 }}>
+                {orderUpdates.map((update, index) => (
+                  <div key={`${update.orderData?.orderid || 'update'}-${index}`} style={{ border: '1px solid var(--border)', borderRadius: 12, padding: 12 }}>
+                    <strong>{update['order-status'] || update['status-code'] || 'Update'}</strong>
+                    <span style={{ marginLeft: 12 }}>{String(update.orderData?.tradingsymbol || '')} {String(update.orderData?.transactiontype || '')}</span>
+                    <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{String(update.orderData?.orderid || '')} {String(update.orderData?.text || update['error-message'] || '')}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="card" style={{ padding: 24, marginBottom: 18 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1.2, textTransform: 'uppercase' }}>WebSocket Streaming 2.0</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, margin: '8px 0 16px', flexWrap: 'wrap' }}>
+              <h2 style={{ margin: 0 }}>Live index stream</h2>
+              <span style={{ color: 'var(--text-secondary)' }}>Heartbeat every 30 seconds · Auto-subscribed to LTP</span>
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
+              <button type="button" onClick={() => sendStreamSubscription(1)} disabled={streamStatus !== 'Connected'}>Subscribe</button>
+              <button type="button" onClick={() => sendStreamSubscription(0)} disabled={streamStatus !== 'Connected'}>Unsubscribe</button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
+              {trackedInstruments.map((item) => {
+                const tick = streamTicks[item.token]
+                return <div key={item.name} style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 14, padding: 14 }}>
+                  <strong>{item.name}</strong>
+                  <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8 }}>{tick?.ltp != null ? tick.ltp.toFixed(2) : 'Waiting…'}</div>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{tick ? new Date(tick.timestamp).toLocaleTimeString() : 'Subscribe to receive ticks'}</div>
+                </div>
+              })}
+            </div>
+          </div>
+          <div className="card" style={{ padding: 24, marginBottom: 18 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1.2, textTransform: 'uppercase' }}>Angel One Historical API</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, margin: '8px 0 16px', flexWrap: 'wrap' }}>
+              <div>
+                <h2 style={{ margin: 0 }}>Live index candle charts</h2>
+                <div style={{ color: 'var(--text-secondary)', fontSize: 13, marginTop: 5 }}>Charts load from this browser&apos;s saved history; Angel One history is requested only when a timeframe has no local data.</div>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" onClick={() => fetchChartCandles('FIVE_MINUTE')} disabled={chartLoading || chartInterval === 'FIVE_MINUTE'}>5 minutes</button>
+                <button type="button" onClick={() => fetchChartCandles('FIFTEEN_MINUTE')} disabled={chartLoading || chartInterval === 'FIFTEEN_MINUTE'}>15 minutes</button>
+                <button type="button" onClick={() => fetchChartCandles('ONE_HOUR')} disabled={chartLoading || chartInterval === 'ONE_HOUR'}>1 hour</button>
+              </div>
+            </div>
+            {chartError && <div style={{ padding: 12, borderRadius: 12, background: '#FECACA', color: '#991B1B', marginBottom: 14 }}>{chartError}</div>}
+            {chartCacheError && <div style={{ padding: 12, borderRadius: 12, background: '#FEF3C7', color: '#92400E', marginBottom: 14 }}>{chartCacheError}</div>}
             {chartLoading && <div style={{ color: 'var(--text-secondary)', marginBottom: 14 }}>Loading {intervalLabel(chartInterval)} candles…</div>}
             <div style={{ display: 'grid', gap: 16 }}>
-              {trackedInstruments.filter((instrument) => instrument.token === selectedIndexToken).map((instrument) => (
-                <div key={instrument.name}>
+              {trackedInstruments.map((instrument) => (
+                <div key={instrument.name} style={{ border: '1px solid var(--border)', borderRadius: 14, padding: 14 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+                    <strong>{instrument.name}</strong>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
+                      {chartCandles[instrument.name]?.length || 0} candles · {streamTicks[instrument.token] ? 'Live' : 'Waiting for live tick'}
+                      {chartCandles[instrument.name]?.length ? ' · Saved locally' : ''}
+                    </span>
+                  </div>
+                  {streamTicks[instrument.token] && (() => {
+                    const tick = streamTicks[instrument.token]
+                    const currentTimestamp = liveTickTimestamp(tick, heartbeat)
+                    const formationTime = candleBucket(currentTimestamp, chartInterval)
+                    const nextFormationTime = formationTime + intervalMilliseconds(chartInterval)
+                    return (
+                      <div style={{ marginBottom: 10, padding: '8px 10px', borderRadius: 8, background: 'var(--bg)', color: 'var(--text-secondary)', fontSize: 12, lineHeight: 1.5 }}>
+                        <strong style={{ color: 'var(--text-primary)' }}>Candle formation heartbeat:</strong>{' '}
+                        {new Date(formationTime).toLocaleString()} · Live {tick.ltp?.toFixed(2) || '–'} · O {tick.open?.toFixed(2) || '–'} H {tick.high?.toFixed(2) || '–'} L {tick.low?.toFixed(2) || '–'} · Next candle in {formatCountdown(nextFormationTime - heartbeat)} · Updated {new Date(currentTimestamp).toLocaleTimeString()}
+                      </div>
+                    )
+                  })()}
                   <CandleChart
                     name={instrument.name}
-                    key={`${instrument.name}-${chartInterval}`}
-                    intervalLabel={intervalLabel(chartInterval)}
-                    timeframeControl={
-                      <select
-                        className="candle-timeframe-select"
-                        aria-label="Timeframe"
-                        value={chartInterval}
-                        disabled={chartLoading}
-                        onChange={(event) => fetchChartCandles(event.target.value as ChartInterval)}
-                      >
-                        <option value="FIVE_MINUTE">5 minutes</option>
-                        <option value="FIFTEEN_MINUTE">15 minutes</option>
-                        <option value="ONE_HOUR">1 hour</option>
-                      </select>
-                    }
-                    savedCandleCount={chartCandles[instrument.name]?.length || 0}
-                    marketHeartbeat={(() => {
-                      const tick = streamTicks[instrument.token]
-                      if (!tick) return 'Waiting for market heartbeat'
-                      const currentTimestamp = tickTimestamp(tick)
-                      const nextFormationTime = candleBucket(currentTimestamp, chartInterval) + intervalMilliseconds(chartInterval)
-                      const updated = new Date(tick.timestamp < 1_000_000_000_000 ? tick.timestamp * 1000 : tick.timestamp).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                      return `Live ${tick.ltp?.toFixed(2) ?? '–'} · Next candle ${formatCountdown(nextFormationTime - heartbeat)} · Updated ${updated} IST`
-                    })()}
+                    interval={chartInterval}
                     tick={streamTicks[instrument.token]}
-                    candles={applyLiveTick(
+                    candles={addInProgressCandle(
                       chartCandles[instrument.name] || [],
                       streamTicks[instrument.token],
                       chartInterval,
+                      heartbeat,
                     )}
                   />
-                </div>
-              ))}
-              {trackedInstruments.map(instrument => (
-                <div key={`monitor-${instrument.token}`} hidden={instrument.token !== selectedIndexToken}>
                   <PriceActionAgent
-                    key={`agent-${instrument.name}-${chartInterval}`}
-                    onError={showErrorToast}
-                    onPrediction={recordPrediction}
                     instrument={instrument.name}
                     candles={chartCandles[instrument.name] || []}
                     interval={chartInterval}
@@ -836,39 +1080,9 @@ export default function PredictionPage() {
             </div>
           </div>
           <div className="card" style={{ padding: 24, marginBottom: 18 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, margin: '8px 0 16px', flexWrap: 'wrap' }}>
-              <h2 style={{ margin: 0 }}>Live index stream</h2>
-              <div className="live-stream-status">
-                <span>Heartbeat every 30 seconds · Auto-subscribed to LTP</span>
-                <span aria-hidden="true">{' · '}</span>
-                {orderUpdates.length === 0 ? <span className="live-order-waiting" role="status">Orders: Waiting for order updates…</span> : <details className="live-order-updates">
-                  <summary>Orders: {orderUpdates[0]['order-status'] || orderUpdates[0]['status-code'] || 'Update'} · {String(orderUpdates[0].orderData?.tradingsymbol || '')} ({orderUpdates.length})</summary>
-                  <ul>{orderUpdates.map((update, index) => <li key={`${update.orderData?.orderid || 'update'}-${index}`}>
-                    <strong>{update['order-status'] || update['status-code'] || 'Update'}</strong> {String(update.orderData?.tradingsymbol || '')} {String(update.orderData?.transactiontype || '')}
-                    <small>{String(update.orderData?.orderid || '')} {String(update.orderData?.text || update['error-message'] || '')}</small>
-                  </li>)}</ul>
-                </details>}
-              </div>
-            </div>
-            <div className="live-stream-controls">
-              <button type="button" onClick={() => sendStreamSubscription(1)} disabled={streamStatus !== 'Connected'}>Subscribe</button>
-              <button type="button" onClick={() => sendStreamSubscription(0)} disabled={streamStatus !== 'Connected'}>Unsubscribe</button>
-              {(chartError && !isInvalidToken(chartError) || chartCacheError) && <div className="live-stream-errors">
-                {chartError && !isInvalidToken(chartError) && <div role="alert" className="live-stream-error">{chartError}</div>}
-                {chartCacheError && <div role="alert" className="live-stream-warning">{chartCacheError}</div>}
-              </div>}
-            </div>
-          </div>
-          <details className="card card-disclosure" style={{ marginBottom: 18 }}>
-            <summary>
-              <div>
-                <div className="card-disclosure-kicker">Historical API</div>
-                <h2>Historical {historicalMode === 'candles' ? 'Candles' : 'Open Interest'}</h2>
-              </div>
-              <svg className="card-disclosure-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
-            </summary>
-            <div className="card-disclosure-content">
-            <form onSubmit={fetchHistoricalData} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 150px), 1fr))', gap: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1.2, textTransform: 'uppercase' }}>Historical API</div>
+            <h2 style={{ margin: '8px 0 16px' }}>Historical {historicalMode === 'candles' ? 'Candles' : 'Open Interest'}</h2>
+            <form onSubmit={fetchHistoricalData} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
               <label>Data<select value={historicalMode} onChange={(event) => setHistoricalMode(event.target.value as 'candles' | 'oi')}><option value="candles">Candle data</option><option value="oi">OI data</option></select></label>
               <label>Exchange<select value={historicalForm.exchange} onChange={(event) => setHistoricalForm({ ...historicalForm, exchange: event.target.value })}><option>NSE</option><option>BSE</option><option>NFO</option><option>BFO</option><option>MCX</option></select></label>
               <label>Symbol token<input required value={historicalForm.symboltoken} onChange={(event) => setHistoricalForm({ ...historicalForm, symboltoken: event.target.value })} /></label>
@@ -879,23 +1093,27 @@ export default function PredictionPage() {
             </form>
             {historicalData.length > 0 && <div style={{ overflowX: 'auto', marginTop: 18 }}><table><thead><tr>{historicalMode === 'candles' ? <><th>Time</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Volume</th></> : <><th>Time</th><th>Open interest</th></>}</tr></thead><tbody>{historicalData.map((row, index) => historicalMode === 'candles' && Array.isArray(row) ? <tr key={index}>{row.map((value, cellIndex) => <td key={cellIndex}>{String(value)}</td>)}</tr> : <tr key={index}><td>{String((row as { time?: string }).time || '')}</td><td>{String((row as { oi?: number }).oi ?? '')}</td></tr>)}</tbody></table></div>}
             {!historicalLoading && historicalData.length === 0 && <div style={{ marginTop: 16, color: 'var(--text-secondary)' }}>No historical records loaded.</div>}
-            </div>
-          </details>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 12 }}>
+            {trackedInstruments.map((item) => {
+              const quote = instrumentQuotes[item.name]
+              return <div key={item.name} style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 14, padding: 14 }}>
+                <strong>{item.name}</strong>
+                <div style={{ fontSize: 22, fontWeight: 700, marginTop: 8 }}>{quote?.ltp || 'N/A'}</div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Open {quote?.open || '–'} · High {quote?.high || '–'} · Low {quote?.low || '–'}</div>
+              </div>
+            })}
+          </div>
+        </div>
         {profileLoading && (
           <div className="card" style={{ padding: 20, marginBottom: 18 }}>Loading Angel One profile…</div>
         )}
         {angelProfile && (
-          <details className="card card-disclosure" style={{ marginBottom: 18 }}>
-            <summary>
-              <div>
-                <div className="card-disclosure-kicker">Angel One Profile</div>
-                <h2>{angelProfile.name || 'Investor'}</h2>
-              </div>
-              <svg className="card-disclosure-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
-            </summary>
-            <div className="card-disclosure-content">
+          <div className="card" style={{ padding: 24, marginBottom: 18 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
               <div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1.2, textTransform: 'uppercase' }}>Angel One Profile</div>
+                <h2 style={{ margin: '8px 0 4px' }}>{angelProfile.name || 'Investor'}</h2>
                 <div style={{ color: 'var(--text-secondary)' }}>Client code: {angelProfile.clientcode || 'Not available'}</div>
               </div>
               <div style={{ color: 'var(--text-secondary)', textAlign: 'right' }}>
@@ -909,19 +1127,13 @@ export default function PredictionPage() {
               <div><strong>Last login:</strong> {angelProfile.lastlogintime || 'Not available'}</div>
               <div><strong>Broker:</strong> {angelProfile.brokerid || 'Not available'}</div>
             </div>
-            </div>
-          </details>
+          </div>
         )}
         {angelRms && (
-          <details className="card card-disclosure" style={{ marginBottom: 18 }}>
-            <summary>
-              <div>
-                <div className="card-disclosure-kicker">Risk Management & Funds</div>
-                <h2>RMS Limits</h2>
-              </div>
-              <svg className="card-disclosure-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
-            </summary>
-            <div className="card-disclosure-content" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 12 }}>
+          <div className="card" style={{ padding: 24, marginBottom: 18 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1.2, textTransform: 'uppercase' }}>Risk Management & Funds</div>
+            <h2 style={{ margin: '8px 0 16px' }}>RMS Limits</h2>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
               {[
                 ['Net', 'net'],
                 ['Available cash', 'availablecash'],
@@ -942,18 +1154,12 @@ export default function PredictionPage() {
                 </div>
               ))}
             </div>
-          </details>
+          </div>
         )}
-        <details className="card card-disclosure" style={{ marginBottom: 18 }}>
-          <summary>
-            <div>
-              <div className="card-disclosure-kicker">Good Till Triggered</div>
-              <h2>GTT Rule Management</h2>
-            </div>
-            <svg className="card-disclosure-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
-          </summary>
-          <div className="card-disclosure-content">
-          <form onSubmit={submitGtt} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 150px), 1fr))', gap: 10, marginBottom: 20 }}>
+        <div className="card" style={{ padding: 24, marginBottom: 18 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: 1.2, textTransform: 'uppercase' }}>Good Till Triggered</div>
+          <h2 style={{ margin: '8px 0 16px' }}>GTT Rule Management</h2>
+          <form onSubmit={submitGtt} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 20 }}>
             {([['tradingsymbol', 'Trading symbol'], ['symboltoken', 'Symbol token'], ['price', 'Price'], ['qty', 'Quantity'], ['triggerprice', 'Trigger price'], ['disclosedqty', 'Disclosed qty']] as const).map(([key, label]) => (
               <label key={key} style={{ fontSize: 12 }}>{label}<input required={key !== 'disclosedqty'} value={gttForm[key]} onChange={(event) => setGttForm({ ...gttForm, [key]: event.target.value })} /></label>
             ))}
@@ -972,8 +1178,6 @@ export default function PredictionPage() {
             ))}
             {!gttRules.length && <div style={{ color: 'var(--text-secondary)' }}>No GTT rules found.</div>}
           </div>
-          </div>
-        </details>
         </div>
       </div>
     </div>

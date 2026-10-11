@@ -113,7 +113,7 @@ function ReactionBar({ reactions, onReaction }: ReactionBarProps) {
   }
 
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '10px 0', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)', margin: '12px 0' }}>
+    <div style={{ display: 'flex', gap: 8, padding: '10px 0', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)', margin: '12px 0' }}>
       {REACTIONS.map((r) => {
         const count = reactions[r.key] || 0
         const isActive = clicked === r.key
@@ -229,7 +229,7 @@ function CommentSection({ comments, onComment, postId }: CommentSectionProps) {
               {c.avatar}
             </div>
             <div style={{ background: 'var(--bg)', borderRadius: 10, padding: '8px 12px', flex: 1 }}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, justifyContent: 'space-between', marginBottom: 3 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
                 <span style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-primary)' }}>{c.author}</span>
                 <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{c.time}</span>
               </div>

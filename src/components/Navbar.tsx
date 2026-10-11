@@ -49,32 +49,32 @@ export default function Navbar() {
   ]
 
   return (
-    <nav aria-label="Main navigation" style={{
+    <nav style={{
       background: '#fff',
       borderBottom: '1px solid #E5E7EB',
-      position: location.pathname === '/prediction' ? 'relative' : 'sticky',
+      position: 'sticky',
       top: 0,
       zIndex: 100,
       boxShadow: '0 1px 8px rgba(108,99,255,0.07)'
     }}>
-      <div className={`container navbar-inner${location.pathname === '/prediction' ? ' prediction-page-container' : ''}`}>
-        <Link to="/" className="navbar-brand" aria-label="My Profile Portal" title="My Profile Portal">
+      <div className="container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 60 }}>
+        <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{
             width: 36, height: 36, borderRadius: '50%',
             background: 'linear-gradient(135deg, #6C63FF, #FF6584)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             color: '#fff', fontWeight: 700, fontSize: 16
           }}>P</div>
+          <span style={{ fontWeight: 700, fontSize: 17, color: '#1A1A2E' }}>My Profile Portal</span>
         </Link>
 
-        <div className="navbar-links">
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {links.map((l) => (
             <Link
               key={l.to}
               to={l.to}
-              className="navbar-link"
-              aria-current={location.pathname === l.to ? 'page' : undefined}
               style={{
+                padding: '7px 18px',
                 borderRadius: 999,
                 fontWeight: 500,
                 fontSize: 14,
@@ -88,19 +88,16 @@ export default function Navbar() {
             </Link>
           ))}
           {isLoggedIn && (
-            <button type="button" className="navbar-logout" aria-label={loggingOut ? 'Logging out…' : 'Logout'} title={loggingOut ? 'Logging out…' : 'Logout'} aria-busy={loggingOut} onClick={handleLogout} disabled={loggingOut} style={{
-              borderRadius: 999, fontWeight: 500, fontSize: 14,
+            <button type="button" onClick={handleLogout} disabled={loggingOut} style={{
+              padding: '7px 18px', borderRadius: 999, fontWeight: 500, fontSize: 14,
               background: 'transparent', color: '#DC2626', border: '1px solid #FECACA',
             }}>
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M9 5H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4" />
-                <path d="M14 8l4 4-4 4M9 12h12" />
-              </svg>
+              {loggingOut ? 'Logging out…' : 'Logout'}
             </button>
           )}
         </div>
       </div>
-      {logoutError && <div role="alert" style={{ color: '#991B1B', textAlign: 'center', paddingBottom: 8 }}>{logoutError}</div>}
+      {logoutError && <div style={{ color: '#991B1B', textAlign: 'center', paddingBottom: 8 }}>{logoutError}</div>}
     </nav>
   )
 }
