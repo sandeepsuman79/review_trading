@@ -5,7 +5,8 @@ import type { AngelOneStreamTick } from '../api/angelOne'
 import type { AngelOneCandle, AngelOneGttRule, AngelOneProfile, AngelOneRms } from '../api/angelOne'
 import { getAiPriceAction, type AiPriceAction } from '../api/ai'
 import { analyzePriceAction, type PriceActionAnalysis } from '../analysis/priceAction'
-import { applyLiveTick, completedCandles, tickTimestamp } from '../analysis/candleData'
+import { candleBucketTime, completedCandles, historicalCandleRequestStart, isFreshTick, normalizeCandles, tickTimestamp } from '../analysis/candleData'
+import { LiveCandleBook } from '../analysis/liveCandleBook'
 import MarketContextPanel from '../components/MarketContextPanel'
 import { useMarketContext } from '../hooks/useMarketContext'
 import ErrorToast from '../components/ErrorToast'
@@ -27,7 +28,7 @@ function ConnectionStatus({ label, status }: { label: string; status: string }) 
   return (
     <span className="prediction-connection" role="status" aria-label={`${label}: ${connection}`} title={`${label}: ${status}`}>
       <span className={`connection-dot ${connected ? 'is-connected' : 'is-disconnected'}`} aria-hidden="true" />
-      <span className="prediction-connection-text"><span className="prediction-connection-label">{label === 'WebSocket stream' ? 'Stream' : 'Orders'}</span><strong>{connection}</strong></span>
+      <span className="prediction-connection-label">{label === 'WebSocket stream' ? 'Stream' : 'Orders'}</span>
     </span>
   )
 }
@@ -50,8 +51,9 @@ function formatProfileList(value: AngelOneProfile['exchanges']) {
 }
 
 function formatHistoricalDate(date: Date) {
+  const ist = new Date(date.getTime() + 330 * 60_000)
   const pad = (value: number) => String(value).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  return `${ist.getUTCFullYear()}-${pad(ist.getUTCMonth() + 1)}-${pad(ist.getUTCDate())} ${pad(ist.getUTCHours())}:${pad(ist.getUTCMinutes())}`
 }
 
 function wait(milliseconds: number) {
@@ -83,7 +85,8 @@ function readChartCache(token: string, interval: ChartInterval): AngelOneCandle[
     && item.slice(1, 6).every((value) => typeof value === 'number' && Number.isFinite(value)),
   )
   if (candles.length !== parsed.length) throw new Error(`Saved ${intervalLabel(interval)} chart data is incomplete.`)
-  return candles.length ? candles : null
+  const normalized = normalizeCandles(candles)
+  return normalized.length ? normalized : null
 }
 
 function getInitialChartCandles(interval: ChartInterval): Record<string, AngelOneCandle[]> {
@@ -104,31 +107,9 @@ function intervalMilliseconds(interval: ChartInterval) {
   return interval === 'FIVE_MINUTE' ? 5 * 60 * 1000 : interval === 'FIFTEEN_MINUTE' ? 15 * 60 * 1000 : 60 * 60 * 1000
 }
 
-function mergeCandles(existing: AngelOneCandle[], incoming: AngelOneCandle[]): AngelOneCandle[] {
-  const candlesByTime = new Map<number, AngelOneCandle>()
-  for (const candle of [...existing, ...incoming]) {
-    const timestamp = new Date(candle[0]).getTime()
-    if (Number.isFinite(timestamp)) candlesByTime.set(timestamp, candle)
-  }
-  return [...candlesByTime.entries()]
-    .sort(([timeA], [timeB]) => timeA - timeB)
-    .map(([, candle]) => candle)
-}
-
-function chartHistoryWindowDays(interval: ChartInterval) {
-  return interval === 'FIVE_MINUTE' ? 180 : interval === 'FIFTEEN_MINUTE' ? 365 : 3650
-}
-
 function formatCountdown(milliseconds: number) {
   const seconds = Math.max(0, Math.ceil(milliseconds / 1000))
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
-}
-
-function candleBucket(timestamp: number, interval: ChartInterval) {
-  const normalizedTimestamp = timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp
-  const intervalMs = intervalMilliseconds(interval)
-  const alignment = interval === 'ONE_HOUR' ? 45 * 60 * 1000 : 0
-  return Math.floor((normalizedTimestamp - alignment) / intervalMs) * intervalMs + alignment
 }
 
 function PriceActionAgent({ candles, interval, now, instrument, onError, onPrediction }: { candles: AngelOneCandle[]; interval: ChartInterval; now: number; instrument: string; onError: (message: string) => void; onPrediction: (plan: PredictionPlan) => void }) {
@@ -343,6 +324,10 @@ export default function PredictionPage() {
   const [streamStatus, setStreamStatus] = useState('Disconnected')
   const [streamTicks, setStreamTicks] = useState<Record<string, AngelOneStreamTick>>({})
   const [streamSocket, setStreamSocket] = useState<WebSocket | null>(null)
+  const [streamSession, setStreamSession] = useState(0)
+  const [historySyncSession, setHistorySyncSession] = useState(0)
+  const streamRetryRef = useRef(0)
+  const streamSubscribedRef = useRef(true)
   const [orderStatus, setOrderStatus] = useState('Disconnected')
   const [orderUpdates, setOrderUpdates] = useState<AngelOneOrderUpdate[]>([])
   const [errorToast, setErrorToast] = useState<{ message: string; id: number } | null>(null)
@@ -356,18 +341,44 @@ export default function PredictionPage() {
   const { records: predictionRecords, storageError: historyStorageError, recordPrediction, sync: syncPredictions, syncTick, exitEarly, acknowledgeEarlyExit } = usePredictionHistory(showErrorToast, showPredictionEvents)
   const pendingEarlyExit = predictionRecords.find(record => record.status === 'EARLY_EXIT' && record.earlyExitAcknowledgedAt === undefined)
   const [heartbeat, setHeartbeat] = useState(Date.now())
-  const chartInitialised = useRef(false)
   const chartIntervalRef = useRef(chartInterval)
   chartIntervalRef.current = chartInterval
+  const chartRequestRef = useRef(0)
+  const [candleBook] = useState(() => new LiveCandleBook((token, interval) => {
+    try { return readChartCache(token, interval) || [] }
+    catch { return [] }
+  }))
   const consumeTickRef = useRef<(tick: AngelOneStreamTick) => void>(() => {})
   consumeTickRef.current = tick => {
     const instrument = trackedInstruments.find(item => item.token === tick.token)
     if (!instrument || !Number.isFinite(tickTimestamp(tick))) return
     syncTick(instrument.name, tick, record => {
-      try { return record.interval === chartInterval ? chartCandles[instrument.name] || [] : readChartCache(instrument.token, record.interval) || [] }
-      catch { return [] }
+      return candleBook.get(instrument.token, record.interval)
     }, Date.now())
   }
+  const saveChartCandles = useCallback(() => {
+    try {
+      candleBook.flush((token, interval, candles) => localStorage.setItem(chartCacheKey(token, interval), JSON.stringify(candles)))
+      setChartCacheError('')
+    } catch (error) {
+      setChartCacheError(error instanceof Error ? `Unable to save chart locally: ${error.message}` : 'Unable to save chart locally.')
+    }
+  }, [candleBook])
+  const loadSessionRef = useRef<(isActive: () => boolean) => Promise<void>>(async () => {})
+  loadSessionRef.current = async isActive => {
+    await fetchAngelProfile()
+    if (!isActive()) return
+    void fetchInstrumentQuotes()
+    void synchronizeChartHistory()
+  }
+
+  // Login/page refresh and the refresh button synchronize all saved timeframes once.
+  // Chart selection and socket reconnects only read/update the local candle book.
+  useEffect(() => {
+    let active = true
+    void loadSessionRef.current(() => active)
+    return () => { active = false; chartRequestRef.current += 1 }
+  }, [historySyncSession])
 
   useEffect(() => {
     const cache = new Map<string, AngelOneCandle[]>()
@@ -393,35 +404,52 @@ export default function PredictionPage() {
 
 
   useEffect(() => {
-    fetchAngelProfile()
-    fetchInstrumentQuotes()
-    if (!chartInitialised.current) {
-      chartInitialised.current = true
-      fetchChartCandles('FIVE_MINUTE')
-    }
+    let active = true
+    let reconnectTimer: number | undefined
+    let stableTimer: number | undefined
     const socket = connectAngelOneStream((tick) => {
+      if (!active) return
+      const instrument = trackedInstruments.find(item => item.token === tick.token)
+      if (!instrument || !candleBook.accept(tick)) return
       // Record every exchange quote before React batches chart updates, preserving stop/target ordering.
       consumeTickRef.current(tick)
-      setStreamTicks((current) => {
-        const previous = current[tick.token]
-        if (!Number.isFinite(tickTimestamp(tick)) || previous && tickTimestamp(tick) < tickTimestamp(previous)) return current
-        return { ...current, [tick.token]: tick }
-      })
-    }, setStreamStatus)
-    if (socket) setStreamSocket(socket)
-    const orderSocket = connectAngelOneOrderStream((update) => setOrderUpdates((current) => [update, ...current].slice(0, 20)), setOrderStatus)
-    const synchronizeAfterLogin = () => {
-      fetchAngelProfile()
-      fetchInstrumentQuotes()
-      void fetchChartCandles(chartIntervalRef.current)
+      const candles = candleBook.get(instrument.token, chartIntervalRef.current)
+      setChartCandles(current => current[instrument.name] === candles ? current : { ...current, [instrument.name]: candles })
+      setStreamTicks(current => ({ ...current, [tick.token]: tick }))
+    }, status => {
+      if (!active) return
+      setStreamStatus(status)
+      if (status === 'Connected') {
+        window.clearTimeout(stableTimer)
+        stableTimer = window.setTimeout(() => { streamRetryRef.current = 0 }, 30_000)
+      } else if (status === 'Disconnected') {
+        window.clearTimeout(stableTimer)
+        if (streamSubscribedRef.current && streamRetryRef.current < 5 && reconnectTimer === undefined) {
+          const delay = Math.min(30_000, 1000 * 2 ** ++streamRetryRef.current)
+          reconnectTimer = window.setTimeout(() => setStreamSession(current => current + 1), delay)
+        }
+      }
+    })
+    setStreamSocket(socket)
+    const orderSocket = connectAngelOneOrderStream((update) => { if (active) setOrderUpdates((current) => [update, ...current].slice(0, 20)) }, status => { if (active) setOrderStatus(status) })
+    const synchronizeAfterLogin = (event: Event) => {
+      streamRetryRef.current = 0
+      streamSubscribedRef.current = true
+      setStreamSession(current => current + 1)
+      if (!(event instanceof CustomEvent && event.detail?.reason === 'token-refresh')) {
+        setHistorySyncSession(current => current + 1)
+      }
     }
     window.addEventListener('angelone-auth-changed', synchronizeAfterLogin)
     return () => {
+      active = false
+      window.clearTimeout(reconnectTimer)
+      window.clearTimeout(stableTimer)
       window.removeEventListener('angelone-auth-changed', synchronizeAfterLogin)
       socket?.close()
       orderSocket?.close()
     }
-  }, [])
+  }, [streamSession, candleBook])
 
   useEffect(() => {
     const timer = window.setInterval(() => setHeartbeat(Date.now()), 1000)
@@ -436,24 +464,16 @@ export default function PredictionPage() {
     return () => window.removeEventListener('wheel', preventHorizontalHistorySwipe, true)
   }, [])
 
-  async function fetchChartCandles(interval = chartInterval) {
+  function selectChartInterval(interval: ChartInterval) {
+    chartIntervalRef.current = interval
+    setChartInterval(interval)
+    setChartCandles(Object.fromEntries(trackedInstruments.map(instrument => [instrument.name, candleBook.get(instrument.token, interval)])))
+  }
+
+  async function synchronizeChartHistory() {
+    const request = ++chartRequestRef.current
     setChartLoading(true)
     setChartError('')
-    const cacheForInterval: Record<string, AngelOneCandle[]> = {}
-    const cachedCandles = new Map<string, AngelOneCandle[] | null>()
-    try {
-      for (const instrument of trackedInstruments) {
-        const cached = readChartCache(instrument.token, interval)
-        cachedCandles.set(instrument.name, cached)
-        cacheForInterval[instrument.name] = cached || []
-      }
-    } catch (error) {
-      setChartLoading(false)
-      setChartError(error instanceof Error ? error.message : 'Unable to read saved chart data.')
-      return
-    }
-    setChartCandles(cacheForInterval)
-    setChartInterval(interval)
     try {
       const token = localStorage.getItem('angelone_jwt_token')
       if (!token) {
@@ -462,18 +482,15 @@ export default function PredictionPage() {
       }
 
       const to = new Date()
-      const todaySessionStart = new Date(to)
-      todaySessionStart.setHours(9, 0, 0, 0)
       const errors: string[] = []
-      for (const [index, instrument] of trackedInstruments.entries()) {
+      const selectedInterval = chartIntervalRef.current
+      const intervals = [selectedInterval, ...chartIntervals.filter(interval => interval !== selectedInterval)]
+      const requests = intervals.flatMap(interval => trackedInstruments.map(instrument => ({ interval, instrument })))
+      for (const [index, { interval, instrument }] of requests.entries()) {
         if (index > 0) await wait(2500)
-        const cached = cachedCandles.get(instrument.name) || []
-        const latestCachedTime = cached.length
-          ? Math.max(...cached.map((candle) => new Date(candle[0]).getTime()).filter(Number.isFinite))
-          : undefined
-        const from = latestCachedTime === undefined
-          ? new Date(to.getTime() - chartHistoryWindowDays(interval) * 24 * 60 * 60 * 1000)
-          : new Date(Math.min(todaySessionStart.getTime(), latestCachedTime - intervalMilliseconds(interval)))
+        if (request !== chartRequestRef.current) return
+        const cached = candleBook.get(instrument.token, interval)
+        const from = new Date(historicalCandleRequestStart(cached, interval, to.getTime()))
         let loaded = false
         for (let attempt = 0; attempt < 3 && !loaded; attempt += 1) {
           try {
@@ -484,95 +501,44 @@ export default function PredictionPage() {
               fromdate: formatHistoricalDate(from),
               todate: formatHistoricalDate(to),
             })
-            const candles = Array.isArray(result.data) ? result.data : []
+            if (request !== chartRequestRef.current) return
+            const candles = Array.isArray(result.data) ? normalizeCandles(result.data) : []
             if (!candles.length) {
-              errors.push(`${instrument.name}: no candles returned for the requested sync range.`)
+              errors.push(`${instrument.name} (${intervalLabel(interval)}): no candles returned for the requested sync range.`)
             } else {
-              const merged = mergeCandles(cached, candles)
-              setChartCandles((current) => ({ ...current, [instrument.name]: merged }))
-              try {
-                localStorage.setItem(chartCacheKey(instrument.token, interval), JSON.stringify(merged))
-              } catch (error) {
-                setChartCacheError(error instanceof Error ? `Unable to save synchronized ${instrument.name} candles locally: ${error.message}` : `Unable to save synchronized ${instrument.name} candles locally.`)
-              }
+              // The broker's todate has minute precision; preserve quotes newer than that cutoff.
+              const merged = candleBook.mergeHistory(instrument.token, interval, candles, Math.floor(to.getTime() / 60_000) * 60_000)
+              saveChartCandles()
+              if (chartIntervalRef.current === interval) setChartCandles((current) => ({ ...current, [instrument.name]: merged }))
             }
             loaded = true
           } catch (error) {
+            if (request !== chartRequestRef.current) return
             if (isHistoricalRateLimit(error) && attempt < 2) {
               await wait(3000 * (attempt + 1))
               continue
             }
-            errors.push(`${instrument.name}: ${error instanceof Error ? error.message : 'request failed'}`)
+            errors.push(`${instrument.name} (${intervalLabel(interval)}): ${error instanceof Error ? error.message : 'request failed'}`)
             break
           }
         }
       }
       if (errors.length) setChartError(`Some historical requests were rejected. ${errors.join(' ')}`)
     } catch (error) {
-      setChartError(error instanceof Error ? error.message : 'Unable to load saved chart data.')
+      if (request === chartRequestRef.current) setChartError(error instanceof Error ? error.message : 'Unable to load saved chart data.')
     } finally {
-      setChartLoading(false)
+      if (request === chartRequestRef.current) setChartLoading(false)
     }
   }
 
   useEffect(() => {
-    for (const instrument of trackedInstruments) {
-      const candles = chartCandles[instrument.name]
-      if (!candles?.length) continue
-      try {
-        localStorage.setItem(chartCacheKey(instrument.token, chartInterval), JSON.stringify(candles))
-        setChartCacheError('')
-      } catch (error) {
-        setChartCacheError(error instanceof Error ? `Unable to save ${instrument.name} chart locally: ${error.message}` : `Unable to save ${instrument.name} chart locally.`)
-      }
-    }
-  }, [chartCandles, chartInterval])
-
-  useEffect(() => {
-    const tickByToken = streamTicks
-    const activeIntervalCandles: Record<string, AngelOneCandle[]> = {}
-    for (const instrument of trackedInstruments) {
-      const tick = tickByToken[instrument.token]
-      if (!tick?.ltp) continue
-      for (const interval of chartIntervals) {
-        try {
-          const savedCandles = readChartCache(instrument.token, interval)
-          if (!savedCandles?.length) continue
-          const updatedCandles = applyLiveTick(savedCandles, tick, interval)
-          const oldLast = savedCandles[savedCandles.length - 1]
-          const newLast = updatedCandles[updatedCandles.length - 1]
-          const changed = oldLast?.[0] !== newLast?.[0]
-            || oldLast?.[2] !== newLast?.[2]
-            || oldLast?.[3] !== newLast?.[3]
-            || oldLast?.[4] !== newLast?.[4]
-          if (!changed) continue
-          localStorage.setItem(chartCacheKey(instrument.token, interval), JSON.stringify(updatedCandles))
-          if (interval === chartInterval) activeIntervalCandles[instrument.name] = updatedCandles
-          setChartCacheError('')
-        } catch (error) {
-          setChartCacheError(error instanceof Error ? `Unable to update ${instrument.name} chart locally: ${error.message}` : `Unable to update ${instrument.name} chart locally.`)
-        }
-      }
-    }
-    setChartCandles((current) => {
-      let changed = false
-      const next = { ...current }
-      for (const instrument of trackedInstruments) {
-        const updated = activeIntervalCandles[instrument.name]
-        if (!updated || !current[instrument.name]?.length) continue
-        const previous = current[instrument.name][current[instrument.name].length - 1]
-        const latest = updated[updated.length - 1]
-        if (previous?.[0] !== latest?.[0] || previous?.[4] !== latest?.[4] || previous?.[2] !== latest?.[2] || previous?.[3] !== latest?.[3]) {
-          next[instrument.name] = updated
-          changed = true
-        }
-      }
-      return changed ? next : current
-    })
-  }, [streamTicks, chartInterval])
+    saveChartCandles()
+  }, [saveChartCandles, chartCandles, streamTicks])
 
   async function fetchAngelProfile() {
     let token = localStorage.getItem('angelone_jwt_token')
+    const previousToken = token
+    const previousFeedToken = localStorage.getItem('angelone_feed_token')
     const refreshToken = localStorage.getItem('angelone_refresh_token')
     if (!token && !refreshToken) return
 
@@ -603,6 +569,9 @@ export default function PredictionPage() {
         result = await getAngelOneProfile(token)
       }
       if (!result.data) throw new Error(result.message || 'Profile data was not returned.')
+      if (token !== previousToken || localStorage.getItem('angelone_feed_token') !== previousFeedToken) {
+        window.dispatchEvent(new CustomEvent('angelone-auth-changed', { detail: { reason: 'token-refresh' } }))
+      }
       setAngelProfile(result.data)
       await loadGttRules(token)
       try {
@@ -677,6 +646,7 @@ export default function PredictionPage() {
         ],
       },
     }))
+    streamSubscribedRef.current = action === 1
   }
 
   async function loadGttRules(token = localStorage.getItem('angelone_jwt_token')) {
@@ -748,6 +718,13 @@ export default function PredictionPage() {
                 <button type="button" id="live-tab" role="tab" aria-selected={activeTab === 'live'} aria-controls="live-panel" onClick={() => setActiveTab('live')}>Live prediction</button>
                 <button type="button" id="history-tab" role="tab" aria-selected={activeTab === 'history'} aria-controls="history-panel" onClick={() => setActiveTab('history')}>History <span>{predictionRecords.length}</span></button>
               </div>
+              <label className="prediction-timeframe-selector">
+                <select aria-label="Timeframe" value={chartInterval} onChange={(event) => selectChartInterval(event.target.value as ChartInterval)} aria-controls="live-index-candle-chart">
+                  <option value="FIVE_MINUTE">5 minutes</option>
+                  <option value="FIFTEEN_MINUTE">15 minutes</option>
+                  <option value="ONE_HOUR">1 hour</option>
+                </select>
+              </label>
             </div>
             <div className="prediction-heading-actions">
               <label className="prediction-index-selector">
@@ -755,8 +732,8 @@ export default function PredictionPage() {
                   {trackedInstruments.map((instrument) => <option key={instrument.token} value={instrument.token}>{instrument.name}</option>)}
                 </select>
               </label>
-              <button type="button" className="prediction-refresh" onClick={fetchInstrumentQuotes} disabled={instrumentLoading} aria-label="Refresh Live Data" title="Refresh Live Data" aria-busy={instrumentLoading}>
-                <svg className={instrumentLoading ? 'refresh-spinning' : undefined} width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <button type="button" className="prediction-refresh" onClick={() => setHistorySyncSession(current => current + 1)} disabled={instrumentLoading || chartLoading || profileLoading} aria-label="Refresh Live Data" title="Refresh Live Data" aria-busy={instrumentLoading || chartLoading || profileLoading}>
+                <svg className={instrumentLoading || chartLoading || profileLoading ? 'refresh-spinning' : undefined} width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                   <path d="M20 7v5h-5M4 17v-5h5" />
                   <path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 17.9 17" />
                 </svg>
@@ -781,42 +758,28 @@ export default function PredictionPage() {
         </div>
         <div id="live-panel" role="tabpanel" aria-labelledby="live-tab" hidden={activeTab !== 'live'}>
           <div ref={chartSectionRef} id="live-index-candle-chart" className="live-index-chart-section" style={{ marginBottom: 18 }}>
-            {chartLoading && <div style={{ color: 'var(--text-secondary)', marginBottom: 14 }}>Loading {intervalLabel(chartInterval)} candles…</div>}
-            <div style={{ display: 'grid', gap: 16 }}>
+            {chartLoading && <div style={{ color: 'var(--text-secondary)', marginBottom: 14 }}>Syncing saved candles…</div>}
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 16 }}>
               {trackedInstruments.filter((instrument) => instrument.token === selectedIndexToken).map((instrument) => (
                 <div key={instrument.name}>
                   <CandleChart
                     name={instrument.name}
                     key={`${instrument.name}-${chartInterval}`}
                     intervalLabel={intervalLabel(chartInterval)}
-                    timeframeControl={
-                      <select
-                        className="candle-timeframe-select"
-                        aria-label="Timeframe"
-                        value={chartInterval}
-                        disabled={chartLoading}
-                        onChange={(event) => fetchChartCandles(event.target.value as ChartInterval)}
-                      >
-                        <option value="FIVE_MINUTE">5 minutes</option>
-                        <option value="FIFTEEN_MINUTE">15 minutes</option>
-                        <option value="ONE_HOUR">1 hour</option>
-                      </select>
-                    }
                     savedCandleCount={chartCandles[instrument.name]?.length || 0}
+                    spotIndex
+                    isLive={streamStatus === 'Connected' && isFreshTick(streamTicks[instrument.token], heartbeat)}
                     marketHeartbeat={(() => {
                       const tick = streamTicks[instrument.token]
                       if (!tick) return 'Waiting for market heartbeat'
                       const currentTimestamp = tickTimestamp(tick)
-                      const nextFormationTime = candleBucket(currentTimestamp, chartInterval) + intervalMilliseconds(chartInterval)
+                      const nextFormationTime = candleBucketTime(currentTimestamp, chartInterval) + intervalMilliseconds(chartInterval)
                       const updated = new Date(tick.timestamp < 1_000_000_000_000 ? tick.timestamp * 1000 : tick.timestamp).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                      return `Live ${tick.ltp?.toFixed(2) ?? '–'} · Next candle ${formatCountdown(nextFormationTime - heartbeat)} · Updated ${updated} IST`
+                      const live = streamStatus === 'Connected' && isFreshTick(tick, heartbeat)
+                      return `${live ? 'Live' : 'Last quote'} ${tick.ltp?.toFixed(2) ?? '–'} · ${live ? `Next candle ${formatCountdown(nextFormationTime - heartbeat)}` : 'Waiting for live tick'} · Updated ${updated} IST`
                     })()}
                     tick={streamTicks[instrument.token]}
-                    candles={applyLiveTick(
-                      chartCandles[instrument.name] || [],
-                      streamTicks[instrument.token],
-                      chartInterval,
-                    )}
+                    candles={chartCandles[instrument.name] || []}
                   />
                 </div>
               ))}

@@ -1,3 +1,5 @@
+import { decodeStreamPacket } from './streamPacket'
+
 export type AngelOneLoginInput = {
   clientcode: string
   password: string
@@ -106,6 +108,7 @@ export type AngelOneStreamTick = {
   mode: number
   exchangeType: number
   token: string
+  sequence?: number
   timestamp: number
   ltp?: number
   open?: number
@@ -275,8 +278,14 @@ export function connectAngelOneStream(
   const socket = new WebSocket(url)
   socket.binaryType = 'arraybuffer'
   let heartbeat: number | undefined
+  let status = ''
+  const reportStatus = (next: string) => {
+    if (next === status) return
+    status = next
+    onStatus(next)
+  }
   socket.onopen = () => {
-    onStatus('Connected')
+    reportStatus('Connected')
     socket.send(JSON.stringify({
       correlationID: 'indices01',
       action: 1,
@@ -297,40 +306,27 @@ export function connectAngelOneStream(
       if (event.data !== 'pong') {
         try {
           const error = JSON.parse(event.data) as { errorCode?: string; errorMessage?: string }
-          onStatus(error.errorMessage ? `${error.errorCode || 'Stream error'}: ${error.errorMessage}` : event.data)
+          reportStatus(error.errorMessage ? `${error.errorCode || 'Stream error'}: ${error.errorMessage}` : event.data)
         } catch {
-          onStatus(event.data)
+          reportStatus(event.data)
         }
       }
       return
     }
-    const buffer = event.data as ArrayBuffer
-    const bytes = new DataView(buffer)
-    if (bytes.byteLength < 47) {
-      onStatus('Received an invalid Smart Stream packet.')
+    let tick: AngelOneStreamTick
+    try {
+      tick = decodeStreamPacket(event.data as ArrayBuffer)
+    } catch (error) {
+      reportStatus(error instanceof Error ? error.message : 'Received an invalid Smart Stream packet.')
       return
     }
-    const tokenBytes = new Uint8Array(buffer, 2, 25)
-    const token = new TextDecoder().decode(tokenBytes).replace(/\0.*$/, '')
-    const scale = 100
-    const tick: AngelOneStreamTick = {
-      mode: bytes.getUint8(0),
-      exchangeType: bytes.getUint8(1),
-      token,
-      timestamp: Number(bytes.getBigInt64(35, true)),
-      ltp: bytes.getInt32(43, true) / scale,
-      volume: bytes.byteLength >= 71 ? Number(bytes.getBigInt64(63, true)) : undefined,
-      open: bytes.byteLength >= 95 ? Number(bytes.getBigInt64(87, true)) / scale : undefined,
-      high: bytes.byteLength >= 103 ? Number(bytes.getBigInt64(95, true)) / scale : undefined,
-      low: bytes.byteLength >= 111 ? Number(bytes.getBigInt64(103, true)) / scale : undefined,
-      close: bytes.byteLength >= 119 ? Number(bytes.getBigInt64(111, true)) / scale : undefined,
-    }
+    reportStatus('Connected')
     onTick(tick)
   }
-  socket.onerror = () => onStatus('Streaming connection error.')
+  socket.onerror = () => reportStatus('Streaming connection error.')
   socket.onclose = () => {
     if (heartbeat) window.clearInterval(heartbeat)
-    onStatus('Disconnected')
+    reportStatus('Disconnected')
   }
   return socket
 }
