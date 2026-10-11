@@ -23,8 +23,8 @@ export default function ProfilePage() {
             {p.name.split(' ').map((n) => n[0]).join('').slice(0, 2)}
           </div>
           <div style={{ padding: '0 28px', paddingTop: 70 }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 20, marginBottom: 16 }}>
-              <div style={{ paddingBottom: 8, flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', flexWrap: 'wrap', gap: 20, marginBottom: 16 }}>
+              <div style={{ paddingBottom: 8, flex: '1 1 180px', minWidth: 0 }}>
                 <h1 style={{ fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 2 }}>{p.name}</h1>
                 <p style={{ fontSize: 14, color: 'var(--primary)', fontWeight: 500 }}>{p.title}</p>
               </div>
@@ -57,7 +57,7 @@ export default function ProfilePage() {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginBottom: 32 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 16, marginBottom: 32 }}>
           {[
             { icon: '🖼️', type: 'Banners', desc: 'Daily inspiration banners & posters', color: '#D1FAE5', text: '#059669', freq: 'Daily' },
             { icon: '🎬', type: 'Trailers', desc: 'Weekly movie & show trailer reviews', color: '#FFE4E6', text: '#E11D48', freq: 'Weekly' },

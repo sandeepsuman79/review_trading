@@ -1,7 +1,10 @@
 import { FormEvent, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import ErrorToast from '../components/ErrorToast'
 import { loginToAngelOne } from '../api/angelOne'
 
 export default function AngelOneLoginPage() {
+  const navigate = useNavigate()
   const [clientcode, setClientcode] = useState('')
   const [password, setPassword] = useState('')
   const [totp, setTotp] = useState('')
@@ -26,7 +29,12 @@ export default function AngelOneLoginPage() {
         localStorage.setItem('angelone_feed_token', result.data.feedToken)
       }
       window.dispatchEvent(new Event('angelone-auth-changed'))
-      setMessage(result.status ? 'Angel One login successful.' : result.message || 'Angel One login failed.')
+      if (result.status && result.data?.jwtToken) {
+        setMessage('Angel One login successful. Synchronizing chart history…')
+        navigate('/prediction')
+      } else {
+        setMessage(result.message || 'Angel One login failed.')
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Angel One login failed.')
     } finally {
@@ -36,6 +44,7 @@ export default function AngelOneLoginPage() {
 
   return (
     <main className="container" style={{ padding: '48px 0' }}>
+      <ErrorToast message={message} onDismiss={() => setMessage('')} />
       <div className="card" style={{ maxWidth: 480, margin: '0 auto', padding: 24 }}>
         <h1 style={{ marginTop: 0 }}>Angel One Login</h1>
         <form onSubmit={handleSubmit} style={{ display: 'grid', gap: 14 }}>
@@ -45,7 +54,6 @@ export default function AngelOneLoginPage() {
           <label>State<input value={state} onChange={(event) => setState(event.target.value)} /></label>
           <button type="submit" disabled={loading}>{loading ? 'Signing in…' : 'Sign in'}</button>
         </form>
-        {message && <p role="status">{message}</p>}
       </div>
     </main>
   )
