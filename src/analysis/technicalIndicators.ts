@@ -1,7 +1,33 @@
 export type TechnicalIndicatorPoint = {
   rsi14?: number
+  atr14?: number
   supertrend10?: number
   supertrendDirection?: 'UP' | 'DOWN'
+}
+
+/** Wilder ATR: seed with the first period true ranges, then apply RMA smoothing. */
+export function calculateAtr(highs: number[], lows: number[], closes: number[], period = 14): Array<number | undefined> {
+  const length = Math.min(highs.length, lows.length, closes.length)
+  const values: Array<number | undefined> = Array(length).fill(undefined)
+  if (!Number.isInteger(period) || period < 1) return values
+  let sum = 0, count = 0
+  let average: number | undefined
+  for (let index = 0; index < length; index++) {
+    const high = highs[index], low = lows[index], close = closes[index]
+    if (![high, low, close].every(Number.isFinite) || high < low || close < low || close > high) {
+      sum = 0; count = 0; average = undefined
+      continue
+    }
+    const previousClose = index > 0 && count > 0 ? closes[index - 1] : close
+    const range = Math.max(high - low, Math.abs(high - previousClose), Math.abs(low - previousClose))
+    if (!Number.isFinite(range)) { sum = 0; count = 0; average = undefined; continue }
+    if (average === undefined) {
+      sum += range; count++
+      if (count === period) average = sum / period
+    } else average = (average * (period - 1) + range) / period
+    values[index] = average
+  }
+  return values
 }
 
 /** Wilder RSI(14) on candle closes. The first value is available at index 14. */
@@ -90,9 +116,11 @@ export function calculateTechnicalIndicatorSeries(
   closes: number[],
 ): TechnicalIndicatorPoint[] {
   const rsi = calculateRsi14(closes)
+  const atr = calculateAtr(highs, lows, closes)
   const supertrend = calculateSupertrend10(highs, lows, closes)
   return Array.from({ length: Math.min(highs.length, lows.length, closes.length) }, (_, index) => ({
     rsi14: rsi[index],
+    atr14: atr[index],
     supertrend10: supertrend[index]?.value,
     supertrendDirection: supertrend[index]?.direction,
   }))

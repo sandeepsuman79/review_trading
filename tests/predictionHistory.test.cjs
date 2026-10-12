@@ -8,6 +8,7 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
 const { buildEarlyPrediction } = require('../src/analysis/earlyPrediction.ts')
 const { createPredictionRecord, observePredictionTick, observePredictionCandles, syncPredictionRecord, observePredictionReversal, exitPredictionEarly, canExitPredictionEarly, predictionSuccessScore, predictionHistoryStats, readPredictionHistory, writePredictionHistory, predictionHistoryKey } = require('../src/analysis/predictionHistory.ts')
 const { analyzePriceAction } = require('../src/analysis/priceAction.ts')
+const { todayConfirmedTrades, confirmedTradePoints } = require('../src/analysis/confirmedTrades.ts')
 const now = Date.parse('2026-10-09T04:30:00Z')
 const interval = 'FIVE_MINUTE', duration = 300000
 const analysis = (side = 'CALL') => ({
@@ -26,6 +27,41 @@ const context = {
   feeds: [{ category: 'companies', status: 'AVAILABLE' }],
 }
 const outlook = { bias: 'BULLISH', agreement: 'SUPPORTS_CHART', contextRevision: 'fixture', evidenceIds: ['news1'], summary: 'Chart and company news align.' }
+
+test('today cards use IST entry date and retain confirmed trades across all indices', () => {
+  const midnight = Date.parse('2026-10-12T18:30:00Z')
+  const active = { ...record(), status: 'ACTIVE', entryPrice: 100, entryAt: midnight, generatedAt: midnight - 1000 }
+  const earlier = { ...active, id: 'prior-day', entryAt: midnight - 1 }
+  const sensex = { ...active, id: 'sensex', instrument: 'Sensex', entryAt: midnight + 1000 }
+  const bank = { ...active, id: 'bank', instrument: 'Bank Nifty', entryAt: midnight + 2000 }
+  const early = { ...active, id: 'early', stage: 'EARLY' }
+  const future = { ...active, id: 'future', entryAt: midnight + 4000 }
+  const pending = { ...record(), id: 'pending', stage: 'CONFIRMED', generatedAt: midnight }
+  const result = todayConfirmedTrades([bank, pending, future, early, earlier, sensex, active], midnight + 3000)
+  assert.deepEqual(result.trades.map(item => item.id), ['bank', 'sensex', active.id])
+  assert.equal(result.stats.open, 3)
+  assert.equal(todayConfirmedTrades([active], midnight + 24 * 60 * 60000).trades.length, 0)
+})
+
+test('today totals count only booked outcomes by index and preserve directional live points', () => {
+  const active = observePredictionTick(record(), 100, now + 1000)
+  const win = observePredictionTick(active, 120, now + 2000)
+  const loss = { ...observePredictionTick(active, 88, now + 2000), id: 'loss' }
+  const bank = { ...win, id: 'bank', instrument: 'Bank Nifty' }
+  const unknown = { ...active, id: 'unknown', instrument: 'Sensex', status: 'UNVERIFIED', points: 999 }
+  const open = { ...active, id: 'open', latestPrice: 105 }
+  const result = todayConfirmedTrades([win, loss, bank, unknown, open], now + 3000)
+  assert.equal(result.stats.wins, 2)
+  assert.equal(result.stats.resolved, 3)
+  assert.equal(result.stats.excluded, 1)
+  assert.deepEqual(Object.fromEntries(result.indices.map(item => [item.instrument, item.netPoints])), { 'Nifty 50': 8, 'Bank Nifty': 20, Sensex: 0 })
+  assert.equal(confirmedTradePoints(open), 5)
+  assert.equal(confirmedTradePoints({ ...open, side: 'PUT' }), -5)
+  assert.equal(confirmedTradePoints({ ...open, side: 'PUT', latestPrice: 100 }), 0)
+  assert.equal(confirmedTradePoints({ ...open, latestPrice: undefined }), undefined)
+  assert.equal(confirmedTradePoints(unknown), undefined)
+  assert.equal(confirmedTradePoints(loss), -12)
+})
 
 test('combined prediction preserves chart levels and snapshots cited news', () => {
   const result = buildEarlyPrediction(analysis(), 'Nifty 50', interval, now, context, outlook)
@@ -260,41 +296,45 @@ test('live target and stop events take priority over a simultaneous confirmed re
 })
 
 const { predictionEvents } = require('../src/analysis/predictionEvents.ts')
-const { acknowledgePredictionEarlyExit, predictionDisplayStatus } = require('../src/analysis/predictionHistory.ts')
+const { acknowledgePredictionEarlyExit, predictionDisplayStatus, isConfirmedTrade, reconcilePredictionRecords, registerConfirmedPrediction } = require('../src/analysis/predictionHistory.ts')
 
 test('all indices generate independent confirmation events without chart selection', () => {
-  const calls = ['Nifty 50', 'Sensex', 'Bank Nifty'].map(name => createPredictionRecord(plan('CALL', name)))
+  const calls = ['Nifty 50', 'Sensex', 'Bank Nifty'].map(name => observePredictionTick(createPredictionRecord(plan('CALL', name)), 100, now + 1000))
   const events = predictionEvents([], calls)
   assert.deepEqual(events.map(event => event.instrument), ['Nifty 50', 'Sensex', 'Bank Nifty'])
-  assert.ok(events.every(event => event.side === 'CALL' && event.reason === 'Confirm call'))
+  assert.ok(events.every(event => event.side === 'CALL' && event.reason === 'Confirm call · Entry reached'))
   assert.equal(new Set(events.map(event => event.id)).size, 3)
   assert.deepEqual(predictionEvents(calls, calls), [])
 })
 
-test('conditional early setups are not called confirmed until entry is observed', () => {
+test('early picks and unentered confirmed setups emit no trade notifications', () => {
   const early = createPredictionRecord({ ...plan(), stage: 'EARLY' })
-  assert.equal(predictionEvents([], [early])[0].reason, 'Early setup')
-  const active = observePredictionTick(early, 100, now + 1000)
-  assert.equal(predictionEvents([early], [active])[0].reason, 'Confirm call · Entry reached')
+  assert.deepEqual(predictionEvents([], [early]), [])
+  assert.deepEqual(predictionEvents([early], [observePredictionTick(early, 100, now + 1000)]), [])
+  const pending = record()
+  assert.deepEqual(predictionEvents([], [pending]), [])
+  const active = observePredictionTick(pending, 100, now + 1000)
+  assert.equal(predictionEvents([pending], [active])[0].reason, 'Confirm call · Entry reached')
   assert.deepEqual(predictionEvents([active], [observePredictionTick(active, 101, now + 2000)]), [])
 })
 
-test('target, stop, early exit and expiry events carry index, direction and reason exactly once', () => {
+test('target, stop and agent exit events carry index, direction and booked result exactly once', () => {
   const pending = record('PUT')
   const active = observePredictionTick(pending, 100, now + 1000)
   for (const [terminal, reason] of [
     [observePredictionTick(active, 80, now + 2000), 'Target achieved · Exit'],
     [observePredictionTick(active, 112, now + 2000), 'Stop loss · Exit'],
-    [exitPredictionEarly(active, now + 2000, 'MANUAL', 'Manual exit'), 'Early exit'],
+    [exitPredictionEarly(active, now + 2000, 'AGENT_REVERSAL', 'Confirmed opposite completed-candle setup'), 'Agent reversal · Exit'],
   ]) {
     const events = predictionEvents([active], [terminal])
     assert.equal(events.length, 1)
     assert.equal(events[0].instrument, 'Nifty 50'); assert.equal(events[0].side, 'PUT')
     assert.equal(events[0].reason, reason)
+    assert.match(events[0].detail, /Booked (profit|loss|break-even)/)
     assert.deepEqual(predictionEvents([terminal], [terminal]), [])
   }
   const expired = observePredictionTick(pending, 100, now + 3 * duration)
-  assert.equal(predictionEvents([pending], [expired])[0].reason, 'Exit · Setup expired')
+  assert.deepEqual(predictionEvents([pending], [expired]), [])
 })
 
 test('candle replay that enters and exits in one sync announces both events', () => {
@@ -328,4 +368,129 @@ test('OK acknowledges early exit persistently without changing outcome or repeat
   assert.deepEqual(readPredictionHistory({ getItem: () => saved }), [acknowledged])
   const corrupted = { ...acknowledged, earlyExitAcknowledgedAt: 'invalid' }
   assert.throws(() => readPredictionHistory({ getItem: () => JSON.stringify({ version: 1, records: [corrupted] }) }), /invalid format/)
+})
+
+test('only entered chart-confirmed trades qualify for History, exports and totals', () => {
+  const early = createPredictionRecord({ ...plan(), stage: 'EARLY' })
+  const confirmed = record()
+  const active = observePredictionTick(confirmed, 100, now + 1000)
+  const settled = observePredictionTick(active, 120, now + 2000)
+  const legacyEarlyWin = observePredictionTick(observePredictionTick(early, 100, now + 1000), 120, now + 2000)
+  assert.deepEqual([early, confirmed, active, settled, legacyEarlyWin].filter(isConfirmedTrade), [active, settled])
+  assert.equal(predictionHistoryStats([legacyEarlyWin, settled].filter(isConfirmedTrade)).resolved, 1)
+  assert.equal(predictionHistoryStats([legacyEarlyWin, settled].filter(isConfirmedTrade)).netPoints, 20)
+})
+
+test('early picks cannot reserve a trade; confirmation of the same signal can later reserve entry', () => {
+  const early = { ...plan(), stage: 'EARLY' }
+  assert.deepEqual(registerConfirmedPrediction([], early), [])
+  const current = registerConfirmedPrediction([], { ...early, stage: 'CONFIRMED' })
+  assert.equal(current.length, 1); assert.equal(current[0].status, 'PENDING')
+  assert.equal(current.filter(isConfirmedTrade).length, 0)
+  assert.deepEqual(predictionEvents([], current), [])
+  assert.equal(registerConfirmedPrediction(current, current[0]).length, 1)
+  assert.deepEqual(registerConfirmedPrediction([], plan(), now + 3 * duration), [])
+})
+
+test('a live index trade blocks same-side, opposite-side and other-timeframe signals independently of other indices', () => {
+  const active = observePredictionTick(record(), 100, now + 1000)
+  for (const candidate of [
+    { ...plan(), id: 'later-call', generatedAt: now + 2000 },
+    { ...plan('PUT'), id: 'later-put', generatedAt: now + 2000 },
+    { ...plan('PUT'), id: 'hourly-put', interval: 'ONE_HOUR', generatedAt: now + 2000 },
+  ]) assert.deepEqual(registerConfirmedPrediction([active], candidate), [active])
+  const current = registerConfirmedPrediction(registerConfirmedPrediction([active], plan('PUT', 'Sensex')), plan('CALL', 'Bank Nifty'))
+  assert.equal(current.length, 3)
+  const entered = current.map(item => item.status === 'PENDING' ? observePredictionTick(item, 100, now + 2000) : item)
+  assert.deepEqual(entered.map(item => item.status), ['ACTIVE', 'ACTIVE', 'ACTIVE'])
+  assert.equal(new Set(entered.map(item => item.instrument)).size, 3)
+})
+
+test('a newer confirmed candidate replaces an unentered candidate without showing a trade or an expiry toast', () => {
+  const original = record()
+  const newer = { ...plan('PUT'), generatedAt: now + 1000 }
+  const current = registerConfirmedPrediction([original], newer)
+  assert.deepEqual(current.map(item => item.status), ['EXPIRED', 'PENDING'])
+  assert.equal(current.filter(isConfirmedTrade).length, 0)
+  assert.deepEqual(predictionEvents([original], current), [])
+  const entered = current.map(item => item.status === 'PENDING' ? observePredictionTick(item, 100, now + 2000) : item)
+  assert.equal(entered.filter(isConfirmedTrade).length, 1)
+  assert.equal(entered.find(isConfirmedTrade).side, 'PUT')
+})
+
+test('candidate issue time excludes the quote that just settled the preceding trade', () => {
+  const settled = observePredictionTick(observePredictionTick(record(), 100, now + 1000), 120, now + 2000)
+  const current = registerConfirmedPrediction([settled], { ...plan('PUT'), id: 'after-exit' }, now + 2500)
+  assert.equal(current[1].generatedAt, now + 2500)
+  assert.equal(observePredictionTick(current[1], 100, now + 2000).status, 'PENDING')
+  assert.equal(observePredictionTick(current[1], 100, now + 3000).status, 'ACTIVE')
+  assert.equal(registerConfirmedPrediction([settled], plan()).length, 1, 'An old signal cannot be reopened after its trade closes')
+})
+
+test('exchange clock skew cannot date a replacement before the preceding index exit', () => {
+  const settled = observePredictionTick(observePredictionTick(record(), 100, now + 1000), 120, now + 2500)
+  const next = registerConfirmedPrediction([settled], { ...plan('PUT'), id: 'clock-skew-replacement' }, now + 2000)[1]
+  assert.equal(next.generatedAt, settled.exitAt)
+  assert.equal(observePredictionTick(next, 100, settled.exitAt).status, 'PENDING')
+  assert.equal(observePredictionTick(next, 100, settled.exitAt + 1).status, 'ACTIVE')
+})
+
+test('targets and stops settle first and allow a distinct subsequent confirmed trade', () => {
+  for (const [quote, outcome] of [[120, 'TARGET_HIT'], [88, 'STOP_LOSS_HIT']]) {
+    const active = observePredictionTick(record(), 100, now + 1000)
+    assert.equal(registerConfirmedPrediction([active], plan('PUT')).length, 1)
+    const settled = observePredictionTick(active, quote, now + 2000)
+    assert.equal(settled.status, outcome)
+    const current = registerConfirmedPrediction([settled], { ...plan('PUT'), generatedAt: now + 2000 })
+    assert.equal(current.length, 2)
+    assert.equal(current[0].points, outcome === 'TARGET_HIT' ? 20 : -12)
+    assert.equal(current[1].status, 'PENDING')
+  }
+})
+
+test('confirmed reversal books CALL and PUT profit/loss before the opposite trade can activate', () => {
+  for (const side of ['CALL', 'PUT']) for (const profit of [-10, 10]) {
+    const candles = reversalFixture(side === 'CALL' ? -1 : 1)
+    const quote = candles.at(-1)[4], d = side === 'CALL' ? 1 : -1, entry = quote - d * profit
+    const opposite = buildEarlyPrediction(analyzePriceAction(candles, interval, now), 'Nifty 50', interval, now).plan
+    assert(opposite); assert.equal(opposite.stage, 'CONFIRMED'); assert.notEqual(opposite.side, side)
+    const active = { ...record(side), id: `old-${side}-${profit}`, status: 'ACTIVE', generatedAt: now - 3 * duration,
+      entry, entryPrice: entry, entryAt: now - 2 * duration, stopLoss: entry - d * 1000, target: entry + d * 2000,
+      observedThrough: now - 1000, latestPrice: entry, latestPriceAt: now - 1000, latestPriceSource: 'LIVE' }
+    assert.equal(registerConfirmedPrediction([active], opposite).length, 1)
+    const closed = syncPredictionRecord(active, candles, { timestamp: now, ltp: quote }, now)
+    assert.equal(closed.status, 'EARLY_EXIT'); assert.equal(closed.earlyExitSource, 'AGENT_REVERSAL'); assert.equal(closed.points, profit)
+    let current = registerConfirmedPrediction([closed], opposite)
+    assert.equal(current.length, 2); assert.equal(current[1].status, 'PENDING')
+    current = [closed, observePredictionTick(current[1], opposite.entry, now + 1000)]
+    assert.equal(current.filter(item => item.status === 'ACTIVE').length, 1)
+    assert.equal(current[1].side, opposite.side)
+    const events = predictionEvents([active], [current[1], current[0]])
+    assert.deepEqual(events.map(event => event.reason), ['Agent reversal · Exit', 'Confirm call · Entry reached'])
+    assert.match(events[0].detail, profit > 0 ? /Booked profit: \+10\.00/ : /Booked loss: -10\.00/)
+    let saved; writePredictionHistory({ setItem: (_, value) => { saved = value } }, current)
+    assert.deepEqual(readPredictionHistory({ getItem: () => saved }), current)
+  }
+})
+
+test('legacy overlapping positions keep the earliest live trade and preserve unverified duplicate snapshots', () => {
+  const earliest = observePredictionTick(record(), 100, now + 1000)
+  const later = { ...observePredictionTick(record('PUT'), 100, now + 2000), id: 'duplicate-put' }
+  const pending = { ...record(), id: 'later-pending' }
+  const current = reconcilePredictionRecords([later, pending, earliest])
+  assert.deepEqual(current.map(item => item.status), ['UNVERIFIED', 'EXPIRED', 'ACTIVE'])
+  assert.equal(current.length, 3); assert.equal(current[0].entryPrice, later.entryPrice); assert.equal(current[0].points, undefined)
+  assert.equal(current[2], earliest)
+  assert.deepEqual(reconcilePredictionRecords(current), current)
+  assert.equal(predictionHistoryStats(current.filter(isConfirmedTrade)).resolved, 0)
+})
+
+test('saved early picks remain stored but cannot become new trades or affect confirmed-trade totals', () => {
+  const legacy = createPredictionRecord({ ...plan(), stage: 'EARLY' })
+  const current = reconcilePredictionRecords([legacy])
+  assert.equal(current[0].status, 'EXPIRED'); assert.equal(current[0].id, legacy.id)
+  assert.equal(observePredictionTick(current[0], 100, now + 1000).status, 'EXPIRED')
+  assert.equal(current.filter(isConfirmedTrade).length, 0)
+  const legacyActive = observePredictionTick(legacy, 100, now + 1000)
+  assert.equal(registerConfirmedPrediction([legacyActive], plan('PUT')).length, 1, 'An already-entered legacy trade is still managed before a replacement may open')
 })

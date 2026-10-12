@@ -2,13 +2,14 @@ import type { AngelOneCandle } from '../api/angelOne'
 import { completedCandles } from './candleData'
 import { calculateMovingAverageSeries } from './movingAverages'
 import { calculateTechnicalIndicatorSeries } from './technicalIndicators'
+import { candleSession } from './vwap'
 
 /**
  * OHLC price-action agent for the selected chart timeframe.
  *
  * IMPORTANT:
- * - Uses candle OHLC + timestamps and SMA(20), EMA(50), RSI(14), Supertrend(10,3).
- * - No MACD, VWAP, volume or other indicator.
+ * - Uses completed OHLC, structure, SMA/EMA, RSI, ATR and Supertrend.
+ * - The trading evidence layer adds VWAP, public market inputs and volatility checks.
  * - The "agent" is a deterministic, explainable price-action engine.
  * - It never treats one candle pattern as a standalone signal.
  * - The live/incomplete candle is excluded from decisions.
@@ -71,6 +72,7 @@ export type PriceActionAnalysis = {
   exponentialMovingAverage50?: number
   rsi14Momentum?: number
   rsi14?: number
+  atr14?: number
   supertrend10?: number
   supertrendDirection?: 'UP' | 'DOWN'
 
@@ -310,30 +312,25 @@ function previousSessionLevels(candles: OHLC[]) {
     }
   }
 
-  const latestDate = new Date(candles[candles.length - 1].time)
-  const todayKey = `${latestDate.getFullYear()}-${latestDate.getMonth()}-${latestDate.getDate()}`
+  const todayKey = candleSession(new Date(candles[candles.length - 1].time).toISOString())
 
   const today = candles.filter((candle) => {
-    const d = new Date(candle.time)
-    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}` === todayKey
+    return candleSession(new Date(candle.time).toISOString()) === todayKey
   })
 
   const previous = candles.filter((candle) => {
-    const d = new Date(candle.time)
-    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}` !== todayKey
+    return candleSession(new Date(candle.time).toISOString()) !== todayKey
   })
 
   const previousDayKey = previous.length
     ? (() => {
-        const d = new Date(previous[previous.length - 1].time)
-        return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+        return candleSession(new Date(previous[previous.length - 1].time).toISOString())
       })()
     : undefined
 
   const previousDay = previousDayKey
     ? previous.filter((candle) => {
-        const d = new Date(candle.time)
-        return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}` === previousDayKey
+        return candleSession(new Date(candle.time).toISOString()) === previousDayKey
       })
     : []
 
@@ -818,6 +815,7 @@ export function analyzePriceAction(
     exponentialMovingAverage20: extra.exponentialMovingAverage20 ?? latestMovingAverages?.ema20,
     exponentialMovingAverage50: extra.exponentialMovingAverage50 ?? latestMovingAverages?.ema50,
     rsi14: extra.rsi14 ?? latestIndicators?.rsi14,
+    atr14: extra.atr14 ?? latestIndicators?.atr14,
     rsi14Momentum: extra.rsi14Momentum,
     supertrend10: extra.supertrend10 ?? latestIndicators?.supertrend10,
     supertrendDirection: extra.supertrendDirection ?? latestIndicators?.supertrendDirection,
@@ -927,6 +925,7 @@ export function analyzePriceAction(
   const exponentialMovingAverage20 = latestMovingAverages?.ema20
   const exponentialMovingAverage50 = latestMovingAverages?.ema50
   const rsi14 = latestIndicators?.rsi14
+  const atr14 = latestIndicators?.atr14
   const rsi14Momentum = latestRsi14Momentum
   const supertrend10 = latestIndicators?.supertrend10
   const supertrendDirection = latestIndicators?.supertrendDirection
@@ -1452,6 +1451,7 @@ export function analyzePriceAction(
         exponentialMovingAverage20,
         exponentialMovingAverage50,
         rsi14,
+        atr14,
         rsi14Momentum,
         supertrend10,
         supertrendDirection,
@@ -1498,6 +1498,7 @@ export function analyzePriceAction(
         exponentialMovingAverage20,
         exponentialMovingAverage50,
         rsi14,
+        atr14,
         rsi14Momentum,
         supertrend10,
         supertrendDirection,
@@ -1558,12 +1559,17 @@ export function analyzePriceAction(
   })
 
   const selected = eligibleCandidates[0]
+  const setupLocation = selected.pattern === 'BREAKOUT_RETEST'
+    ? 'At / near the confirmed breakout retest level'
+    : selected.pattern === 'BREAKDOWN_RETEST'
+      ? 'At / near the confirmed breakdown retest level'
+      : location
 
   const context = {
     phase,
     structure,
     structureEvent,
-    location,
+    location: setupLocation,
     candleBehavior: behavior,
     support,
     resistance,
@@ -1576,6 +1582,7 @@ export function analyzePriceAction(
     exponentialMovingAverage20,
     exponentialMovingAverage50,
     rsi14,
+    atr14,
     rsi14Momentum,
     supertrend10,
     supertrendDirection,

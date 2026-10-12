@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PredictionPlan } from '../analysis/earlyPrediction'
-import { acknowledgePredictionEarlyExit, createPredictionRecord, exitPredictionEarly, isOpenPrediction, syncPredictionRecord, predictionHistoryKey, readPredictionHistory, writePredictionHistory, type PredictionRecord } from '../analysis/predictionHistory'
+import { isOpenPrediction, reconcilePredictionRecords, registerConfirmedPrediction, syncPredictionRecord, predictionHistoryKey, readPredictionHistory, writePredictionHistory, type PredictionRecord } from '../analysis/predictionHistory'
 import { predictionEvents, type PredictionEvent } from '../analysis/predictionEvents'
 import type { AngelOneCandle, AngelOneStreamTick } from '../api/angelOne'
 
@@ -37,7 +37,7 @@ export function usePredictionHistory(onError: (message: string) => void, onEvent
 
   useEffect(() => {
     const load = () => {
-      try { setRecords(readPredictionHistory(localStorage)); setStorageError(''); lastError.current = '' } catch (error) { report(error) }
+      try { setRecords(reconcilePredictionRecords(readPredictionHistory(localStorage))); setStorageError(''); lastError.current = '' } catch (error) { report(error) }
     }
     load()
     const receive = (event: StorageEvent) => { if (event.storageArea === localStorage && (event.key === predictionHistoryKey || event.key === null)) load() }
@@ -46,36 +46,24 @@ export function usePredictionHistory(onError: (message: string) => void, onEvent
   }, [report])
 
   const recordPrediction = useCallback((plan: PredictionPlan) => {
-    mutate(current => current.some(record => record.id === plan.id) ? current : [...current, createPredictionRecord(plan)])
+    mutate(current => registerConfirmedPrediction(current, plan, Date.now()))
   }, [mutate])
 
-  const sync = useCallback((observe: (record: PredictionRecord) => Observation, now: number) => {
-    mutate(current => current.map(record => {
+  const sync = useCallback((observe: (record: PredictionRecord) => Observation, now: number, confirmEntry?: (record: PredictionRecord) => PredictionPlan | undefined) => {
+    mutate(current => reconcilePredictionRecords(current).map(record => {
       if (!isOpenPrediction(record)) return record
       const { candles, tick } = observe(record)
-      return syncPredictionRecord(record, candles, tick, now)
+      const plan = confirmEntry?.(record)
+      return syncPredictionRecord(record, candles, tick, now, confirmEntry ? Boolean(plan) : true, plan)
     }))
   }, [mutate])
 
-  const syncTick = useCallback((instrument: string, tick: AngelOneStreamTick, candlesFor: (record: PredictionRecord) => AngelOneCandle[], now: number) => {
-    mutate(current => current.map(record => record.instrument === instrument && isOpenPrediction(record)
-      ? syncPredictionRecord(record, candlesFor(record), tick, now) : record))
-  }, [mutate])
-
-  const exitEarly = useCallback((id: string) => {
-    let rejection = ''
-    mutate(current => current.map(record => {
-      if (record.id !== id) return record
-      const next = exitPredictionEarly(record, Date.now(), 'MANUAL', 'Exited early by user at the last observed live index quote.')
-      if (next === record) rejection = 'Early exit needs an active call and a live quote from the last 30 seconds.'
-      return next
+  const syncTick = useCallback((instrument: string, tick: AngelOneStreamTick, candlesFor: (record: PredictionRecord) => AngelOneCandle[], now: number, confirmEntry?: (record: PredictionRecord) => PredictionPlan | undefined) => {
+    mutate(current => reconcilePredictionRecords(current).map(record => {
+      if (record.instrument !== instrument || !isOpenPrediction(record)) return record
+      const plan = confirmEntry?.(record)
+      return syncPredictionRecord(record, candlesFor(record), tick, now, confirmEntry ? Boolean(plan) : true, plan)
     }))
-    if (rejection) onError(rejection)
-  }, [mutate, onError])
-
-  const acknowledgeEarlyExit = useCallback((id: string) => {
-    mutate(current => current.map(record => record.id === id ? acknowledgePredictionEarlyExit(record, Date.now()) : record))
   }, [mutate])
-
-  return { records, storageError, recordPrediction, sync, syncTick, exitEarly, acknowledgeEarlyExit }
+  return { records, storageError, recordPrediction, sync, syncTick }
 }
