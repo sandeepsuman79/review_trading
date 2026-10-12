@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { XMLParser, XMLValidator } from 'fast-xml-parser'
+import { createMarketInputsService } from './marketInputs.js'
 
 export const indexSources = {
   'Nifty 50': { url: 'https://archives.nseindia.com/content/indices/ind_nifty50list.csv', fallbackUrl: 'https://niftyindices.com/IndexConstituent/ind_nifty50list.csv', kind: 'csv', publisher: 'NSE Indices' },
@@ -90,6 +91,7 @@ function googleNewsUrl(query) {
 }
 
 export function createMarketContextService({ fetchFn = fetch, now = Date.now } = {}) {
+  const marketInputs = createMarketInputsService({ fetchFn, now })
   const sourceCache = new Map(); const pending = new Map(); const failures = new Map()
   async function source(url, duration, parse) {
     const cached = sourceCache.get(url)
@@ -126,6 +128,7 @@ export function createMarketContextService({ fetchFn = fetch, now = Date.now } =
 
   async function getContext(instrument) {
     if (!Object.hasOwn(indexSources, instrument)) throw new Error('Unsupported index.')
+    const inputsPromise = marketInputs.getInputs(instrument)
     const config = indexSources[instrument]
     let membershipSourceUrl = config.url
     let membership = await source(config.url, 24 * 60 * 60_000, raw => parseConstituents(raw, config.kind))
@@ -169,39 +172,90 @@ export function createMarketContextService({ fetchFn = fetch, now = Date.now } =
         seen.add(key); articles.push(item); return true
       })
     }
-    const revision = createHash('sha256').update(JSON.stringify({ instrument, feeds: feeds.map(({ status, items }) => ({ status, items })), companies: membership.data, membershipStale: membership.stale })).digest('hex').slice(0, 20)
+    const inputs = await inputsPromise
+    const revision = createHash('sha256').update(JSON.stringify({ instrument, feeds: feeds.map(({ status, items }) => ({ status, items })), companies: membership.data, membershipStale: membership.stale,
+      inputs: { ...Object.fromEntries(['openInterest', 'institutional', 'participantPositions', 'giftNifty'].map(key => [key, { status: inputs[key].status, data: inputs[key].data }])), global: inputs.global.map(({ name, status, data }) => ({ name, status, data })) },
+    })).digest('hex').slice(0, 20)
     return {
       instrument, revision, retrievedAt: new Date(now()).toISOString(), delayNotice: 'Free public feeds may be delayed. Headlines are evidence to review, not live prices or confirmed company impacts.',
       constituents: { companies: membership.data, sourceUrl: membershipSourceUrl, publisher: config.publisher, fetchedAt: membership.fetchedAt ? new Date(membership.fetchedAt).toISOString() : null, status: membership.error ? membership.fetchedAt ? 'STALE' : 'UNAVAILABLE' : 'AVAILABLE', message: membership.error, weightsAvailable: false },
-      globalWatchlist, feeds, articles,
+      globalWatchlist, feeds, articles, inputs,
     }
   }
-  return { getContext }
+  return { getContext, getIndiaVix: marketInputs.getIndiaVix }
 }
 
-export function contextForAi(context) {
+function inputForAi(snapshot, referenceTime, maxAge) {
+  if (!snapshot) return null
+  const fetched = referenceTime - Date.parse(snapshot.fetchedAt || ''), age = referenceTime - Date.parse(snapshot.data?.asOf || '')
+  const current = snapshot.status === 'AVAILABLE' && Number.isFinite(fetched) && fetched >= -60000 && fetched <= 10 * 60000 && Number.isFinite(age) && age >= -60000 && age <= maxAge
+  return { status: current ? 'AVAILABLE' : snapshot.status === 'UNAVAILABLE' ? 'UNAVAILABLE' : 'STALE', sourceUrl: snapshot.sourceUrl, fetchedAt: snapshot.fetchedAt, data: current ? snapshot.data : null }
+}
+
+export function sanitizeObservedFlowReports(value, referenceTime) {
+  const reports = new Map()
+  for (const item of Array.isArray(value) ? value.slice(0, 20) : []) {
+    if (!item || item.unit !== 'INR_CRORE' || ![item.fiiCash, item.diiCash, item.netFlow].every(Number.isFinite)) continue
+    const timestamp = Date.parse(item.asOf), age = referenceTime - timestamp
+    if (!Number.isFinite(age) || age < 0 || age > 14 * 86400000 || Math.abs(item.netFlow - item.fiiCash - item.diiCash) > .02) continue
+    reports.set(new Date(timestamp + 330 * 60000).toISOString().slice(0, 10), { asOf: item.asOf, fiiCash: item.fiiCash, diiCash: item.diiCash, netFlow: item.netFlow, unit: 'INR_CRORE' })
+  }
+  return [...reports.values()].sort((a, b) => Date.parse(a.asOf) - Date.parse(b.asOf)).slice(-5)
+}
+
+export function contextForAi(context, indiaVix) {
   const availableCategories = context.feeds.filter(feed => feed.status === 'AVAILABLE').map(feed => feed.category)
+  const referenceTime = Date.parse(context.retrievedAt)
+  const inputs = context.inputs
   return {
     instrument: context.instrument, revision: context.revision, retrievedAt: context.retrievedAt,
     availableCategories, unavailableCategories: context.feeds.filter(feed => feed.status !== 'AVAILABLE').map(feed => feed.category),
     constituentStatus: context.constituents.status, weightsAvailable: false,
     // Stale feed results and stale membership never become current directional evidence.
-    articles: context.articles.filter(article => availableCategories.includes(article.category) && (article.category !== 'companies' || context.constituents.status === 'AVAILABLE')).slice(0, 24),
-    limitations: ['Headlines only, not full articles or verified earnings surprises.', 'Current constituent weights and constituent price breadth are unavailable; do not invent them.', 'Global company watchlist indicates potential exposure, not established causal relationships.', 'Public feeds may be delayed; market reaction may already be priced in.'],
+    articles: context.articles.filter(article => availableCategories.includes(article.category) && (article.category !== 'companies' || context.constituents.status === 'AVAILABLE')).slice(0, 32),
+    ...(inputs ? { inputs: {
+      openInterest: inputForAi(inputs.openInterest, referenceTime, 30 * 60000),
+      institutional: inputForAi(inputs.institutional, referenceTime, 7 * 86400000),
+      participantPositions: inputForAi(inputs.participantPositions, referenceTime, 7 * 86400000),
+      giftNifty: inputForAi(inputs.giftNifty, referenceTime, 4 * 86400000),
+      global: inputs.global.map(quote => ({ name: quote.name, ...inputForAi(quote, referenceTime, 4 * 86400000) })),
+    } } : {}),
+    ...(indiaVix ? { indiaVix: inputForAi(indiaVix, referenceTime, 30 * 60000) } : {}),
+    limitations: ['Headlines only, not full articles or verified earnings surprises.', 'Current constituent weights and constituent price breadth are unavailable; do not invent them.', 'Global company watchlist indicates potential exposure, not established causal relationships.', 'Public feeds may be delayed; market reaction may already be priced in.', 'OI positioning does not establish call/put writing without price changes; max pain and OI walls are reference levels, not guaranteed price targets.', 'FII/DII flows are market-wide daily reports, not live index transactions.', 'India VIX measures volatility, not a guaranteed equity direction.'],
   }
+}
+
+export function sanitizeArticleSentiments(value, context) {
+  const available = contextForAi(context)
+  return (Array.isArray(value) ? value : []).filter((item, index, list) =>
+    available.articles.some(article => article.id === item?.articleId)
+    && ['POSITIVE', 'NEGATIVE', 'NEUTRAL', 'UNCLEAR'].includes(item?.sentiment)
+    && list.findIndex(other => other?.articleId === item.articleId) === index,
+  ).slice(0, 32).map(item => {
+    const score = item.impactScore
+    const validScore = Number.isInteger(score) && (item.sentiment === 'POSITIVE' ? score === 1 || score === 2
+      : item.sentiment === 'NEGATIVE' ? score === -1 || score === -2 : item.sentiment === 'NEUTRAL' && score === 0)
+    return { articleId: item.articleId, sentiment: item.sentiment,
+      ...(validScore ? { impactScore: score } : {}),
+      ...(typeof item.reason === 'string' ? { reason: item.reason.slice(0, 200) } : {}),
+    }
+  })
 }
 
 export function sanitizeMarketOutlook(value, context, chartCurrent = true) {
   const available = contextForAi(context)
+  const sentiments = sanitizeArticleSentiments(value?.articleSentiments, context)
+  const headlineAssessment = sentiments.length ? { articleSentiments: sentiments } : {}
   const evidenceIds = [...new Set(Array.isArray(value?.evidenceIds) ? value.evidenceIds.filter(id => available.articles.some(article => article.id === id)).slice(0, 6) : [])]
   const validBias = ['BULLISH', 'BEARISH', 'MIXED', 'NEUTRAL'].includes(value?.bias)
   if (!chartCurrent || !available.articles.length || !validBias || !evidenceIds.length || value?.agreement === 'INSUFFICIENT') {
-    return { bias: 'UNAVAILABLE', agreement: 'INSUFFICIENT', summary: !chartCurrent ? 'The chart is historical. Awaiting recent completed candles for a combined outlook.' : 'Not enough current, cited evidence for a combined outlook.', evidenceIds: [], contextRevision: context.revision, contextRetrievedAt: context.retrievedAt }
+    return { bias: 'UNAVAILABLE', agreement: 'INSUFFICIENT', summary: !chartCurrent ? 'The chart is historical. Awaiting recent completed candles for a combined outlook.' : 'Not enough current, cited evidence for a combined outlook.', evidenceIds: [], ...headlineAssessment, contextRevision: context.revision, contextRetrievedAt: context.retrievedAt }
   }
   return {
     bias: value.bias,
     agreement: ['SUPPORTS_CHART', 'CONFLICTS_WITH_CHART', 'MIXED', 'INSUFFICIENT'].includes(value.agreement) ? value.agreement : 'INSUFFICIENT',
     summary: typeof value.summary === 'string' ? value.summary.slice(0, 500) : '', evidenceIds,
+    ...headlineAssessment,
     contextRevision: context.revision, contextRetrievedAt: context.retrievedAt,
   }
 }

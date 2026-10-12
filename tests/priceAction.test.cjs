@@ -48,6 +48,7 @@ test('agent indicators match full chart history at the latest completed candle',
   assert.equal(result.exponentialMovingAverage20, averages.ema20)
   assert.equal(result.exponentialMovingAverage50, averages.ema50)
   assert.equal(result.rsi14, indicators.rsi14)
+  assert.equal(result.atr14, indicators.atr14)
   assert.equal(result.supertrend10, indicators.supertrend10)
   assert.equal(result.supertrendDirection, indicators.supertrendDirection)
 })
@@ -93,5 +94,26 @@ test('all timeframe close boundaries are respected', () => {
     const candles = fixture(1)
     assert.equal(completedCandles(candles, selected, start + duration - 1).length, 0)
     assert.equal(completedCandles(candles, selected, start + duration).length, 1)
+  }
+})
+
+test('previous-session levels use IST regardless of the browser or host timezone', () => {
+  const previousZone = process.env.TZ
+  try {
+    process.env.TZ = 'Asia/Kolkata'
+    const expected = analyzePriceAction(fixture(), interval, now)
+    for (const zone of ['UTC', 'America/New_York']) {
+      process.env.TZ = zone
+      const result = analyzePriceAction(fixture(), interval, now)
+      assert.deepEqual([result.previousDayClose, result.previousDayHigh, result.previousDayLow, result.todayHigh, result.todayLow], [expected.previousDayClose, expected.previousDayHigh, expected.previousDayLow, expected.todayHigh, expected.todayLow])
+    }
+  } finally { if (previousZone === undefined) delete process.env.TZ; else process.env.TZ = previousZone }
+})
+
+test('confirmed retests report their tested boundary as the setup location', () => {
+  for (const [count, direction, pattern] of [[158, 1, 'BREAKOUT_RETEST'], [70, -1, 'BREAKDOWN_RETEST']]) {
+    const candles = fixture(count, direction), result = analyzePriceAction(candles, interval, start + count * 300000)
+    assert.equal(result.pattern, pattern)
+    assert.match(result.location, /confirmed.*retest level/)
   }
 })

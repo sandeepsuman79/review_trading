@@ -240,13 +240,14 @@ export async function getInstrumentMaster(): Promise<AngelOneInstrument[]> {
   return Array.isArray(result) ? result : result.data || []
 }
 
-export async function getAngelOneLtp(token: string, instrument: Pick<AngelOneInstrument, 'exch_seg' | 'symbol' | 'token'>): Promise<AngelOneDataResponse<AngelOneLtp[]>> {
+export async function getAngelOneLtp(token: string, instrument: Pick<AngelOneInstrument, 'exch_seg' | 'symbol' | 'token'>, signal?: AbortSignal): Promise<AngelOneDataResponse<AngelOneLtp | AngelOneLtp[]>> {
   const response = await fetch('/api/angelone/ltp', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    signal,
     body: JSON.stringify({ exchange: instrument.exch_seg === 'bse_cm' ? 'BSE' : 'NSE', tradingsymbol: instrument.symbol, symboltoken: instrument.token }),
   })
-  return readResponse<AngelOneDataResponse<AngelOneLtp[]>>(response, 'Angel One LTP request failed')
+  return readResponse<AngelOneDataResponse<AngelOneLtp | AngelOneLtp[]>>(response, 'Angel One LTP request failed')
 }
 
 async function postHistorical<T extends AngelOneCandle[] | AngelOneOi[]>(path: 'candles' | 'oi', token: string, body: object) {

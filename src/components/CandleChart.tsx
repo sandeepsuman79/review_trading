@@ -2,10 +2,13 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import ReactApexChart from 'react-apexcharts'
 import type { ApexOptions } from 'apexcharts'
 import type { AngelOneCandle, AngelOneStreamTick } from '../api/angelOne'
+import type { IndiaVixSnapshot } from '../api/marketContext'
 import { calculateMovingAverageSeries } from '../analysis/movingAverages'
 import { normalizeCandles } from '../analysis/candleData'
 import { buildSupertrendSegments } from '../analysis/supertrendChart'
 import { calculateTechnicalIndicatorSeries } from '../analysis/technicalIndicators'
+import { buildSessionVwapSeries, calculateSessionVwap } from '../analysis/vwap'
+import ChartIndicators, { type ChartIndicator, type ChartIndicatorVisibility, type ChartTradeLevels } from './ChartIndicators'
 
 type Range = { min: number; max: number }
 type Props = {
@@ -17,6 +20,10 @@ type Props = {
   savedCandleCount: number
   marketHeartbeat: string
   spotIndex?: boolean
+  trade?: ChartTradeLevels
+  indiaVix?: IndiaVixSnapshot
+  indiaVixLoading?: boolean
+  now: number
 }
 
 // ApexCharts expands its candle mask into the axis margins. Keep every series
@@ -38,8 +45,8 @@ function clipSeriesToGrid(chart: unknown) {
   }
   const plotBounds = grid.getBoundingClientRect()
   // Apex shifts annotations by candle padding. Keep every price badge on the scale at every zoom.
-  for (const label of chart.el.querySelectorAll<SVGGraphicsElement>('text.live-index-price, text[class*="horizontal-price-"]')) {
-    const id = [...label.classList].find(value => value === 'live-index-price' || value.startsWith('horizontal-price-'))
+  for (const label of chart.el.querySelectorAll<SVGGraphicsElement>('text.live-index-price, text[class*="horizontal-price-"], text[class*="trade-level-"]')) {
+    const id = [...label.classList].find(value => value === 'live-index-price' || value.startsWith('horizontal-price-') || value.startsWith('trade-level-'))
     const background = chart.el.querySelector<SVGRectElement>(`rect.${id}`)
     if (!background) continue
     const scale = label.getScreenCTM()?.a || 1
@@ -59,7 +66,7 @@ function clipSeriesToGrid(chart: unknown) {
       }
     }
   }
-  for (const line of chart.el.querySelectorAll<SVGLineElement>('line.live-index-price, line[class*="horizontal-price-"]')) {
+  for (const line of chart.el.querySelectorAll<SVGLineElement>('line.live-index-price, line[class*="horizontal-price-"], line[class*="trade-level-"]')) {
     const scale = line.getScreenCTM()?.a || 1
     const lineBounds = line.getBoundingClientRect()
     line.setAttribute('x1', String(Number(line.getAttribute('x1')) + (plotBounds.left - lineBounds.left) / scale))
@@ -88,9 +95,19 @@ function measureScale(values: number[], format = price, fallback = 56) {
   return Math.ceil(values.reduce((width, value) => Number.isFinite(value) ? Math.max(width, context.measureText(format(value)).width) : width, 0)) || fallback
 }
 
-export default function CandleChart({ candles: inputCandles, name, intervalLabel, tick, isLive, savedCandleCount, marketHeartbeat, spotIndex = false }: Props) {
+const defaultIndicators: ChartIndicatorVisibility = { supertrend: true, vwap: true, ema20: true, ema50: true, sma20: false }
+const indicatorPreferenceKey = 'traders_chart_indicators_v1'
+
+function readIndicatorPreferences(): ChartIndicatorVisibility {
+  try {
+    const saved = JSON.parse(localStorage.getItem(indicatorPreferenceKey) || '{}') as Partial<ChartIndicatorVisibility> | null
+    return Object.fromEntries(Object.entries(defaultIndicators).map(([key, value]) => [key, typeof saved?.[key as ChartIndicator] === 'boolean' ? saved[key as ChartIndicator] : value])) as ChartIndicatorVisibility
+  } catch { return defaultIndicators }
+}
+
+export default function CandleChart({ candles: inputCandles, name, intervalLabel, tick, isLive, savedCandleCount, marketHeartbeat, spotIndex = false, trade, indiaVix, indiaVixLoading, now }: Props) {
   const candles = useMemo(() => normalizeCandles(inputCandles), [inputCandles])
-  const volumeUnavailable = spotIndex && !candles.some(candle => candle[5] > 0)
+  const [indicatorVisibility, setIndicatorVisibility] = useState(readIndicatorPreferences)
   // A null range follows the newest candles. A chosen historical range stays put on live ticks.
   const [horizontalLines, setHorizontalLines] = useState<Array<{ id: number; price: number }>>([])
   const nextLineId = useRef(1)
@@ -98,13 +115,13 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
   const [marker, setMarker] = useState<{ x: number; y: number; left: number; top: number; width: number; height: number; price: number; time: string } | null>(null)
   const [selectedTime, setSelectedTime] = useState<string | null>(null)
   const [infoOpen, setInfoOpen] = useState(() => typeof window === 'undefined' || !window.matchMedia('(max-width: 640px)').matches)
-  const [volumeOpen, setVolumeOpen] = useState(true)
   const [visibleCount, setVisibleCount] = useState<number | null>(null)
   const [priceShift, setPriceShift] = useState(0)
   const [scrollWidth, setScrollWidth] = useState(() => typeof window === 'undefined' ? 1 : window.innerWidth)
   const compact = scrollWidth <= 640
   // Give each candle about 10px on phones; keep a chosen zoom when resizing or receiving ticks.
-  const defaultVisibleCount = compact ? Math.max(18, Math.floor((scrollWidth - 56 - 20) / 10)) : 60
+  const priceScaleReserve = trade ? measureScale([trade.entry, trade.target, trade.stopLoss], value => `ENTRY ${price(value)}`) + 8 : 56
+  const defaultVisibleCount = compact ? Math.max(18, Math.floor((scrollWidth - priceScaleReserve - 20) / 10)) : 60
   const horizontalScrollRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<HTMLElement>(null)
   const verticalScrollRef = useRef<HTMLDivElement>(null)
@@ -118,6 +135,10 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
   const min = range?.min ?? Math.max(-0.5, rightEdge - (visibleCount ?? defaultVisibleCount))
   const max = range?.max ?? rightEdge
   const span = max - min
+
+  useEffect(() => {
+    try { localStorage.setItem(indicatorPreferenceKey, JSON.stringify(indicatorVisibility)) } catch { /* Drawing preferences do not affect saved candles or trades. */ }
+  }, [indicatorVisibility])
 
   useEffect(() => {
     const dismissInspection = (event: Event) => {
@@ -180,21 +201,26 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
     plot.addEventListener('wheel', wheel, { passive: false })
     return () => plot.removeEventListener('wheel', wheel)
   }, [min, span, zoom, panTo, hasCandles])
-  const selected = candles.find((candle) => candle[0] === selectedTime) ?? candles[latest]
+  const inspectedIndex = selectedTime ? candles.findIndex(candle => candle[0] === selectedTime) : -1
+  const selectedIndex = inspectedIndex >= 0 ? inspectedIndex : latest
+  const selected = candles[selectedIndex]
+
+  const averages = useMemo(() => calculateMovingAverageSeries(candles.map(candle => candle[4])), [candles])
+  const indicators = useMemo(() => calculateTechnicalIndicatorSeries(candles.map(candle => candle[2]), candles.map(candle => candle[3]), candles.map(candle => candle[4])), [candles])
+  const vwap = useMemo(() => calculateSessionVwap(candles), [candles])
+  const hasVwap = vwap.some(value => value !== undefined)
 
   const series = useMemo(() => {
-    const closes = candles.map((candle) => candle[4])
-    const averages = calculateMovingAverageSeries(closes)
-    const indicators = calculateTechnicalIndicatorSeries(candles.map((candle) => candle[2]), candles.map((candle) => candle[3]), closes)
     // Equal spacing keeps overnight and weekend gaps from squeezing the candles.
     return [
       { name: 'OHLC', type: 'candlestick', data: candles.map((candle, x) => ({ x, y: candle.slice(1, 5) })) },
-      { name: 'SMA(20)', type: 'line', data: averages.map((point, x) => ({ x, y: point.sma20 ?? null })) },
-      { name: 'EMA(50)', type: 'line', data: averages.map((point, x) => ({ x, y: point.ema50 ?? null })) },
-      ...buildSupertrendSegments(indicators).map((segment) => ({ name: segment.direction === 'UP' ? 'Supertrend up' : 'Supertrend down', type: 'line', data: segment.data })),
+      ...(indicatorVisibility.sma20 ? [{ name: 'SMA(20)', type: 'line', data: averages.map((point, x) => ({ x, y: point.sma20 ?? null })) }] : []),
+      ...(indicatorVisibility.ema20 ? [{ name: 'EMA(20)', type: 'line', data: averages.map((point, x) => ({ x, y: point.ema20 ?? null })) }] : []),
+      ...(indicatorVisibility.ema50 ? [{ name: 'EMA(50)', type: 'line', data: averages.map((point, x) => ({ x, y: point.ema50 ?? null })) }] : []),
+      ...(indicatorVisibility.vwap ? buildSessionVwapSeries(candles, vwap) : []),
+      ...(indicatorVisibility.supertrend ? buildSupertrendSegments(indicators).map(segment => ({ name: segment.direction === 'UP' ? 'Supertrend up' : 'Supertrend down', type: 'line', data: segment.data })) : []),
     ]
-  }, [candles])
-  const volumeSeries = useMemo(() => [{ name: 'Volume', data: candles.map((candle, x) => ({ x, y: candle[5], fillColor: candle[4] >= candle[1] ? '#16A34A' : '#DC2626' })) }], [candles])
+  }, [candles, averages, indicators, vwap, indicatorVisibility])
 
   const options = useMemo<ApexOptions>(() => {
     const tooltip = ({ seriesIndex, dataPointIndex }: { seriesIndex: number; dataPointIndex: number }) => {
@@ -210,13 +236,16 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
     series.slice(1).forEach((line) => line.data.forEach((point) => {
       if (point.x >= min && point.x <= max && typeof point.y === 'number') values.push(point.y)
     }))
-    if (tick?.ltp !== undefined && max >= candles.length - 1) values.push(tick.ltp)
+    if (max >= candles.length - 1) {
+      if (tick?.ltp !== undefined) values.push(tick.ltp)
+      if (trade) values.push(trade.entry, trade.stopLoss, trade.target)
+    }
     const low = values.reduce((result, value) => Math.min(result, value), Infinity)
     const high = values.reduce((result, value) => Math.max(result, value), -Infinity)
     const padding = Math.max((high - low) * 0.04, Math.abs(high) * 0.0002, 1)
     const shift = (high - low + padding * 2) * priceShift
     // Reserve only the width of the full prices, including the bold live marker.
-    const axisLabelWidth = measureScale([low - padding + shift, high + padding + shift, tick?.ltp ?? high, ...horizontalLines.map(line => line.price)])
+    const axisLabelWidth = Math.max(measureScale([low - padding + shift, high + padding + shift, tick?.ltp ?? high, ...horizontalLines.map(line => line.price)]), trade ? priceScaleReserve : 0)
     return {
       chart: {
         type: 'candlestick', background: 'transparent', foreColor: '#6B7280',
@@ -225,7 +254,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
         events: { mounted: clipSeriesToGrid, updated: clipSeriesToGrid },
       },
       plotOptions: { candlestick: { colors: { upward: '#16A34A', downward: '#DC2626' } } },
-      colors: series.map((line, index) => index === 0 ? '#6C63FF' : index === 1 ? '#F59E0B' : index === 2 ? '#2563EB' : line.name === 'Supertrend up' ? '#16A34A' : '#DC2626'),
+      colors: series.map(line => ({ 'OHLC': '#6C63FF', 'SMA(20)': '#64748B', 'EMA(20)': '#0EA5E9', 'EMA(50)': '#F59E0B', 'VWAP': '#A855F7', 'Supertrend up': '#16A34A', 'Supertrend down': '#DC2626' })[line.name] ?? '#64748B'),
       stroke: { width: series.map((_, index) => index === 0 ? 1 : 2), curve: 'straight' },
       markers: { size: 0 }, dataLabels: { enabled: false }, legend: { show: false },
       grid: { borderColor: '#E5E7EB', xaxis: { lines: { show: true } }, padding: { left: compact ? 2 : 16, right: 0, top: compact ? -22 : -16, bottom: 0 } },
@@ -240,7 +269,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
       },
       yaxis: {
         opposite: true, min: Number.isFinite(low) ? low - padding + shift : undefined, max: Number.isFinite(high) ? high + padding + shift : undefined,
-        labels: { minWidth: axisLabelWidth, maxWidth: compact ? 64 : 78, formatter: price, style: { fontSize: '10px' } },
+        labels: { minWidth: axisLabelWidth, maxWidth: trade ? axisLabelWidth + 4 : compact ? 64 : 78, formatter: price, style: { fontSize: '10px' } },
         crosshairs: { show: false, position: 'front', stroke: { color: '#94A3B8', width: 1, dashArray: 4 } }, tooltip: { enabled: false },
       },
       tooltip: { enabled: true, shared: false, intersect: false, custom: tooltip },
@@ -252,6 +281,15 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
             style: { background: '#6C63FF', color: '#fff', fontSize: '10px', fontWeight: 600, padding: { left: 2, right: 2, top: 2, bottom: 2 } },
           },
         }] : []),
+        ...(trade ? [
+          { id: 'trade-level-entry', label: 'ENTRY', value: trade.entry, color: '#64748B', background: '#F1F5F9', textColor: '#334155' },
+          { id: 'trade-level-stop', label: 'SL', value: trade.stopLoss, color: '#EF4444', background: '#FEE2E2', textColor: '#B91C1C' },
+          { id: 'trade-level-target', label: 'TGT', value: trade.target, color: '#22C55E', background: '#DCFCE7', textColor: '#166534' },
+        ].map(level => ({
+          id: level.id, y: level.value, borderColor: level.color, strokeDashArray: 5,
+          label: { text: `${level.label} ${price(level.value)}`, position: 'right', textAnchor: 'start', offsetX: 4, offsetY: 7, borderColor: level.color,
+            style: { background: level.background, color: level.textColor, fontSize: '10px', fontWeight: 600, padding: { left: 2, right: 2, top: 2, bottom: 2 } } },
+        })) : []),
         ...horizontalLines.map(line => ({
           id: `horizontal-price-${line.id}`, y: line.price, borderColor: '#2563EB', strokeDashArray: 0,
           label: {
@@ -267,24 +305,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
         })),
       ] },
     }
-  }, [candles, min, max, series, tick?.ltp, priceShift, horizontalLines, compact])
-
-  const volumeOptions = useMemo<ApexOptions>(() => {
-    const visible = candles.slice(Math.max(0, Math.ceil(min)), Math.min(candles.length, Math.floor(max) + 1))
-    const ceiling = Math.max(1, visible.reduce((value, candle) => Math.max(value, candle[5]), 0) * 1.05)
-    const formatVolume = (value: number) => Intl.NumberFormat('en-IN', { notation: 'compact' }).format(value)
-    // Volume labels are much shorter than index prices; give their unused scale space to the plot.
-    const axisLabelWidth = measureScale([0, ceiling / 2, ceiling], formatVolume, 16)
-    return {
-      ...options,
-      chart: { ...options.chart, type: 'bar', toolbar: { show: false }, zoom: { enabled: false }, events: { mounted: clipSeriesToGrid, updated: clipSeriesToGrid } },
-      annotations: {}, stroke: { width: 0 },
-      grid: { ...options.grid, padding: { left: compact ? 2 : 16, right: 0, top: -12, bottom: -10 } },
-      plotOptions: { bar: { columnWidth: '70%' } },
-      xaxis: { ...options.xaxis, labels: { show: false }, axisTicks: { show: false }, axisBorder: { show: false } },
-      yaxis: { show: !volumeUnavailable, opposite: true, min: 0, max: ceiling, tickAmount: 2, labels: { minWidth: axisLabelWidth, maxWidth: axisLabelWidth + 4, style: { fontSize: '10px' }, formatter: formatVolume } },
-    }
-  }, [options, compact, candles, min, max, volumeUnavailable])
+  }, [candles, min, max, series, tick?.ltp, priceShift, horizontalLines, compact, trade, priceScaleReserve])
 
   function inspectCandle(event: PointerEvent<HTMLDivElement>) {
     if (event.target instanceof Element && event.target.closest('.candle-crosshair-price')) return
@@ -380,16 +401,6 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
           if (Math.abs(shift - priceShift) > 0.01) { setMarker(null); setPriceShift(shift) }
         }}><div style={{ height: '500%', width: 1 }} /></div>
       </div>
-      <details className="candle-volume" open={volumeOpen} onToggle={(event) => setVolumeOpen(event.currentTarget.open)}>
-        <summary aria-label="Toggle volume chart">
-          <span>Volume</span>
-          <svg className="card-disclosure-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
-        </summary>
-        {volumeOpen && <div className="apex-volume-plot" onPointerDownCapture={inspectCandle} onPointerMoveCapture={inspectCandle}>
-          <ReactApexChart options={volumeOptions} series={volumeSeries} type="bar" height={96} width="100%" />
-          {volumeUnavailable && <span className="candle-volume-unavailable" role="status">Volume is unavailable for spot indices.</span>}
-        </div>}
-      </details>
       <div ref={horizontalScrollRef} className="candle-time-scroll" tabIndex={0} role="region" aria-label="Scroll chart history horizontally" onScroll={(event) => {
         const scroll = event.currentTarget
         const available = scroll.scrollWidth - scroll.clientWidth
@@ -397,7 +408,10 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
         const start = -0.5 + scroll.scrollLeft / available * (totalSpan - span)
         if (Math.abs(start - min) > 0.05) panTo(start, span)
       }}><div style={{ width: `${100 * totalSpan / span}%`, height: 1 }} /></div>
-      <div className="candle-chart-legend"><span><i className="legend-bullish" /> Supertrend up</span><span><i className="legend-bearish" /> Supertrend down</span><span><i className="legend-ma" /> SMA(20)</span><span><i className="legend-ema" /> EMA(50)</span><span>Touch or hover to inspect · Drag or scroll to pan · Shift + wheel for history · Use + / − to zoom</span></div>
+      <ChartIndicators visibility={indicatorVisibility} onToggle={key => { setMarker(null); setIndicatorVisibility(current => ({ ...current, [key]: !current[key] })) }}
+        average={averages[selectedIndex] || {}} technical={indicators[selectedIndex] || {}} vwap={vwap[selectedIndex]} hasVwap={hasVwap} spotIndex={spotIndex}
+        close={selected[4]} trade={trade} indiaVix={indiaVix} indiaVixLoading={indiaVixLoading} now={now} context={`${inspectedIndex >= 0 ? 'Selected candle' : 'Latest candle'} · ${candleDate(selected[0])} IST`} />
+      <div className="candle-chart-navigation-hint">Touch or hover to inspect · Drag to pan · Use + / − to zoom</div>
     </section>
   )
 }

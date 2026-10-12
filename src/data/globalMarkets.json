@@ -1,0 +1,13 @@
+[
+  { "symbol": "GIFT_NIFTY", "name": "GIFT Nifty", "provider": "nse", "kind": "index", "indiaSign": 1, "showCue": false },
+  { "symbol": "^DJI", "name": "Dow Jones", "provider": "yahoo", "kind": "index", "indiaSign": 1, "showCue": false },
+  { "symbol": "^IXIC", "name": "Nasdaq Composite", "provider": "yahoo", "kind": "index", "indiaSign": 1, "showCue": false },
+  { "symbol": "^FTSE", "name": "FTSE 100", "provider": "yahoo", "kind": "index", "indiaSign": 1, "showCue": false },
+  { "symbol": "^N225", "name": "Nikkei 225", "provider": "yahoo", "kind": "index", "indiaSign": 1, "showCue": false },
+  { "symbol": "^KS11", "name": "KOSPI", "provider": "yahoo", "kind": "index", "indiaSign": 1, "showCue": false },
+  { "symbol": "BZ=F", "name": "Brent Crude", "provider": "yahoo", "kind": "commodity", "indiaSign": -1, "showCue": true },
+  { "symbol": "INR=X", "name": "USD/INR", "provider": "yahoo", "kind": "fx", "indiaSign": -1, "showCue": true },
+  { "symbol": "^TNX", "name": "US 10Y Yield", "provider": "yahoo", "kind": "yield", "indiaSign": -1, "showCue": true },
+  { "symbol": "^GSPC", "name": "S&P 500", "provider": "yahoo", "kind": "index", "indiaSign": 1, "showCue": false },
+  { "symbol": "CL=F", "name": "WTI Crude", "provider": "yahoo", "kind": "commodity", "indiaSign": -1, "showCue": false }
+]
