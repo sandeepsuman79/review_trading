@@ -59,7 +59,8 @@ export type MarketOutlook = {
   evidenceIds: string[]
   contextRevision: string
   contextRetrievedAt: string
-  articleSentiments?: Array<{ articleId: string; sentiment: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL' | 'UNCLEAR'; impactScore?: number; reason?: string }>
+  articleSentiments?: Array<{ articleId: string; sentiment: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL' | 'UNCLEAR'; impactScore?: number; reason?: string; source?: 'GEMINI' | 'LOCAL_FINBERT'; scope?: 'MARKET_IMPACT' | 'TEXT_ONLY'; assessedAt?: string }>
+  assessmentStatus?: { state: 'CACHED' | 'LOCAL' | 'UNAVAILABLE'; message: string; retryAt: string | null; assessed: number; total: number; textOnly: number }
 }
 
 export async function getMarketContext(instrument: string, signal?: AbortSignal): Promise<MarketContext> {

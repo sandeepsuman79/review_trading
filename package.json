@@ -14,9 +14,12 @@
     "test:stream": "node --test tests/liveCandles.test.cjs",
     "test:context": "node --test tests/marketContext.test.js",
     "test:dashboard": "node --test tests/marketInputs.test.js tests/marketDashboard.test.cjs tests/newsEvidence.test.cjs",
-    "test:history": "node --test tests/predictionHistory.test.cjs"
+    "test:history": "node --test tests/predictionHistory.test.cjs",
+    "news:setup": "node server/setupLocalNews.js",
+    "test:ai": "node --test tests/aiResilience.test.js"
   },
   "dependencies": {
+    "@huggingface/transformers": "4.3.1",
     "apexcharts": "^5.16.0",
     "fast-xml-parser": "^5.11.2",
     "react": "^18.2.0",
@@ -35,5 +38,10 @@
     "eslint-plugin-react-hooks": "^4.6.0",
     "typescript": "^5.3.3",
     "vite": "^5.0.2"
+  },
+  "overrides": {
+    "onnxruntime-node": "1.21.0",
+    "global-agent": "^4.1.3",
+    "adm-zip": "^0.6.0"
   }
 }

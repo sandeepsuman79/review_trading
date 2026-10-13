@@ -54,7 +54,7 @@ export function registerConfirmedPrediction(records: PredictionRecord[], plan: P
     || record.entryAt !== undefined && record.instrument === plan.instrument && record.interval === plan.interval && record.side === plan.side && record.signalCandleTime === plan.signalCandleTime)) return current
   const existing = current.find(record => record.id === plan.id)
   if (existing) {
-    if (existing.status !== 'PENDING' || plan.strategyVersion !== 'combined-v1' || now >= existing.expiresAt) return current
+    if (existing.status !== 'PENDING' || !['combined-v1', 'technical-v2'].includes(plan.strategyVersion) || now >= existing.expiresAt) return current
     return current.map(record => record.id === plan.id ? { ...record, ...plan, generatedAt: record.generatedAt, expiresAt: Math.min(record.expiresAt, plan.expiresAt), outcomeNote: 'Current chart levels and market evidence revalidated; awaiting observed entry.' } : record)
   }
   const generatedAt = current.reduce((time, record) => record.instrument === plan.instrument && record.exitAt !== undefined ? Math.max(time, record.exitAt) : time, Math.max(now, plan.generatedAt))
@@ -90,7 +90,7 @@ function validRecord(value: unknown): value is PredictionRecord {
   if (!value || typeof value !== 'object') return false
   const record = value as PredictionRecord
   const d = record.side === 'CALL' ? 1 : -1
-  return typeof record.id === 'string' && record.id.length > 0 && ['early-v1', 'combined-v1'].includes(record.strategyVersion)
+  return typeof record.id === 'string' && record.id.length > 0 && ['early-v1', 'combined-v1', 'technical-v2'].includes(record.strategyVersion)
     && ['Nifty 50', 'Sensex', 'Bank Nifty'].includes(record.instrument)
     && ['FIVE_MINUTE', 'FIFTEEN_MINUTE', 'ONE_HOUR'].includes(record.interval)
     && ['CALL', 'PUT'].includes(record.side) && ['EARLY', 'CONFIRMED'].includes(record.stage)
@@ -117,15 +117,21 @@ function validRecord(value: unknown): value is PredictionRecord {
 }
 
 function validEvidenceSummary(value: PredictionRecord['evidenceSummary']) {
-  return value === undefined || value !== null && typeof value === 'object' && value.version === 'combined-v1'
+  return value === undefined || value !== null && typeof value === 'object' && ['combined-v1', 'technical-v2'].includes(value.version)
     && Number.isFinite(value.coverage) && value.coverage >= 0 && value.coverage <= 100
     && [value.atr14, value.indiaVix].every(item => item === undefined || Number.isFinite(item) && item > 0)
-    && Array.isArray(value.layers) && value.layers.length === 6 && value.layers.every(layer => layer
+    && Array.isArray(value.layers) && value.layers.length === (value.version === 'technical-v2' ? 3 : 6) && value.layers.every(layer => layer
       && typeof layer.name === 'string' && layer.name.length <= 60
       && [layer.weight, layer.coverage, layer.bullish, layer.bearish].every(Number.isFinite)
       && layer.weight > 0 && layer.weight <= 100 && layer.coverage >= 0 && layer.coverage <= 1.000001
       && layer.bullish >= 0 && layer.bearish >= 0 && layer.bullish + layer.bearish <= layer.weight + .000001)
     && value.layers.reduce((sum, layer) => sum + layer.weight, 0) === 100
+    && (value.sentiment === undefined || value.sentiment !== null && typeof value.sentiment === 'object'
+      && [value.sentiment.bullishScore, value.sentiment.bearishScore, value.sentiment.coverage].every(score => Number.isFinite(score) && score >= 0 && score <= 100)
+      && value.sentiment.bullishScore + value.sentiment.bearishScore <= 100
+      && ['BULLISH', 'BEARISH', 'NEUTRAL', 'UNAVAILABLE'].includes(value.sentiment.bias)
+      && ['SUPPORTS', 'OPPOSES', 'MIXED', 'UNAVAILABLE', 'NO_TECHNICAL_DIRECTION'].includes(value.sentiment.alignment)
+      && typeof value.sentiment.reason === 'string')
 }
 
 export function writePredictionHistory(storage: Pick<Storage, 'setItem'>, records: PredictionRecord[]) {

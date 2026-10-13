@@ -71,9 +71,9 @@ test('combined prediction preserves chart levels and snapshots cited news', () =
   assert.equal(result.plan.riskReward, 2)
 })
 
-test('conflicting or mixed news vetoes a new chart setup', () => {
+test('conflicting or mixed news cannot veto a technical chart setup', () => {
   for (const change of [{ bias: 'BEARISH' }, { agreement: 'CONFLICTS_WITH_CHART' }, { agreement: 'MIXED' }, { bias: 'MIXED' }]) {
-    assert.equal(buildEarlyPrediction(analysis(), 'Nifty 50', interval, now, context, { ...outlook, ...change }).side, 'WAIT')
+    assert.equal(buildEarlyPrediction(analysis(), 'Nifty 50', interval, now, context, { ...outlook, ...change }).side, 'CALL')
   }
 })
 
