@@ -8,7 +8,8 @@ require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileMo
 const { analyzeTradingEvidence } = require('../src/analysis/tradingEvidence.ts')
 const { buildEarlyPrediction } = require('../src/analysis/earlyPrediction.ts')
 const { createPredictionRecord, readPredictionHistory, writePredictionHistory, observePredictionTick, observePredictionCandles, syncPredictionRecord, registerConfirmedPrediction, canEnterConfirmedPrediction } = require('../src/analysis/predictionHistory.ts')
-const { getAiPriceAction } = require('../src/api/ai.ts')
+const { analyzeIndicatorTrajectory } = require('../src/analysis/indicatorTrajectory.ts')
+const { getAiPriceAction, newsAssessmentKey, getNewsAssessment } = require('../src/api/ai.ts')
 const markets = require('../src/data/globalMarkets.json')
 const now = Date.parse('2026-10-13T05:00:00Z'), duration = 300000
 const snapshot = data => ({ status: 'AVAILABLE', fetchedAt: new Date(now).toISOString(), sourceUrl: 'https://source.example', data })
@@ -57,19 +58,19 @@ test('aligned CALL and PUT evidence across all input groups confirms and snapsho
 
 test('macro support cannot replace a closed chart pattern or allow forming / historical candles', () => {
   const input = fixture()
-  for (const change of [{ side: 'WAIT', pattern: 'NO_CONFIRMED_PATTERN' }, { latestCandleTime: new Date(now).toISOString() }, { latestCandleTime: new Date(now - 3 * duration).toISOString() }, { analyzedCandles: 10 }]) assert.equal(analyzeTradingEvidence({ ...input, analysis: { ...input.analysis, ...change } }).canConfirm, false)
+  for (const change of [{ side: 'WAIT', pattern: 'NO_CONFIRMED_PATTERN' }, { latestCandleTime: new Date(now).toISOString() }, { latestCandleTime: new Date(now - 2 * duration).toISOString() }, { latestCandleTime: new Date(now - 3 * duration).toISOString() }, { analyzedCandles: 10 }]) assert.equal(analyzeTradingEvidence({ ...input, analysis: { ...input.analysis, ...change } }).canConfirm, false)
   const forming = [new Date(now).toISOString(), 100, 1000, 1, 1000, 1000000]
   assert.deepEqual(analyzeTradingEvidence({ ...input, candles: [...input.candles, forming] }), analyzeTradingEvidence(input))
 })
 
-test('missing, stale and wrong-index context do not rescale scores or confirm chart-only trades', () => {
+test('missing, stale and wrong-index context leave technical confirmation independent of sentiment', () => {
   const input = fixture(), full = analyzeTradingEvidence(input)
   for (const context of [null, { ...input.context, instrument: 'Sensex' }, { ...input.context, retrievedAt: new Date(now - 11 * 60000).toISOString() }]) {
     const result = analyzeTradingEvidence({ ...input, context })
-    assert.equal(result.canConfirm, false)
-    assert(result.coverage <= 44)
-    assert(result.bullishScore < full.bullishScore)
-    assert.match(result.reason, /Insufficient market evidence/)
+    assert.equal(result.canConfirm, true, result.reason)
+    assert.equal(result.coverage, full.coverage - 15)
+    assert(result.bullishScore < full.bullishScore, 'missing OI keeps its fixed technical budget')
+    assert.equal(result.sentiment.bias, 'UNAVAILABLE')
   }
 })
 
@@ -89,18 +90,37 @@ test('expired option chains, stale reports and unmatched news assessments contri
   input.context.inputs.participantPositions.status = 'STALE'
   input.outlook.contextRevision = 'outdated'
   const result = analyzeTradingEvidence(input)
-  assert.equal(result.canConfirm, false)
-  for (const key of ['oi', 'flows', 'news']) assert.equal(result.layers.find(item => item.key === key).coverage, 0)
+  assert.equal(result.canConfirm, true, result.reason)
+  assert.equal(result.layers.find(item => item.key === 'oi').coverage, 0)
+  for (const key of ['flows', 'news']) assert.equal(result.sentiment.layers.find(item => item.key === key).coverage, 0)
 })
 
-test('two strongly opposing external groups block a superficially strong chart setup', () => {
-  const input = fixture(), bearish = fixture(-1)
-  input.context.inputs.openInterest = bearish.context.inputs.openInterest
-  input.context.inputs.global = bearish.context.inputs.global
-  input.context.inputs.giftNifty = bearish.context.inputs.giftNifty
-  const result = analyzeTradingEvidence(input)
-  assert.equal(result.canConfirm, false)
-  assert.match(result.reason, /Strong disagreement/)
+test('opposing sentiment warns without changing technical scores, confirmation or price levels', () => {
+  for (const direction of [1, -1]) {
+    const input = fixture(direction), opposing = fixture(-direction), initial = analyzeTradingEvidence(input)
+    const other = { ...opposing.context, inputs: { ...opposing.context.inputs, openInterest: input.context.inputs.openInterest } }
+    const changed = analyzeTradingEvidence({ ...input, context: other, outlook: opposing.outlook })
+    for (const key of ['bullishScore', 'bearishScore', 'coverage', 'bias', 'canConfirm', 'reason', 'stopLoss']) assert.equal(changed[key], initial[key], key)
+    assert.equal(changed.sentiment.alignment, 'OPPOSES')
+    assert.match(changed.sentiment.reason, /counter-sentiment risk/)
+    for (const outlook of [opposing.outlook, undefined, { ...opposing.outlook, bias: 'MIXED', agreement: 'CONFLICTS_WITH_CHART' }]) {
+      const plan = buildEarlyPrediction(input.analysis, input.instrument, input.interval, now, other, outlook, changed).plan
+      assert.equal(plan.stage, 'CONFIRMED')
+      assert.equal(plan.side, direction === 1 ? 'CALL' : 'PUT')
+      assert.deepEqual([plan.entry, plan.stopLoss, plan.target], [100, input.analysis.stopLoss, input.analysis.target])
+      assert.equal(plan.contextMode, 'TECHNICAL_ONLY')
+    }
+  }
+})
+
+test('OI/PCR contributes to technical confluence and independently to the sentiment reference', () => {
+  const input = fixture(), initial = analyzeTradingEvidence(input)
+  const changed = analyzeTradingEvidence({ ...input, context: { ...input.context, inputs: { ...input.context.inputs, openInterest: fixture(-1).context.inputs.openInterest } } })
+  assert(changed.bullishScore < initial.bullishScore)
+  assert(changed.bearishScore > initial.bearishScore)
+  assert.deepEqual(initial.layers.map(layer => layer.key), ['chart', 'indicators', 'oi'])
+  assert.equal(initial.sentiment.layers.reduce((sum, layer) => sum + layer.weight, 0), 100)
+  assert.equal(initial.sentiment.layers.find(layer => layer.key === 'pcr').bullish, 10)
 })
 
 test('ATR excludes tight invalidation and insufficient reward without manufacturing new targets', () => {
@@ -140,7 +160,7 @@ test('RSI level and slowing momentum can produce opposing evidence inside the sa
   const result = analyzeTradingEvidence(input)
   assert(result.bullishEvidence.some(item => /RSI\(14\): 65/.test(item)))
   assert(result.bearishEvidence.some(item => /RSI\(14\) momentum: -6/.test(item)))
-  assert(result.layers.find(item => item.key === 'indicators').bullish + result.layers.find(item => item.key === 'indicators').bearish <= 22)
+  assert(result.layers.find(item => item.key === 'indicators').bullish + result.layers.find(item => item.key === 'indicators').bearish <= 45)
 })
 
 test('previous-session OI and VIX cannot masquerade as current intraday confirmation inputs', () => {
@@ -165,7 +185,7 @@ test('tiny global moves carry tiny evidence rather than a full bullish/bearish v
   input.context.inputs.global.forEach(quote => quote.data.changePercent *= .001)
   input.context.inputs.giftNifty.data.changePercent *= .001
   const result = analyzeTradingEvidence(input)
-  assert(result.layers.find(item => item.key === 'global').bullish < .1)
+  assert(result.sentiment.layers.find(item => item.key === 'global').bullish < .1)
 })
 
 test('actual saved institutional observations add a bounded multi-session trend and reject future reports', () => {
@@ -173,10 +193,10 @@ test('actual saved institutional observations add a bounded multi-session trend 
   const reports = Array.from({ length: 5 }, (_, index) => ({ asOf: new Date(now - index * 86400000).toISOString(), fiiCash: -100, diiCash: 80, netFlow: -20, unit: 'INR_CRORE' }))
   const result = analyzeTradingEvidence({ ...input, flowHistory: [...reports, { ...reports[0], asOf: new Date(now + 86400000).toISOString() }] })
   assert.equal(result.observedFlowReports.length, 5)
-  const flows = result.layers.find(layer => layer.key === 'flows'), previous = initial.layers.find(layer => layer.key === 'flows')
+  const flows = result.sentiment.layers.find(layer => layer.key === 'flows'), previous = initial.sentiment.layers.find(layer => layer.key === 'flows')
   assert(flows.coverage > previous.coverage)
   assert(flows.bearish > previous.bearish)
-  assert(result.bearishEvidence.some(item => /selling in 5\/5/.test(item)))
+  assert(result.sentiment.bearishEvidence.some(item => /selling in 5\/5/.test(item)))
 })
 
 test('entry pauses during reassessment, continues observing stops and resumes on a new confirmed quote', () => {
@@ -212,7 +232,7 @@ test('new strategy retires legacy unentered candidates without reopening an alre
   const input = fixture(), evidence = analyzeTradingEvidence(input)
   const legacy = buildEarlyPrediction(input.analysis, input.instrument, input.interval, now).plan
   const plan = buildEarlyPrediction(input.analysis, input.instrument, input.interval, now, input.context, input.outlook, evidence).plan
-  assert.equal(plan.strategyVersion, 'combined-v1')
+  assert.equal(plan.strategyVersion, 'technical-v2')
   const pending = registerConfirmedPrediction([createPredictionRecord(legacy)], plan, now)
   assert.deepEqual(pending.map(record => record.status), ['EXPIRED', 'PENDING'])
   const completed = observePredictionTick(observePredictionTick(createPredictionRecord(legacy), 100, now + 1000), 120, now + 2000)
@@ -243,6 +263,96 @@ test('AI request includes location, pattern, all chart indicator readings and we
   assert(body.length < 10000)
   assert.equal(parsed.candles.length, 40)
   for (const key of ['structure', 'structureEvent', 'location', 'candleBehavior', 'pattern', 'setup', 'rsi14', 'atr14']) assert.equal(parsed.rules[key], input.analysis[key])
-  assert.equal(parsed.rules.combinedEvidence.layers.length, 6)
-  assert.equal(parsed.rules.combinedEvidence.bullishScore, evidence.bullishScore)
+  assert.equal(parsed.rules.technicalEvidence.layers.length, 3)
+  assert.equal(parsed.rules.technicalEvidence.bullishScore, evidence.bullishScore)
+  assert.equal(parsed.rules.marketSentiment.role, 'REFERENCE_ONLY')
+  assert.equal(parsed.rules.marketSentiment.bullishScore, evidence.sentiment.bullishScore)
+})
+
+test('technical confirmation requires warmed-up indicators even when sentiment is strong', () => {
+  const input = fixture()
+  for (const change of [{ exponentialMovingAverage50: undefined }, { rsi14: undefined }, { supertrendDirection: undefined }]) {
+    const result = analyzeTradingEvidence({ ...input, analysis: { ...input.analysis, ...change } })
+    assert.equal(result.canConfirm, false)
+    assert.match(result.reason, /warm up/)
+  }
+  assert.equal(analyzeTradingEvidence({ ...input, candles: input.candles.slice(-49) }).canConfirm, false)
+})
+
+test('completed-bar EMA turns and EMA20/50 crossovers are detected in both directions without lookahead', () => {
+  for (const direction of [1, -1]) {
+    const closes = [...Array.from({ length: 70 }, (_, i) => 110 - i * .15), ...Array.from({ length: 60 }, (_, i) => 99.65 + i * .8)].map(value => direction === 1 ? value : 220 - value)
+    let sawTurn = false, sawCross = false
+    for (let length = 60; length <= closes.length; length++) {
+      const candles = closes.slice(0, length).map((close, i) => [new Date(now - (length - i) * duration).toISOString(), close, close + .2, close - .2, close, 0])
+      const result = analyzeIndicatorTrajectory(candles, 'FIVE_MINUTE', now)
+      if (result.turns.some(turn => /EMA\(20\) turned/.test(turn.name))) {
+        assert(result.turns.filter(turn => /turned/.test(turn.name)).every(turn => turn.side === (direction === 1 ? 'CALL' : 'PUT')))
+        sawTurn = true
+      }
+      if (result.turns.some(turn => /EMA\(20\/50\) crossed/.test(turn.name))) {
+        sawCross = true
+        assert.equal(result.turns.find(turn => /EMA\(20\/50\) crossed/.test(turn.name)).side, direction === 1 ? 'CALL' : 'PUT')
+        assert.deepEqual(analyzeIndicatorTrajectory([...candles, [new Date(now).toISOString(), 100, 1000, 1, 1000, 10000]], 'FIVE_MINUTE', now), result)
+        const gap = candles.map((candle, i) => i === candles.length - 2 ? [new Date(Date.parse(candle[0]) - duration).toISOString(), ...candle.slice(1)] : candle)
+        const interrupted = analyzeIndicatorTrajectory(gap, 'FIVE_MINUTE', now)
+        assert.equal(interrupted.turns.length, 0)
+        assert.equal(interrupted.slopeVote, undefined)
+      }
+    }
+    assert(sawTurn, 'must observe a real EMA trajectory reversal')
+    assert(sawCross, 'must observe a real EMA20/50 crossover')
+  }
+})
+
+test('VWAP session reset cannot become a price/VWAP crossover', () => {
+  const end = Date.parse('2026-10-13T18:30:00Z')
+  const candles = Array.from({ length: 80 }, (_, i) => [new Date(end - (79 - i) * duration).toISOString(), 100, 101, 99, 100, 100])
+  candles[78] = [candles[78][0], 99, 100, 98, 99, 100]
+  candles[79] = [candles[79][0], 90, 91, 86, 90, 100]
+  assert(!analyzeIndicatorTrajectory(candles, 'FIVE_MINUTE', end + duration).turns.some(turn => /Price \/ VWAP/.test(turn.name)))
+})
+
+test('new technical records preserve separate sentiment and legacy combined records remain readable', () => {
+  const input = fixture(), evidence = analyzeTradingEvidence(input)
+  const plan = buildEarlyPrediction(input.analysis, input.instrument, input.interval, now, input.context, input.outlook, evidence).plan
+  assert.equal(plan.evidenceSummary.sentiment.alignment, 'SUPPORTS')
+  const legacy = { ...plan, id: plan.id.replace('technical-v2', 'combined-v1'), strategyVersion: 'combined-v1', evidenceSummary: { version: 'combined-v1', coverage: 90, atr14: 2, layers: Array.from({ length: 6 }, (_, i) => ({ name: `Legacy ${i}`, weight: i < 4 ? 17 : 16, coverage: .9, bullish: 10, bearish: 0 })) } }
+  const records = [createPredictionRecord(legacy), createPredictionRecord(plan)]
+  let stored
+  writePredictionHistory({ setItem: (_, value) => { stored = value } }, records)
+  assert.deepEqual(readPredictionHistory({ getItem: () => stored }), records)
+  const invalid = structuredClone(records); invalid[1].evidenceSummary.sentiment.bullishScore = 101
+  assert.throws(() => readPredictionHistory({ getItem: () => JSON.stringify({ version: 1, records: invalid }) }), /invalid format/)
+  const booked = observePredictionTick(observePredictionTick(createPredictionRecord(legacy), 100, now + 1000), 120, now + 2000)
+  assert.deepEqual(registerConfirmedPrediction([booked], plan, now + 2000), [booked], 'strategy change cannot reopen a traded signal')
+})
+
+test('automatic news key ignores macro revisions but changes with headline corrections and source outages', () => {
+  const input = fixture(), before = newsAssessmentKey(input.context, now)
+  const changed = structuredClone(input.context)
+  changed.revision = 'changed-inputs'; changed.inputs.openInterest.data.pcr = .2; changed.inputs.global[0].data.changePercent = -4
+  assert.equal(newsAssessmentKey(changed, now), before)
+  changed.articles[0].title = 'Corrected headline'
+  assert.notEqual(newsAssessmentKey(changed, now), before)
+  const stale = structuredClone(input.context); stale.feeds[0].status = 'STALE'
+  assert.notEqual(newsAssessmentKey(stale, now), before)
+})
+
+test('AI quota failures use concise messages and malformed news responses cannot enter the evidence pipeline', async () => {
+  const input = fixture(), original = global.fetch
+  try {
+    global.fetch = async () => new Response(JSON.stringify({ message: 'Gemini API request failed: You exceeded your current quota. Billing details and more verbose content.' }), { status: 429 })
+    await assert.rejects(getAiPriceAction(input.instrument, input.interval, input.candles, input.analysis), error => error.message === 'Gemini quota reached. Technical evaluation continues.')
+    global.fetch = async () => new Response(JSON.stringify({ marketContext: input.context, marketOutlook: { contextRevision: 'wrong', articleSentiments: {} }, providerStatus: { state: 'AVAILABLE' } }))
+    await assert.rejects(getNewsAssessment(input.instrument), /News assessment is unavailable/)
+  } finally { global.fetch = original }
+})
+
+test('standalone cached news is snapshotted as reference without requiring chart agreement', () => {
+  const input = fixture(), evidence = analyzeTradingEvidence(input)
+  const prediction = buildEarlyPrediction(input.analysis, input.instrument, input.interval, now, input.context, { ...input.outlook, agreement: 'INSUFFICIENT' }, evidence)
+  assert.equal(prediction.plan.stage, 'CONFIRMED')
+  assert.match(prediction.plan.newsSummary, /Sentiment reference only/)
+  assert.equal(prediction.plan.newsEvidence.length, 1)
 })

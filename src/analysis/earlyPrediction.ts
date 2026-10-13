@@ -9,7 +9,7 @@ export type PredictionPlan = {
   interval: PriceActionInterval
   side: 'CALL' | 'PUT'
   stage: 'EARLY' | 'CONFIRMED'
-  strategyVersion: 'early-v1' | 'combined-v1'
+  strategyVersion: 'early-v1' | 'combined-v1' | 'technical-v2'
   signalCandleTime: string
   generatedAt: number
   expiresAt: number
@@ -26,13 +26,13 @@ export type PredictionPlan = {
   newsSummary: string
   newsEvidence: MarketArticle[]
   coverage: string[]
-  evidenceSummary?: { version: 'combined-v1'; coverage: number; atr14?: number; indiaVix?: number; layers: Array<{ name: string; weight: number; coverage: number; bullish: number; bearish: number }> }
+  evidenceSummary?: { version: 'combined-v1' | 'technical-v2'; coverage: number; atr14?: number; indiaVix?: number; layers: Array<{ name: string; weight: number; coverage: number; bullish: number; bearish: number }>; sentiment?: Pick<TradingEvidence['sentiment'], 'bullishScore' | 'bearishScore' | 'coverage' | 'bias' | 'alignment' | 'reason'> }
 }
 
 export type EarlyPrediction = { side: 'WAIT'; reason: string } | { side: 'CALL' | 'PUT'; reason: string; plan: PredictionPlan }
 const round = (price: number) => Math.round(price * 100) / 100
 
-/** News can confirm or veto a setup; all numerical levels come from completed chart data. */
+/** Technical evidence confirms a setup. News is recorded as reference and never vetoes entry. */
 export function buildEarlyPrediction(analysis: PriceActionAnalysis, instrument: string, interval: PriceActionInterval, now: number, context?: MarketContext | null, outlook?: MarketOutlook, evidence?: TradingEvidence): EarlyPrediction {
   const wait = (reason: string): EarlyPrediction => ({ side: 'WAIT', reason })
   const candleTime = Date.parse(analysis.latestCandleTime || '')
@@ -46,10 +46,7 @@ export function buildEarlyPrediction(analysis: PriceActionAnalysis, instrument: 
     && outlook.evidenceIds.length > 0 && outlook.evidenceIds.every(id => context.articles.some(article => article.id === id
       && context.feeds.some(feed => feed.category === article.category && feed.status === 'AVAILABLE')
       && now - Date.parse(article.publishedAt) <= 48 * 3_600_000 && Date.parse(article.publishedAt) <= now))
-    && outlook.bias !== 'UNAVAILABLE' && outlook.agreement !== 'INSUFFICIENT'
-  if (usableOutlook && (outlook.bias === 'MIXED' || outlook.agreement === 'MIXED' || outlook.agreement === 'CONFLICTS_WITH_CHART' || (outlook.bias !== 'NEUTRAL' && outlook.bias !== bias))) {
-    return wait('Chart and news disagree or are mixed. Waiting for alignment before issuing a new call.')
-  }
+    && outlook.bias !== 'UNAVAILABLE' && (Boolean(evidence) || outlook.agreement !== 'INSUFFICIENT')
   const newsAligned = Boolean(usableOutlook && outlook?.bias === bias && outlook.agreement === 'SUPPORTS_CHART')
   const confirmed = analysis.side !== 'WAIT'
   if (evidence && (evidence.instrument !== instrument || evidence.interval !== interval || evidence.asOf !== analysis.latestCandleTime || !evidence.canConfirm)) return wait(evidence.reason)
@@ -76,15 +73,15 @@ export function buildEarlyPrediction(analysis: PriceActionAnalysis, instrument: 
   const roundedEntry = round(entry), roundedStop = round(stopLoss), roundedTarget = round(target)
   const riskReward = ((roundedTarget - roundedEntry) * direction) / ((roundedEntry - roundedStop) * direction)
   if (!Number.isFinite(riskReward) || riskReward < 1.5) return wait('The chart target offers less than 1.5:1 reward to risk. Waiting for a better setup.')
-  const reason = `${confirmed ? 'Confirmed chart setup' : 'Early conditional breakout'}; ${evidence ? `combined evidence ${side === 'CALL' ? evidence.bullishScore : evidence.bearishScore}/100 with ${evidence.coverage}% coverage` : newsAligned ? 'available news supports the chart direction' : 'technical-only: news alignment is unavailable or neutral'}. Entry must be reached before the call becomes active.`
+  const reason = `${confirmed ? 'Confirmed chart setup' : 'Early conditional breakout'}; ${evidence ? `technical evidence ${side === 'CALL' ? evidence.bullishScore : evidence.bearishScore}/100 with ${evidence.coverage}% coverage` : 'technical confirmation; sentiment is reference only'}. Entry must be reached before the call becomes active.`
   return { side, reason, plan: {
-    id: `${evidence ? 'combined-v1' : 'early-v1'}:${instrument}:${interval}:${analysis.latestCandleTime}:${side}`,
-    strategyVersion: evidence ? 'combined-v1' : 'early-v1', instrument, interval, side, stage: confirmed ? 'CONFIRMED' : 'EARLY', signalCandleTime: analysis.latestCandleTime!,
+    id: `${evidence?.version ?? 'early-v1'}:${instrument}:${interval}:${analysis.latestCandleTime}:${side}`,
+    strategyVersion: evidence?.version ?? 'early-v1', instrument, interval, side, stage: confirmed ? 'CONFIRMED' : 'EARLY', signalCandleTime: analysis.latestCandleTime!,
     generatedAt: now, expiresAt: now + 3 * candleIntervalMs(interval), entry: roundedEntry, stopLoss: roundedStop, target: roundedTarget, riskReward: round(riskReward), targetBasis, reason,
-    contextMode: newsAligned ? 'NEWS_ALIGNED' : 'TECHNICAL_ONLY', bullishScore: evidence?.bullishScore ?? analysis.bullishScore, bearishScore: evidence?.bearishScore ?? analysis.bearishScore,
+    contextMode: !evidence && newsAligned ? 'NEWS_ALIGNED' : 'TECHNICAL_ONLY', bullishScore: evidence?.bullishScore ?? analysis.bullishScore, bearishScore: evidence?.bearishScore ?? analysis.bearishScore,
     technicalEvidence: [...(evidence ? side === 'CALL' ? evidence.bullishEvidence : evidence.bearishEvidence : side === 'CALL' ? analysis.bullishEvidence : analysis.bearishEvidence)],
-    ...(evidence ? { evidenceSummary: { version: evidence.version, coverage: evidence.coverage, atr14: evidence.atr14, indiaVix: evidence.indiaVix?.price, layers: evidence.layers.map(({ name, weight, coverage, bullish, bearish }) => ({ name, weight, coverage, bullish, bearish })) } } : {}),
-    newsSummary: usableOutlook ? outlook!.summary : 'News interpretation unavailable; chart-only setup.',
+    ...(evidence ? { evidenceSummary: { version: evidence.version, coverage: evidence.coverage, atr14: evidence.atr14, indiaVix: evidence.indiaVix?.price, layers: evidence.layers.map(({ name, weight, coverage, bullish, bearish }) => ({ name, weight, coverage, bullish, bearish })), sentiment: { bullishScore: evidence.sentiment.bullishScore, bearishScore: evidence.sentiment.bearishScore, coverage: evidence.sentiment.coverage, bias: evidence.sentiment.bias, alignment: evidence.sentiment.alignment, reason: evidence.sentiment.reason } } } : {}),
+    newsSummary: usableOutlook ? `Sentiment reference only: ${outlook!.summary}` : 'News interpretation unavailable; technical confirmation is independent.',
     newsEvidence: usableOutlook ? context!.articles.filter(article => outlook!.evidenceIds.includes(article.id)).map(({ id, title, url, publisher, publishedAt, category, matchedCompanies }) => ({ id, title, url, publisher, publishedAt, category, matchedCompanies: [...matchedCompanies] })) : [],
     coverage: context?.instrument === instrument ? context.feeds.map(feed => `${feed.category}: ${feed.status}`) : ['Public market context unavailable'],
   } }

@@ -13,7 +13,7 @@ export function headlineTopic(article: MarketArticle) {
 }
 
 function impact(item?: Sentiment) {
-  if (!item || item.sentiment === 'UNCLEAR') return undefined
+  if (!item || item.sentiment === 'UNCLEAR' || item.scope === 'TEXT_ONLY' || item.source === 'LOCAL_FINBERT') return undefined
   if (item.impactScore === undefined) return item.sentiment === 'POSITIVE' ? 1 : item.sentiment === 'NEGATIVE' ? -1 : item.sentiment === 'NEUTRAL' ? 0 : undefined
   const score = item.impactScore
   return Number.isInteger(score) && (item.sentiment === 'POSITIVE' ? score === 1 || score === 2
@@ -34,10 +34,12 @@ export function buildNewsEvidence(context: MarketContext | null, outlook: Market
   }).sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt)).map(article => {
     const eligible = current && context!.feeds.some(feed => feed.category === article.category && feed.status === 'AVAILABLE')
       && (article.category !== 'companies' || context!.constituents.status === 'AVAILABLE')
-    const assessment = eligible ? assessments.get(article.id) : undefined
+    const saved = eligible ? assessments.get(article.id) : undefined
+    const assessmentAge = saved?.assessedAt ? now - Date.parse(saved.assessedAt) : undefined
+    const assessment = assessmentAge === undefined || Number.isFinite(assessmentAge) && assessmentAge >= -60_000 && assessmentAge <= 24 * 3600_000 ? saved : undefined
     const score = impact(assessment)
-    return { article, topic: headlineTopic(article), eligible, score, reason: assessment?.reason,
-      status: !eligible ? 'STALE' : score !== undefined ? score > 0 ? 'POSITIVE' : score < 0 ? 'NEGATIVE' : 'NEUTRAL' : assessment?.sentiment === 'UNCLEAR' ? 'UNCLEAR' : 'UNRATED' }
+    return { article, topic: headlineTopic(article), eligible, score, reason: assessment?.reason, source: assessment?.source, assessedAt: assessment?.assessedAt,
+      status: !eligible ? 'STALE' : assessment?.scope === 'TEXT_ONLY' || assessment?.source === 'LOCAL_FINBERT' ? `TEXT_${assessment.sentiment}` : score !== undefined ? score > 0 ? 'POSITIVE' : score < 0 ? 'NEGATIVE' : 'NEUTRAL' : assessment?.sentiment === 'UNCLEAR' ? 'UNCLEAR' : 'UNRATED' }
   })
   const scored = headlines.filter(headline => headline.score !== undefined)
   return { headlines, articles: headlines.filter(headline => headline.eligible).map(headline => headline.article), currentOutlook,

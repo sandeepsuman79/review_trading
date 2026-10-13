@@ -634,6 +634,8 @@ input, textarea, select { min-width: 0; max-width: 100%; }
 .agent-trade-summary > :last-child { text-align: right; }
 .agent-trade-summary strong { display: block; font-size: 25px; line-height: 1.5; font-variant-numeric: tabular-nums; }
 .agent-trade-note, .agent-analysis-time, .agent-score-note { color: var(--text-secondary); font-size: 11px; line-height: 1.6; }
+.ai-status-message { margin: 8px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.ai-status-message.is-error { color: #b42318; }
 .agent-evidence-checks { margin-top: 12px; color: var(--text-secondary); font-size: 11px; line-height: 1.6; }
 .agent-evidence-checks summary { cursor: pointer; font-weight: 600; }
 .agent-evidence-checks ul { padding-left: 18px; }
@@ -641,7 +643,7 @@ input, textarea, select { min-width: 0; max-width: 100%; }
 .agent-evidence-table table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .agent-evidence-table th, .agent-evidence-table td { padding: 7px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .agent-evidence-columns ul { max-height: 300px; overflow-y: auto; overscroll-behavior-y: contain; }
-.agent-market-view { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.agent-market-view, .agent-sentiment-view { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
 .agent-market-view-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
 .agent-market-view-heading > span { color: var(--text-secondary); font-size: 11px; font-weight: 600; }
 .agent-analysis-time { margin-top: 3px; }

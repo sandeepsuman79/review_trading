@@ -51,7 +51,7 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
   const progress = plan && quote !== undefined && plan.target !== plan.stopLoss ? Math.max(0, Math.min(100, (quote - plan.stopLoss) / (plan.target - plan.stopLoss) * 100)) : undefined
   const marketBias = evidence?.bias ?? analysis.earlyBias
   const marketTone = marketBias === 'BULLISH' ? 'bullish' : marketBias === 'BEARISH' ? 'bearish' : 'neutral'
-  const direction = marketBias === 'BULLISH' ? 'BUY' : marketBias === 'BEARISH' ? 'SELL' : 'NEUTRAL'
+  const direction = marketBias === 'BULLISH' ? 'CALL / CE' : marketBias === 'BEARISH' ? 'PUT / PE' : 'NEUTRAL'
   const marketView = marketBias === 'NEUTRAL' ? 'NEUTRAL' : evidence ? evidence.canConfirm && 'plan' in prediction && prediction.plan.stage === 'CONFIRMED' ? `CONFIRMED ${direction}` : `EARLY ${direction}` : analysis.earlyStage === 'TRIGGER' ? `${direction} TRIGGER` : analysis.earlyStage === 'CONFIRMED' ? `CONFIRMED ${direction}` : `EARLY ${direction}`
   const bullishScore = evidence?.bullishScore ?? analysis.bullishScore, bearishScore = evidence?.bearishScore ?? analysis.bearishScore
   const bullishEvidence = evidence?.bullishEvidence ?? analysis.bullishEvidence, bearishEvidence = evidence?.bearishEvidence ?? analysis.bearishEvidence
@@ -87,13 +87,13 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
         <div><span>{activeTrade ? 'Unrealized profit / loss' : 'Trade profit / loss'}</span><strong className={points !== undefined ? points >= 0 ? 'agent-text-bullish' : 'agent-text-bearish' : ''}>{points === undefined ? '—' : `${points > 0 ? '+' : ''}${price(points)} pts`}</strong><small>{activeTrade ? live ? 'Index points · Live quote' : 'Index points · Last available quote' : 'Available after confirmed entry'}</small></div>
         <div><span>Reward : risk</span><strong>{plan ? `${plan.riskReward.toFixed(2)} : 1` : '—'}</strong><small>Based on planned index levels</small></div>
       </div>}
-      {plan && <p className="agent-trade-note">{activeTrade ? 'Agent-managed exit · One live trade per index' : plan.stage === 'CONFIRMED' ? `Conditional entry · Entry expires after 3 × ${timeframe(plan.interval)} · Trade tracking starts when entry is observed` : 'Early analysis only · Not recorded as a trade'} · {plan.evidenceSummary ? 'Chart + available market evidence' : plan.contextMode === 'NEWS_ALIGNED' ? 'Chart + supporting public news' : 'Chart evidence; news alignment unavailable or neutral'}<br />{plan.targetBasis}</p>}
+      {plan && <p className="agent-trade-note">{activeTrade ? 'Agent-managed exit · One live trade per index' : plan.stage === 'CONFIRMED' ? 'Conditional entry · Current setup must remain confirmed · Trade tracking starts when entry is observed' : 'Early analysis only · Not recorded as a trade'} · {plan.strategyVersion === 'technical-v2' ? 'Technical confirmation · Sentiment is reference only' : 'Recorded under the previous strategy'}<br />{plan.targetBasis}</p>}
 
       <div className="agent-market-view">
-        <div className="agent-market-view-heading"><strong className={`agent-text-${marketTone}`}>Market view: {marketView}</strong><span>· {strength}</span></div>
+        <div className="agent-market-view-heading"><strong className={`agent-text-${marketTone}`}>Technical analysis: {marketView}</strong><span>· {strength}</span></div>
         <p className="agent-analysis-time">{timeframe(interval)} analysis · {analysis.analyzedCandles} completed candles · Forming candle excluded{historical ? ' · Historical snapshot' : ''}</p>
         <div className="agent-evidence-scores"><span className="agent-text-bullish">Bullish score: <strong>{bullishScore}/100</strong></span><span className="agent-text-bearish">Bearish score: <strong>{bearishScore}/100</strong></span></div>
-        <p className="agent-score-note">Weighted evidence score, not probability.{evidence && ` Available evidence: ${evidence.coverage}%. Missing inputs do not increase other weights.`}</p>
+        <p className="agent-score-note">Technical evidence scores, not probabilities.{evidence && ` Technical coverage: ${evidence.coverage}%.`} Sentiment cannot create or veto a confirmed trade.</p>
         <div className="agent-evidence-columns">
           {([['Bullish evidence', bullishEvidence, 'bullish'], ['Bearish evidence', bearishEvidence, 'bearish']] as const).map(([label, items, evidenceTone]) => <div key={label}><strong className={`agent-text-${evidenceTone}`}>{label}</strong>{items.length ? <ul>{items.map(item => <li key={item}>{item}</li>)}</ul> : <p>None currently</p>}</div>)}
         </div>
@@ -101,9 +101,21 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
       <dl className="agent-structure-details">{details.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
       {evidence && <details className="agent-evidence-checks"><summary>Inputs & confirmation checks · {evidence.coverage}% available</summary>
         <div className="agent-evidence-table"><table><thead><tr><th>Input</th><th>Weight</th><th>Available</th><th>Bullish</th><th>Bearish</th></tr></thead><tbody>{evidence.layers.map(layer => <tr key={layer.key}><th>{layer.name}</th><td>{layer.weight}%</td><td>{Math.round(layer.coverage * 100)}%</td><td>{layer.bullish.toFixed(1)}</td><td>{layer.bearish.toFixed(1)}</td></tr>)}</tbody></table></div>
-        <p>Confirmation needs a completed chart setup, ≥60% evidence coverage, ≥{evidence.requiredScore} directional support, a ≥20-point lead and at least two external evidence groups. ATR and India VIX provide risk checks.</p>
+        <p>Confirmation needs a completed chart setup, warmed-up EMA(20/50), RSI and Supertrend, ≥70% technical coverage, ≥{evidence.requiredScore} directional support and a ≥20-point lead. ATR and India VIX provide risk checks. Turns and crossovers add evidence; they do not confirm a trade on their own.</p>
         <ul>{evidence.riskNotes.map(note => <li key={note}>{note}</li>)}{evidence.missing.map(item => <li key={item}>Unavailable: {item}</li>)}</ul>
       </details>}
+      {evidence && <section className="agent-sentiment-view" aria-label="Market sentiment reference">
+        <div className="agent-market-view-heading"><strong className={`agent-text-${evidence.sentiment.bias === 'BULLISH' ? 'bullish' : evidence.sentiment.bias === 'BEARISH' ? 'bearish' : 'neutral'}`}>Market sentiment: {evidence.sentiment.bias}</strong><span>{evidence.sentiment.alignment.replace(/_/g, ' ')}</span></div>
+        <div className="agent-evidence-scores"><span className="agent-text-bullish">Bullish: <strong>{evidence.sentiment.bullishScore}/100</strong></span><span className="agent-text-bearish">Bearish: <strong>{evidence.sentiment.bearishScore}/100</strong></span></div>
+        <p className="agent-score-note">FII/DII · Indian & global news · Global markets · PCR reference. Sentiment coverage: {evidence.sentiment.coverage}%. Evidence ratings, not probabilities.</p>
+        <p className={evidence.sentiment.alignment === 'OPPOSES' ? 'agent-text-bearish' : 'agent-score-note'} role="status">{evidence.sentiment.reason}</p>
+        <details className="agent-evidence-checks"><summary>Sentiment inputs · Reference only</summary>
+          <div className="agent-evidence-table"><table><thead><tr><th>Input</th><th>Weight</th><th>Available</th><th>Bullish</th><th>Bearish</th></tr></thead><tbody>{evidence.sentiment.layers.map(layer => <tr key={layer.key}><th>{layer.name}</th><td>{layer.weight}%</td><td>{Math.round(layer.coverage * 100)}%</td><td>{layer.bullish.toFixed(1)}</td><td>{layer.bearish.toFixed(1)}</td></tr>)}</tbody></table></div>
+          <p>PCR is shared with technical analysis; sentiment never adds a second PCR vote to the technical score.</p>
+          <div className="agent-evidence-columns">{([['Bullish sentiment', evidence.sentiment.bullishEvidence, 'bullish'], ['Bearish sentiment', evidence.sentiment.bearishEvidence, 'bearish']] as const).map(([label, items, sentimentTone]) => <div key={label}><strong className={`agent-text-${sentimentTone}`}>{label}</strong>{items.length ? <ul>{items.map((item, index) => <li key={`${index}:${item}`}>{item}</li>)}</ul> : <p>None currently</p>}</div>)}</div>
+          {evidence.sentiment.missing.length > 0 && <ul>{evidence.sentiment.missing.map(item => <li key={item}>Unavailable: {item}</li>)}</ul>}
+        </details>
+      </section>}
     </div>
   )
 }

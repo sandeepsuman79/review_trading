@@ -49,3 +49,17 @@ test('display topics identify policy, currency, commodities and earnings without
   assert.equal(headlineTopic(article('a', 'companies')), 'Corporate')
   assert.equal(headlineTopic(article('a', 'global')), 'Global')
 })
+
+test('local text sentiment is visibly provisional and cannot contribute to market-impact scores', () => {
+  const result = buildNewsEvidence(context(), { contextRevision: 'r1', articleSentiments: [{ articleId: 'a', sentiment: 'POSITIVE', impactScore: 2, source: 'LOCAL_FINBERT', scope: 'TEXT_ONLY' }] }, now)
+  assert.equal(result.score, undefined)
+  assert.equal(result.assessed, 0)
+  assert.equal(result.headlines[0].status, 'TEXT_POSITIVE')
+})
+
+test('expired and future cached assessments cannot be made fresh by rebinding the current context', () => {
+  for (const assessedAt of [new Date(now - 25 * 3600000).toISOString(), new Date(now + 120000).toISOString(), 'invalid']) {
+    const result = buildNewsEvidence(context(), { contextRevision: 'r1', articleSentiments: [{ articleId: 'a', sentiment: 'POSITIVE', impactScore: 2, source: 'GEMINI', scope: 'MARKET_IMPACT', assessedAt }] }, now)
+    assert.equal(result.score, undefined)
+  }
+})

@@ -9,6 +9,7 @@ import { candleBucketTime, completedCandles, historicalCandleRequestStart, isFre
 import { LiveCandleBook } from '../analysis/liveCandleBook'
 import { resolveIndiaVixInstrument, type IndiaVixInstrument } from '../analysis/indiaVix'
 import MarketContextPanel from '../components/MarketContextPanel'
+import { useNewsAssessment } from '../hooks/useNewsAssessment'
 import { useMarketContext } from '../hooks/useMarketContext'
 import { useIndiaVix } from '../hooks/useIndiaVix'
 import ErrorToast from '../components/ErrorToast'
@@ -122,9 +123,8 @@ function formatCountdown(milliseconds: number) {
 function PriceActionAgent({ candles, openingCandles, interval, now, instrument, activeTrade, tick, streamConnected, indiaVix, onError, onPrediction, onConfirmation }: { candles: AngelOneCandle[]; openingCandles: AngelOneCandle[]; interval: ChartInterval; now: number; instrument: string; activeTrade?: PredictionRecord; tick?: AngelOneStreamTick; streamConnected: boolean; indiaVix?: IndiaVixSnapshot; onError: (message: string) => void; onPrediction: (plan: PredictionPlan) => void; onConfirmation: (instrument: string, plan: PredictionPlan | undefined, now: number) => void }) {
   const market = useMarketContext(instrument)
   useEffect(() => { if (market.error) onError(market.error) }, [market.error, onError])
-  const marketRevision = market.context?.revision
+  const news = useNewsAssessment(market.context, now)
   const { history: flowHistory } = useInstitutionalFlows(market.context?.inputs?.institutional)
-  const flowRevision = JSON.stringify(flowHistory)
   const snapshot = completedCandles(candles, interval, now)
   const analysis: PriceActionAnalysis = analyzePriceAction(snapshot, interval, now)
   const snapshotKey = JSON.stringify(snapshot)
@@ -133,7 +133,7 @@ function PriceActionAgent({ candles, openingCandles, interval, now, instrument, 
   const [aiError, setAiError] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
   const [assessedSnapshot, setAssessedSnapshot] = useState('')
-  const assessmentKey = `${instrument}:${interval}:${snapshotKey}:${marketRevision || 'no-context'}:${flowRevision}`
+  const assessmentKey = `${instrument}:${interval}:${snapshotKey}`
   const requestController = useRef<AbortController | null>(null)
   const requestAiRef = useRef<() => Promise<void>>(async () => {})
   requestAiRef.current = async () => {
@@ -148,12 +148,12 @@ function PriceActionAgent({ candles, openingCandles, interval, now, instrument, 
     setAiError('')
     try {
       const preliminaryEvidence = analyzeTradingEvidence({ analysis, candles: snapshot, interval, instrument, context: market.context, indiaVix, flowHistory, now })
-      const result = await getAiPriceAction(instrument, interval, snapshot, analysis, controller.signal, Boolean(market.context), preliminaryEvidence)
+      const result = await getAiPriceAction(instrument, interval, snapshot, analysis, controller.signal, false, preliminaryEvidence)
       if (result.asOf !== analysis.latestCandleTime) throw new Error('AI analysis returned a different chart timestamp. Using the current chart only.')
       if (!controller.signal.aborted) { setAiAnalysis(result); setAssessedSnapshot(assessmentKey); setAiError('') }
     } catch (error) {
       if (!controller.signal.aborted || timedOut) {
-        setAiError(timedOut ? 'AI news interpretation timed out. The early agent continues with chart evidence.' : error instanceof Error ? error.message : 'AI analysis failed.')
+        setAiError(timedOut ? 'Optional AI commentary timed out. Technical evaluation continues.' : error instanceof Error ? error.message : 'AI analysis failed.')
         setAssessedSnapshot(assessmentKey)
       }
     } finally {
@@ -166,44 +166,43 @@ function PriceActionAgent({ candles, openingCandles, interval, now, instrument, 
     setAiAnalysis(null)
     setAiError('')
     setAiLoading(false)
-    if (analysis.analyzedCandles >= 25 && market.loaded) void requestAiRef.current()
+    setAssessedSnapshot('')
     return () => requestController.current?.abort()
-  }, [instrument, interval, snapshotKey, analysis.analyzedCandles, marketRevision, market.loaded, chartCurrent, flowRevision])
+  }, [instrument, interval, snapshotKey])
 
-  const ready = market.loaded && !market.loading && !aiLoading && assessedSnapshot === assessmentKey && Boolean(aiAnalysis || aiError)
-  const displayContext = ready && aiAnalysis?.marketContext?.revision !== market.context?.revision
-    ? aiAnalysis?.marketContext || market.context : market.context
-  const evidence = analyzeTradingEvidence({ analysis, candles: snapshot, interval, instrument, context: displayContext, outlook: ready ? aiAnalysis?.marketOutlook : undefined, indiaVix, flowHistory, now })
-  const prediction: EarlyPrediction = ready
-    ? buildEarlyPrediction(analysis, instrument, interval, now, displayContext, aiAnalysis?.marketOutlook, evidence)
-    : { side: 'WAIT', reason: analysis.analyzedCandles < 25 ? 'Waiting for at least 25 completed candles.' : 'Checking completed chart data and available market context…' }
+  const ready = !aiLoading && assessedSnapshot === assessmentKey && Boolean(aiAnalysis || aiError)
+  const displayContext = market.context
+  const aiStatus = ready ? aiAnalysis?.providerStatus ?? news.providerStatus : news.providerStatus
+  const aiCoolingDown = Boolean(aiStatus?.retryAt && Date.parse(aiStatus.retryAt) > now)
+  const aiMessage = aiError || aiStatus?.message || news.message
+  const evidence = analyzeTradingEvidence({ analysis, candles: snapshot, interval, instrument, context: displayContext, outlook: news.outlook, indiaVix, flowHistory, now })
+  const prediction: EarlyPrediction = buildEarlyPrediction(analysis, instrument, interval, now, displayContext, news.outlook, evidence)
   const signalPlan = 'plan' in prediction ? prediction.plan : undefined
   useLayoutEffect(() => {
-    onConfirmation(instrument, ready && streamConnected && signalPlan?.stage === 'CONFIRMED' ? signalPlan : undefined, now)
+    onConfirmation(instrument, streamConnected && signalPlan?.stage === 'CONFIRMED' ? signalPlan : undefined, now)
     return () => onConfirmation(instrument, undefined, now)
-  }, [instrument, signalPlan, ready, streamConnected, now, onConfirmation])
+  }, [instrument, signalPlan, streamConnected, now, onConfirmation])
   const planRef = useRef(signalPlan)
   planRef.current = signalPlan
   useEffect(() => {
     if (!activeTrade && planRef.current?.stage === 'CONFIRMED') onPrediction(planRef.current)
-  }, [signalPlan?.id, signalPlan?.stage, activeTrade, onPrediction])
-  useEffect(() => { if (aiError) onError(aiError) }, [aiError, onError])
+  }, [signalPlan?.id, signalPlan?.stage, signalPlan?.entry, signalPlan?.stopLoss, signalPlan?.target, signalPlan?.bullishScore, signalPlan?.bearishScore, signalPlan?.evidenceSummary?.coverage, activeTrade, onPrediction])
   const formatPrice = (value?: number) => value === undefined ? '—' : value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
   return (
     <section aria-label="Candle price-action agent" className="price-action-agent">
       <AgentTradeCard analysis={analysis} evidence={evidence} prediction={prediction} activeTrade={activeTrade} instrument={instrument} interval={interval} now={now} tick={tick} streamConnected={streamConnected} />
-      <MarketContextPanel context={displayContext} loading={market.loading} refresh={() => void market.refresh()} outlook={ready ? aiAnalysis?.marketOutlook : undefined} chartCurrent={chartCurrent} analysis={analysis} candles={snapshot} openingCandles={openingCandles} now={now} />
+      <MarketContextPanel context={displayContext} loading={market.loading} refresh={() => void market.refresh()} outlook={news.outlook} chartCurrent={chartCurrent} analysis={analysis} candles={snapshot} openingCandles={openingCandles} now={now} />
       <div style={{ marginTop: 12, padding: 12, border: '1px solid var(--border)', borderRadius: 9, background: 'var(--card)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          <strong style={{ fontSize: 13 }}>Gemini AI second opinion</strong>
-          <button type="button" onClick={() => void requestAiRef.current()} disabled={aiLoading || !market.loaded || analysis.analyzedCandles < 25}>
-            {aiLoading ? 'Analyzing…' : aiAnalysis ? 'Re-analyze' : 'Analyze with Gemini AI'}
+          <strong style={{ fontSize: 13 }}>Gemini AI second opinion · Optional</strong>
+          <button type="button" onClick={() => void requestAiRef.current()} disabled={aiLoading || aiCoolingDown || analysis.analyzedCandles < 25}>
+            {aiLoading ? 'Analyzing…' : aiCoolingDown ? 'Cooling down' : aiAnalysis ? 'Re-analyze' : 'Analyze with Gemini AI'}
           </button>
         </div>
         {aiLoading && !aiAnalysis && <p style={{ margin: '8px 0 0', color: 'var(--text-secondary)', fontSize: 12 }}>Requesting a second opinion from Gemini…</p>}
-        {aiError && <p style={{ margin: '8px 0 0', color: 'var(--text-secondary)', fontSize: 12 }}>News interpretation unavailable; the agent uses chart evidence.</p>}
-        {aiAnalysis && (
+        {aiMessage && <p className={`ai-status-message${aiError || aiStatus?.state === 'COOLDOWN' || aiStatus?.state === 'UNAVAILABLE' ? ' is-error' : ''}`} role="status">{aiMessage}{aiCoolingDown && aiStatus?.retryAt ? ` Retry after ${new Date(aiStatus.retryAt).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })} IST.` : ''}</p>}
+        {aiAnalysis && (!aiAnalysis.providerStatus || ['AVAILABLE', 'CACHED'].includes(aiAnalysis.providerStatus.state)) && (
           <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.55 }}>
             <strong>{aiAnalysis.stage} {aiAnalysis.bias}</strong>
             <span style={{ color: 'var(--text-secondary)' }}> · {aiAnalysis.model} · {aiAnalysis.analyzedCandles} completed candles</span>
@@ -215,7 +214,7 @@ function PriceActionAgent({ candles, openingCandles, interval, now, instrument, 
             {aiAnalysis.caveat && <div style={{ color: 'var(--text-secondary)' }}><strong>Caveat:</strong> {aiAnalysis.caveat}</div>}
           </div>
         )}
-        <div style={{ marginTop: 6, color: 'var(--text-muted)', fontSize: 11 }}>Completed candles, indicator readings, available OI, FII/DII, news, global quotes and India VIX are assessed. Confirmation also requires sufficient current evidence, chart structure, ATR risk and reward-to-risk checks.</div>
+        <div style={{ marginTop: 6, color: 'var(--text-muted)', fontSize: 11 }}>Technical analysis confirms trades using completed chart setups, indicators, OI/PCR and ATR/VIX risk checks. FII/DII, news, global markets and PCR provide a separate sentiment reference. Gemini analysis does not delay, confirm or veto entries.</div>
       </div>
       {(analysis.support !== undefined || analysis.resistance !== undefined) && (
         <div style={{ marginTop: 5, color: 'var(--text-secondary)', fontSize: 12 }}>

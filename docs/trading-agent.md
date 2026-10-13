@@ -1,77 +1,97 @@
 # Trading Prediction Agent
 
-The agent combines completed chart patterns with available market evidence. Scores
-are reproducible evidence ratings, not calibrated win probabilities. These rules
-have functional tests; an increase in predictive accuracy has not been established
-by an out-of-sample backtest.
+The agent has two independent analyses. Technical analysis alone confirms CALL/CE
+or PUT/PE setups. Market sentiment describes support or headwinds; it never creates,
+delays, vetoes, reverses or closes a trade. Both scores are reproducible evidence
+ratings, not calibrated probabilities. Profitability has not been established by
+an out-of-sample backtest. The tracker records index points and does not submit orders.
+
+## Part 1: technical confirmation
 
 | Input group | Fixed budget | Inputs |
 | --- | ---: | --- |
-| Chart | 22% | Confirmed setup, location, candle pressure, bullish/bearish evidence, structure |
-| Indicators | 22% | SMA 20, EMA 20, EMA 20/50 alignment and slope, RSI 14 and momentum, Supertrend 10/3, genuine session VWAP |
-| Open interest | 18% | PCR and OI change balance; expiry, total call/put OI, walls and max pain remain contextual reference data |
-| FII / DII | 13% | Published net/FII/DII cash flow, FII futures long/short positions, up to five saved observed daily reports |
-| News | 12% | Individually assessed Indian, global, constituent and global-company headlines |
-| Global | 13% | Available GIFT Nifty, Dow, Nasdaq, FTSE, Nikkei, KOSPI, Brent, USD/INR, US 10Y, S&P 500 and WTI quotes |
+| Chart | 40% | Completed setup, pattern, location, candle pressure, structure, bullish/bearish evidence |
+| Indicators | 45% | SMA20, price/EMA20, EMA20/50 alignment, slopes, turns and crossovers, RSI14/momentum, Supertrend10/3, genuine session VWAP |
+| OI / PCR | 15% | Current unexpired option-chain PCR and call/put OI change balance |
 
 Each group's bullish and bearish contributions remain inside its budget. Missing
-inputs do not transfer weight to other groups. Correlated indicators and markets
-share a capped group budget. News impact scores and global moves retain magnitude;
-a tiny market move does not become a full directional vote.
+inputs never increase other weights. OI walls, max pain and totals remain reference
+levels; OI alone does not establish writing. A missing option chain (including
+Sensex) can leave a trade eligible when remaining technical evidence is strong.
+Zero-volume spot-index candles cannot provide genuine VWAP; its budget stays missing.
 
-ATR and India VIX are risk inputs. [NSE describes India VIX](https://www.nseindia.com/static/products-services/indices-indiavix-index)
-as expected Nifty volatility; the agent uses it for risk rather than an automatic
-bullish or bearish vote. As an explicit experimental risk rule, VIX at least 25 or
-a daily rise of at least 10% raises the required directional score from 55 to 65.
-Unavailable VIX is disclosed rather than fabricated.
+Inside the 45% indicator budget: SMA20 5%, price/EMA20 5%, EMA20/50 alignment and
+EMA20 slope 20%, EMA20/50 trajectories 10%, new turns/crossovers 5%, RSI level 10%,
+RSI momentum 10%, Supertrend 20%, VWAP 15%. Correlated signals share capped budgets.
 
-## Confirmation and entry
+Completed-bar trajectories compare three-bar EMA20/50 slopes with preceding
+three-bar slopes, using 0.03 ATR as a flat/noise band. Crossovers detect EMA20/50,
+RSI crossing 50, Supertrend flips, and price/VWAP crossing within the same IST
+session. Gaps interrupt trajectory checks. Multiple simultaneous turns share one
+capped vote. A turn or crossover cannot confirm without a completed price setup.
 
-A new trade requires:
+Confirmation requires:
 
-- A recent completed chart setup with valid entry, target and invalidation levels.
-- At least 60% available evidence and at least two external groups with 40% coverage.
-- Directional support of at least 55/100 (65 with elevated VIX), leading the opposing score by at least 20 points.
-- Fewer than two strongly opposing groups. Strong opposition requires at least 50% group coverage and net opposition of at least 60% of its fixed budget.
-- A stop outside chart invalidation and at least one ATR away from entry, rounded outward.
-- At least 1.5:1 reward to risk after applying the ATR stop. The chart target is never increased to manufacture an eligible trade.
-- No conflicting current, cited AI outlook.
+- A recent completed price-action pattern with valid entry, target and invalidation.
+- At least 50 completed bars and warmed-up EMA20/50, RSI14/momentum and Supertrend.
+- At least 70% technical coverage, directional support of 60/100, and a 20-point lead.
+- A stop outside chart invalidation and at least one ATR14 from entry, rounded outward.
+- At least 1.5:1 reward/risk after widening the stop; the chart target stays unchanged.
 
-For example, an 8-point chart stop with ATR 10 becomes a stop of at least 10 points.
-An unchanged 16-point target still offers 1.6:1 reward to risk. A 12-point target
-offers only 1.2:1 and the agent waits.
+ATR and India VIX are risk checks rather than directional votes.
+[NSE describes India VIX](https://www.nseindia.com/static/products-services/indices-indiavix-index)
+as expected volatility. The existing experimental rule raises required technical
+support from 60 to 65 when VIX is at least 25 or its daily rise is at least 10%.
+Unavailable VIX is disclosed. Thresholds require strategy validation.
 
-Confirmation reserves a conditional entry; the trade appears in today's cards
-only after entry is actually observed. Entry pauses while analysis is refreshing,
-the stream is disconnected, evidence conflicts, or the confirmed setup changes.
-Paused candidates still track invalidation and expiry. An entry is not reconstructed
-from a candle that formed while confirmation was paused.
-Confirmation must match the candidate's index, timeframe, side and exact price
-levels, and becomes ineligible when the next candle closes. Corrected unentered
-levels do not extend the original deadline. Evidence is refreshed at observed entry.
+## Part 2: market sentiment reference
 
-There is one active trade per index. Existing trades keep their recorded risk
-levels and continue tracking targets, stops and confirmed chart reversals while
-new-entry checks run. Exits book index points before a subsequent trade can enter.
+| Input group | Independent budget | Inputs |
+| --- | ---: | --- |
+| FII / DII | 30% | Published daily flows, participant futures positions, observed multi-session flow trend |
+| News | 30% | Current individually assessed Indian, global and constituent headlines |
+| Global | 30% | Available GIFT Nifty, Dow, Nasdaq, FTSE, Nikkei, KOSPI, Brent, USD/INR, US10Y, S&P500, WTI |
+| PCR reference | 10% | Same current option-chain PCR used in technical analysis |
+
+Sentiment needs 40% available coverage and at least one sufficiently observed
+non-PCR group to label a direction; a gap below 15 points is neutral. Otherwise
+it is unavailable. Support/opposition compares sentiment with the technical setup
+and warns about counter-sentiment risk. PCR appears in both views for context;
+sentiment never adds another PCR vote to the technical score. Missing or stale
+sentiment never blocks technical confirmation. Gemini can run or refresh while
+the technical agent confirms and observes entry locally.
+
+## Entry, exits and persistence
+
+Confirmation reserves a conditional entry; today's cards show trades only after
+entry is actually observed. Entry pauses when the stream disconnects or current
+technical confirmation is lost, independently of news loading/disagreement.
+Confirmation must match the candidate's index, timeframe, side, signal candle and
+exact levels, be checked within 30 seconds, and remain inside the current completed
+setup window. Paused candidates still observe invalidation and expiry; entry is
+never reconstructed from a candle formed while confirmation paused.
+
+One active trade is allowed per index. Recorded risk levels remain fixed, with
+continued target, stop and completed-chart reversal monitoring. Profit/loss is
+booked before another trade can enter for that index.
+
+New candidates use `technical-v2` and save three technical contribution groups plus
+a separate sentiment summary. Existing `combined-v1` and `early-v1` records remain
+readable and continue exit tracking. Strategy changes cannot reopen an already
+traded signal; corrected pending levels cannot extend the original deadline.
 
 ## Freshness and audit
 
-- Live/incomplete candles never confirm a setup; recent means within two timeframe intervals.
-- Source fetches must be within ten minutes; OI and VIX observations must be within thirty minutes.
-- OI must match the index and its contract must not have expired.
-- Daily institutional reports may be up to seven days old; saved trend observations are bounded to five reports within fourteen days, requiring at least three reports for a trend vote.
-- Global quotes may be prior-session references up to four days old, accounting for different sessions and weekends.
-- News must be within 48 hours and its AI assessment must match the current context revision.
-- The context revision changes when news or public market inputs change, so updated OI, flows or quotes trigger reassessment.
-- Zero-volume spot-index candles cannot supply genuine VWAP and remain excluded.
-- Session levels use IST regardless of browser timezone.
+- Incomplete candles cannot confirm; recent means within two timeframe intervals.
+- Context/source fetches must be within ten minutes; OI/VIX observations within thirty.
+- OI must match the index and its option expiry must remain current.
+- Institutional reports may be up to seven days old; saved trends use up to five
+  reports within fourteen days and require at least three reports.
+- Global quotes may be prior-session references up to four days old.
+- News must be within 48 hours and assessments must match the current context revision.
+- Session levels and VWAP resets use IST regardless of browser timezone.
 
-The agent card shows combined bullish/bearish scores, opposing evidence and an
-expandable contribution table with coverage and risk checks. A confirmed trade
-saves its evidence summary with the existing local trade record. Gemini receives
-the completed chart, indicator values and timestamped public input snapshots;
-stale snapshots have their data removed. Saved flow observations are explicitly
-labelled as browser observations, not independently verified historical API data.
-New candidates use strategy `combined-v1`; existing `early-v1` trades remain
-readable and continue exit tracking. A previously entered signal cannot reopen
-just because the strategy version changed.
+The card displays separate score sets, coverage, contribution tables, missing data,
+opposing evidence and technical risk checks. Gemini receives completed chart data,
+separate technical scores and sentiment context as an advisory second opinion.
+Saved flow reports remain browser observations, not independently verified history.
