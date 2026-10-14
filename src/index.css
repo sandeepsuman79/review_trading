@@ -403,7 +403,6 @@ input, textarea, select { min-width: 0; max-width: 100%; }
 .indicator-ema-values { display: flex; flex-wrap: wrap; gap: 3px 8px; }
 .indicator-ema-values span { display: inline-flex; align-items: baseline; gap: 4px; }
 .indicator-ema-values small { color: var(--text-secondary); font-size: 9px; font-weight: 500; }
-.candle-chart-navigation-hint { padding: 0 12px 10px; color: var(--text-secondary); font-size: 10px; }
 @media (max-width: 640px) {
   .chart-indicator-panel { padding: 8px; gap: 8px; }
   .chart-indicator-controls { gap: 6px; }
@@ -705,7 +704,14 @@ input, textarea, select { min-width: 0; max-width: 100%; }
 .agent-confirmation-checks li + li { margin-top: 8px; }
 .agent-confirmation-checks li > span { display: block; }
 
-.chart-structure-legend { display: flex; flex-wrap: wrap; gap: 5px 16px; padding: 6px 12px; font-size: 10px; }
+.chart-indicator-disclosure { border-top: 1px solid var(--border); }
+.chart-indicator-disclosure > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding: 5px 12px; font-size: 10px; line-height: 16px; list-style: none; cursor: pointer; }
+.chart-indicator-disclosure > summary::-webkit-details-marker { display: none; }
+.chart-indicator-disclosure > summary:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.chart-indicator-summary-levels { display: flex; flex-wrap: wrap; gap: 0 16px; min-width: 0; font-variant-numeric: tabular-nums; }
+.chart-indicator-summary-levels > span { white-space: nowrap; }
+.chart-indicator-disclosure[open] > summary .card-disclosure-chevron { transform: rotate(180deg); }
+.chart-indicator-disclosure .chart-indicator-panel { border-top: 0; }
 
 
 .agent-history-reference { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
@@ -726,10 +732,10 @@ input, textarea, select { min-width: 0; max-width: 100%; }
 .agent-entry-diagnostics { margin-top: 10px; }
 
 .chart-scale-controls { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; padding: 4px 8px; border-bottom: 1px solid var(--border); font-size: 10px; color: var(--text-secondary); }
-.chart-scale-controls > div { display: flex; gap: 4px; }
+.chart-scale-controls > div { display: flex; flex-shrink: 0; gap: 4px; margin-left: auto; }
 .chart-scale-controls button { min-height: 24px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 5px; background: #fff; font: inherit; color: var(--text-primary); cursor: pointer; }
 .chart-scale-controls button.is-selected { color: var(--primary); border-color: var(--primary); background: #f5f3ff; }
-.chart-scale-controls > span { overflow-wrap: anywhere; }
+.chart-scale-controls > span { flex: 1 1 120px; min-width: 0; overflow-wrap: anywhere; }
 .has-strike-scale .apexcharts-yaxis, .has-strike-scale .apexcharts-yaxis *, .has-strike-scale .apexcharts-yaxis-annotations text, .has-strike-scale .apexcharts-yaxis-annotations text *, .has-strike-scale .apexcharts-yaxis-annotations rect { visibility: hidden !important; }
 .chart-scale-ladder { position: absolute; z-index: 5; overflow-x: auto; overflow-y: hidden; background: #fff; touch-action: pan-x; overscroll-behavior-x: contain; scroll-snap-type: x mandatory; scrollbar-width: none; cursor: grab; }
 .chart-scale-ladder::-webkit-scrollbar { display: none; }

@@ -78,6 +78,7 @@ export type AngelOneInstrument = {
   name?: string
   exch_seg?: string
   expiry?: string
+  optionExpiry?: string
   strike?: string
   lotsize?: string
   tick_size?: string

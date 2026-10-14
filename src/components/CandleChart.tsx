@@ -1,6 +1,6 @@
 import IndexPriceScale, { type ScaleBadge, type ScaleGeometry } from './IndexPriceScale'
 import { useOptionPremiums } from '../hooks/useOptionPremiums'
-import { indexPriceDomain, indexPriceLevels, indexPriceStep, type ScaleView } from '../analysis/indexPriceScale'
+import { indexPriceDomain, indexPriceLevels, type ScaleView } from '../analysis/indexPriceScale'
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
 import ReactApexChart from 'react-apexcharts'
 import type { ApexOptions } from 'apexcharts'
@@ -25,6 +25,7 @@ type Props = {
   savedCandleCount: number
   marketHeartbeat: string
   spotIndex?: boolean
+  optionExpiry?: string
   trade?: ChartTradeLevels
   levels?: { support?: number; resistance?: number }
   indiaVix?: IndiaVixSnapshot
@@ -111,7 +112,7 @@ function readIndicatorPreferences(): ChartIndicatorVisibility {
   } catch { return defaultIndicators }
 }
 
-export default function CandleChart({ candles: inputCandles, name, intervalLabel, tick, isLive, savedCandleCount, marketHeartbeat, spotIndex = false, trade, levels, indiaVix, indiaVixLoading, now }: Props) {
+export default function CandleChart({ candles: inputCandles, name, intervalLabel, tick, isLive, savedCandleCount, marketHeartbeat, spotIndex = false, optionExpiry, trade, levels, indiaVix, indiaVixLoading, now }: Props) {
   const [scaleView, setScaleView] = useState<ScaleView>('INDEX')
   const [scaleGeometry, setScaleGeometry] = useState<ScaleGeometry>()
   const candles = useMemo(() => normalizeCandles(inputCandles), [inputCandles])
@@ -369,6 +370,8 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
   const scaleMin = axis.min ?? 0, scaleMax = axis.max ?? 0
   const scaleLevels = useMemo(() => indexPriceLevels(scaleMin, scaleMax, name), [scaleMin, scaleMax, name])
   const premiums = useOptionPremiums(name, scaleLevels, spotIndex && hasCandles && scaleView !== 'INDEX')
+  const expiry = [premiums.data?.expiry, optionExpiry].find(value => value && /^\d{4}-\d{2}-\d{2}$/.test(value) && Date.parse(`${value}T15:30:00+05:30`) > now)
+  const expiryLabel = expiry ? `${expiry.slice(8, 10)}/${expiry.slice(5, 7)} E` : '— E'
   const scaleBadges: ScaleBadge[] = [
     ...(tick?.ltp !== undefined ? [{ id: 'live', value: tick.ltp, text: price(tick.ltp), background: '#6C63FF' }] : []),
     ...([{ id: 'support', value: levels?.support, prefix: 'S', background: '#15803D' }, { id: 'resistance', value: levels?.resistance, prefix: 'R', background: '#B91C1C' }].filter((level): level is typeof level & { value: number } => level.value !== undefined).map(level => ({ ...level, text: `${level.prefix} ${price(level.value)}` }))),
@@ -450,10 +453,6 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
           </div>
         </div>
       </details>
-      {spotIndex && <div className="chart-scale-controls" aria-label="Index and option price scale controls">
-        <div><button type="button" className={scaleView === 'CE' ? 'is-selected' : ''} onClick={() => { setMarker(null); setScaleView('CE') }} aria-label="Show CE premiums">← CE</button><button type="button" className={scaleView === 'INDEX' ? 'is-selected' : ''} onClick={() => { setMarker(null); setScaleView('INDEX') }} aria-label="Show index price levels">Index · {indexPriceStep(name)} pts</button><button type="button" className={scaleView === 'PE' ? 'is-selected' : ''} onClick={() => { setMarker(null); setScaleView('PE') }} aria-label="Show PE premiums">PE →</button></div>
-        <span role="status" title={premiums.data ? `Latest premiums received ${new Date(premiums.data.fetchedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST; not historical candle premiums` : undefined}>{scaleView === 'INDEX' ? 'Swipe price scale ← CE · PE →' : premiums.error || (premiums.loading ? 'Loading premiums…' : premiums.data ? `${premiums.data.rows.some(row => (scaleView === 'CE' ? row.ce : row.pe).ltp !== null) ? 'Latest ₹ premiums' : `${scaleView} quotes unavailable`} · Expiry ${premiums.data.expiry} · Received ${new Date(premiums.data.fetchedAt).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false })}` : 'Option premiums unavailable')}</span>
-      </div>}
       <div className="candle-price-viewport">
         <div ref={plotRef} className="apex-candle-plot" onPointerDown={startDrag} onPointerMove={movePointer} onPointerUp={() => { dragRef.current = null }} onPointerCancel={() => { dragRef.current = null }} onLostPointerCapture={() => { dragRef.current = null }} onPointerLeave={(event) => { if (event.pointerType === 'mouse' && !dragRef.current) { setSelectedTime(null); setMarker(null) } }}>
           <ApexPlot options={options} series={series} type="candlestick" height={360} width="100%" />
@@ -487,11 +486,22 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
         const start = -0.5 + scroll.scrollLeft / available * (totalSpan - span)
         if (Math.abs(start - min) > 0.05) scheduleInteraction(() => panTo(start, span))
       }}><div style={{ width: `${100 * totalSpan / span}%`, height: 1 }} /></div>
-      {levels && <div className="chart-structure-legend" aria-label="Chart support and resistance"><span className="agent-text-bullish">Support (S): {levels.support === undefined ? 'Not established' : price(levels.support)}</span><span className="agent-text-bearish">Resistance (R): {levels.resistance === undefined ? 'Not established' : price(levels.resistance)}</span></div>}
-      <ChartIndicators visibility={indicatorVisibility} onToggle={key => { setMarker(null); setIndicatorVisibility(current => ({ ...current, [key]: !current[key] })) }}
-        average={averages[selectedIndex] || {}} technical={indicators[selectedIndex] || {}} vwap={vwap[selectedIndex]} hasVwap={hasVwap} spotIndex={spotIndex}
-        close={selected[4]} trade={trade} indiaVix={indiaVix} indiaVixLoading={indiaVixLoading} now={now} context={`${inspectedIndex >= 0 ? 'Selected candle' : 'Latest candle'} · ${candleDate(selected[0])} IST`} />
-      <div className="candle-chart-navigation-hint">Touch or hover to inspect · Drag to pan · Use + / − to zoom</div>
+      {spotIndex && <div className="chart-scale-controls" aria-label="Index and option price scale controls">
+        <span role="status" title={premiums.data ? `Latest premiums received ${new Date(premiums.data.fetchedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST; not historical candle premiums` : undefined}>{scaleView === 'INDEX' ? 'Swipe price scale ← CE · PE →' : premiums.error || (premiums.loading ? 'Loading premiums…' : premiums.data ? `${premiums.data.rows.some(row => (scaleView === 'CE' ? row.ce : row.pe).ltp !== null) ? 'Latest ₹ premiums' : `${scaleView} quotes unavailable`} · Expiry ${premiums.data.expiry} · Received ${new Date(premiums.data.fetchedAt).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false })}` : 'Option premiums unavailable')}</span>
+        <div><button type="button" className={scaleView === 'CE' ? 'is-selected' : ''} onClick={() => { setMarker(null); setScaleView('CE') }} aria-label="Show CE premiums">← CE</button><button type="button" className={scaleView === 'INDEX' ? 'is-selected' : ''} onClick={() => { setMarker(null); setScaleView('INDEX') }} aria-label="Show index price levels" title={expiry ? `Nearest option expiry: ${expiry}` : 'Option expiry unavailable'}>{expiryLabel}</button><button type="button" className={scaleView === 'PE' ? 'is-selected' : ''} onClick={() => { setMarker(null); setScaleView('PE') }} aria-label="Show PE premiums">PE →</button></div>
+      </div>}
+      <details className="chart-indicator-disclosure">
+        <summary aria-label="Support, resistance and chart indicators">
+          <span className="chart-indicator-summary-levels">
+            <span className="agent-text-bullish">Support (S): {levels?.support === undefined ? 'Not established' : price(levels.support)}</span>
+            <span className="agent-text-bearish">Resistance (R): {levels?.resistance === undefined ? 'Not established' : price(levels.resistance)}</span>
+          </span>
+          <svg className="card-disclosure-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+        </summary>
+        <ChartIndicators visibility={indicatorVisibility} onToggle={key => { setMarker(null); setIndicatorVisibility(current => ({ ...current, [key]: !current[key] })) }}
+          average={averages[selectedIndex] || {}} technical={indicators[selectedIndex] || {}} vwap={vwap[selectedIndex]} hasVwap={hasVwap} spotIndex={spotIndex}
+          close={selected[4]} trade={trade} indiaVix={indiaVix} indiaVixLoading={indiaVixLoading} now={now} context={`${inspectedIndex >= 0 ? 'Selected candle' : 'Latest candle'} · ${candleDate(selected[0])} IST`} />
+      </details>
     </section>
   )
 }
