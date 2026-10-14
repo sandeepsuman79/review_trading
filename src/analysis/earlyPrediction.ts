@@ -8,8 +8,10 @@ export type PredictionPlan = {
   instrument: string
   interval: PriceActionInterval
   side: 'CALL' | 'PUT'
-  stage: 'EARLY' | 'CONFIRMED'
+  stage: 'EARLY' | 'CONFIRMED' | 'RISKY'
   strategyVersion: 'early-v1' | 'combined-v1' | 'technical-v2'
+  confirmationQuality?: 'STANDARD' | 'STRONG'
+  risk?: { level: number; levelType: 'SUPPORT' | 'RESISTANCE'; passedChecks: number; unmetChecks: string[]; alignedIndicators: string[]; opposedIndicators: string[] }
   signalCandleTime: string
   generatedAt: number
   expiresAt: number
@@ -34,12 +36,15 @@ const round = (price: number) => Math.round(price * 100) / 100
 
 /** Technical evidence confirms a setup. News is recorded as reference and never vetoes entry. */
 export function buildEarlyPrediction(analysis: PriceActionAnalysis, instrument: string, interval: PriceActionInterval, now: number, context?: MarketContext | null, outlook?: MarketOutlook, evidence?: TradingEvidence): EarlyPrediction {
+  analysis = evidence?.selectedAnalysis ?? analysis
   const wait = (reason: string): EarlyPrediction => ({ side: 'WAIT', reason })
   const candleTime = Date.parse(analysis.latestCandleTime || '')
   if (analysis.analyzedCandles < 25 || !Number.isFinite(candleTime)) return wait('At least 25 completed candles are required.')
   if (now < candleTime + candleIntervalMs(interval) || now - candleTime > 2 * candleIntervalMs(interval)) return wait('Waiting for recent completed candles; historical charts do not create new calls.')
-  const side = analysis.side !== 'WAIT' ? analysis.side : analysis.earlyBias === 'BULLISH' ? 'CALL' : analysis.earlyBias === 'BEARISH' ? 'PUT' : 'WAIT'
-  if (side === 'WAIT') return wait('Technical evidence has no clear early direction.')
+  if (evidence && (evidence.instrument !== instrument || evidence.interval !== interval || evidence.asOf !== analysis.latestCandleTime)) return wait('Technical assessment does not match the current index, timeframe or candle.')
+  const risky = evidence && !evidence.canConfirm ? evidence.riskySetup : undefined
+  const side = risky?.side ?? (analysis.side !== 'WAIT' ? analysis.side : analysis.earlyBias === 'BULLISH' ? 'CALL' : analysis.earlyBias === 'BEARISH' ? 'PUT' : 'WAIT')
+  if (side === 'WAIT') return wait(evidence?.reason || 'Technical evidence has no clear early direction.')
   const bias = side === 'CALL' ? 'BULLISH' : 'BEARISH'
   const usableOutlook = context && context.instrument === instrument && outlook?.contextRevision === context.revision
     && now - Date.parse(context.retrievedAt) <= 10 * 60_000 && now >= Date.parse(context.retrievedAt)
@@ -48,13 +53,13 @@ export function buildEarlyPrediction(analysis: PriceActionAnalysis, instrument: 
       && now - Date.parse(article.publishedAt) <= 48 * 3_600_000 && Date.parse(article.publishedAt) <= now))
     && outlook.bias !== 'UNAVAILABLE' && (Boolean(evidence) || outlook.agreement !== 'INSUFFICIENT')
   const newsAligned = Boolean(usableOutlook && outlook?.bias === bias && outlook.agreement === 'SUPPORTS_CHART')
-  const confirmed = analysis.side !== 'WAIT'
-  if (evidence && (evidence.instrument !== instrument || evidence.interval !== interval || evidence.asOf !== analysis.latestCandleTime || !evidence.canConfirm)) return wait(evidence.reason)
+  const confirmed = !risky && analysis.side !== 'WAIT'
+  if (evidence && (evidence.instrument !== instrument || evidence.interval !== interval || evidence.asOf !== analysis.latestCandleTime || !evidence.canConfirm && !risky)) return wait(evidence.reason)
   const score = side === 'CALL' ? analysis.bullishScore : analysis.bearishScore
   const opposingScore = side === 'CALL' ? analysis.bearishScore : analysis.bullishScore
-  if (!confirmed && (score < 50 || score - opposingScore < 15)) return wait('Early chart evidence is too weak or conflicted to issue a conditional call.')
-  const entry = confirmed ? analysis.entry : side === 'CALL' ? analysis.bullishTrigger : analysis.bearishTrigger
-  const stopLoss = evidence?.stopLoss ?? (confirmed ? analysis.stopLoss : side === 'CALL' ? analysis.bullishInvalidation : analysis.bearishInvalidation)
+  if (!confirmed && !risky && (score < 50 || score - opposingScore < 15)) return wait('Early chart evidence is too weak or conflicted to issue a conditional call.')
+  const entry = risky?.entry ?? (confirmed ? analysis.entry : side === 'CALL' ? analysis.bullishTrigger : analysis.bearishTrigger)
+  const stopLoss = risky?.stopLoss ?? evidence?.stopLoss ?? (confirmed ? analysis.stopLoss : side === 'CALL' ? analysis.bullishInvalidation : analysis.bearishInvalidation)
   if (entry === undefined || stopLoss === undefined || ![entry, stopLoss].every(value => Number.isFinite(value) && value > 0)) return wait('A valid entry and chart invalidation level are required.')
   const direction = side === 'CALL' ? 1 : -1
   const risk = (entry - stopLoss) * direction
@@ -62,8 +67,8 @@ export function buildEarlyPrediction(analysis: PriceActionAnalysis, instrument: 
   // An early setup is a conditional breakout, never an already passed trigger.
   if (!confirmed && (analysis.currentPrice === undefined || (entry - analysis.currentPrice) * direction <= 0)) return wait('The early trigger has already passed; waiting for a fresh completed setup.')
   const structure = side === 'CALL' ? analysis.resistance : analysis.support
-  let target = confirmed ? analysis.target : structure
-  let targetBasis = confirmed ? 'Chart setup target' : 'Chart resistance/support'
+  let target = risky?.target ?? (confirmed ? analysis.target : structure)
+  let targetBasis = risky?.targetBasis ?? (confirmed ? analysis.targetBasis || 'Chart setup target' : 'Chart resistance/support')
   if (evidence) targetBasis += ' · Stop covers chart invalidation and at least 1 × ATR(14)'
   if (!confirmed && (target === undefined || (target - entry) * direction <= 0)) {
     target = entry + direction * risk * 2
@@ -73,10 +78,12 @@ export function buildEarlyPrediction(analysis: PriceActionAnalysis, instrument: 
   const roundedEntry = round(entry), roundedStop = round(stopLoss), roundedTarget = round(target)
   const riskReward = ((roundedTarget - roundedEntry) * direction) / ((roundedEntry - roundedStop) * direction)
   if (!Number.isFinite(riskReward) || riskReward < 1.5) return wait('The chart target offers less than 1.5:1 reward to risk. Waiting for a better setup.')
-  const reason = `${confirmed ? 'Confirmed chart setup' : 'Early conditional breakout'}; ${evidence ? `technical evidence ${side === 'CALL' ? evidence.bullishScore : evidence.bearishScore}/100 with ${evidence.coverage}% coverage` : 'technical confirmation; sentiment is reference only'}. Entry must be reached before the call becomes active.`
+  const reason = risky ? `Risky conditional ${side} setup: ${risky.passedChecks}/7 checks passed; ${risky.levelType.toLowerCase()} ${risky.level.toFixed(2)} with ${risky.alignedIndicators.join(' or ')}. Missing: ${risky.unmetChecks.join(', ')}. A trigger touch alone is not full confirmation.` : `${confirmed ? 'Confirmed chart setup' : 'Early conditional breakout'}; ${evidence ? `technical evidence ${side === 'CALL' ? evidence.bullishScore : evidence.bearishScore}/100 with ${evidence.coverage}% coverage` : 'technical confirmation; sentiment is reference only'}. Entry must be reached before the call becomes active.`
   return { side, reason, plan: {
-    id: `${evidence?.version ?? 'early-v1'}:${instrument}:${interval}:${analysis.latestCandleTime}:${side}`,
-    strategyVersion: evidence?.version ?? 'early-v1', instrument, interval, side, stage: confirmed ? 'CONFIRMED' : 'EARLY', signalCandleTime: analysis.latestCandleTime!,
+    id: `${evidence?.version ?? 'early-v1'}:${risky ? 'risky:' : ''}${instrument}:${interval}:${analysis.latestCandleTime}:${side}`,
+    ...(confirmed && evidence?.quality ? { confirmationQuality: evidence.quality } : {}),
+    strategyVersion: evidence?.version ?? 'early-v1', instrument, interval, side, stage: risky ? 'RISKY' : confirmed ? 'CONFIRMED' : 'EARLY', signalCandleTime: analysis.latestCandleTime!,
+    ...(risky ? { risk: { level: risky.level, levelType: risky.levelType, passedChecks: risky.passedChecks, unmetChecks: risky.unmetChecks, alignedIndicators: risky.alignedIndicators, opposedIndicators: risky.opposedIndicators } } : {}),
     generatedAt: now, expiresAt: now + 3 * candleIntervalMs(interval), entry: roundedEntry, stopLoss: roundedStop, target: roundedTarget, riskReward: round(riskReward), targetBasis, reason,
     contextMode: !evidence && newsAligned ? 'NEWS_ALIGNED' : 'TECHNICAL_ONLY', bullishScore: evidence?.bullishScore ?? analysis.bullishScore, bearishScore: evidence?.bearishScore ?? analysis.bearishScore,
     technicalEvidence: [...(evidence ? side === 'CALL' ? evidence.bullishEvidence : evidence.bearishEvidence : side === 'CALL' ? analysis.bullishEvidence : analysis.bearishEvidence)],

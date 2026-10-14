@@ -24,6 +24,7 @@ function fixture(direction = 1, instrument = 'Nifty 50') {
     earlyBias: direction === 1 ? 'BULLISH' : 'BEARISH', earlyStage: 'CONFIRMED', bullishScore: direction === 1 ? 80 : 10, bearishScore: direction === 1 ? 10 : 80,
     bullishEvidence: direction === 1 ? ['Strong bullish candle pressure', 'Higher lows support a breakout', 'Supertrend is bullish'] : [], bearishEvidence: direction === -1 ? ['Strong bearish candle pressure', 'Lower highs support a breakdown', 'Supertrend is bearish'] : [],
     movingAverage20: 100 - direction * 1, exponentialMovingAverage20: 100 - direction * .8, exponentialMovingAverage50: 100 - direction * 2,
+    alignment: { at: candles.at(-1)[0], routes: [{ family: 'EMA', side, name: `EMA20/50 trajectory ${direction === 1 ? 'up' : 'down'}` }] },
     rsi14: direction === 1 ? 70 : 30, rsi14Momentum: direction * 8, atr14: 2, supertrendDirection: direction === 1 ? 'UP' : 'DOWN',
   }
   const articles = Array.from({ length: 8 }, (_, index) => ({ id: String(index), title: 'Fixture market outlook', category: 'india', publishedAt: new Date(now - 1000).toISOString(), publisher: 'Fixture', url: `https://source.example/${index}`, matchedCompanies: [] }))
@@ -355,4 +356,30 @@ test('standalone cached news is snapshotted as reference without requiring chart
   assert.equal(prediction.plan.stage, 'CONFIRMED')
   assert.match(prediction.plan.newsSummary, /Sentiment reference only/)
   assert.equal(prediction.plan.newsEvidence.length, 1)
+})
+
+
+test('full confirmation requires a current matching directional route, not only weighted scores', () => {
+  for (const direction of [1,-1]) {
+    const input = fixture(direction)
+    for(const alignment of [undefined, {at:input.analysis.latestCandleTime,routes:[]}, {at:input.candles.at(-2)[0],routes:input.analysis.alignment.routes}, {at:input.analysis.latestCandleTime,routes:input.analysis.alignment.routes.map(route=>({...route,side:direction===1?'PUT':'CALL'}))}]) {
+      const result=analyzeTradingEvidence({...input,analysis:{...input.analysis,alignment}})
+      assert.equal(result.canConfirm,false)
+      assert.equal(result.checks.find(check=>check.label==='Directional agreement').passed,false)
+    }
+  }
+})
+
+test('full CALL and PUT confirmation accepts one route family despite other indicator disagreement', () => {
+  for (const direction of [1,-1]) for (const family of ['EMA','SUPERTREND','LEVEL']) {
+    const input=fixture(direction), side=direction===1?'CALL':'PUT'
+    input.analysis.alignment={at:input.analysis.latestCandleTime,routes:[{family,side,name:`${family} matched ${side}`} ]}
+    input.analysis.rsi14=50; input.analysis.rsi14Momentum=0
+    if(family!=='EMA') input.analysis.exponentialMovingAverage50=100+direction*2
+    if(family!=='SUPERTREND') input.analysis.supertrendDirection=direction===1?'DOWN':'UP'
+    const result=analyzeTradingEvidence(input)
+    assert.equal(result.canConfirm,true,`${side} via ${family}: ${result.reason}`)
+    const prediction=buildEarlyPrediction(input.analysis,input.instrument,input.interval,input.now,input.context,input.outlook,result)
+    assert.equal(prediction.plan.stage,'CONFIRMED');assert.equal(prediction.plan.side,side)
+  }
 })

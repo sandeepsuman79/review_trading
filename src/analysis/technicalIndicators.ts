@@ -1,4 +1,9 @@
+import { calculateDirectionalMovement } from './directionalMovement'
+
 export type TechnicalIndicatorPoint = {
+  adx14?: number
+  plusDi14?: number
+  minusDi14?: number
   rsi14?: number
   atr14?: number
   supertrend10?: number
@@ -115,10 +120,12 @@ export function calculateTechnicalIndicatorSeries(
   lows: number[],
   closes: number[],
 ): TechnicalIndicatorPoint[] {
+  const dmi = calculateDirectionalMovement(highs, lows, closes)
   const rsi = calculateRsi14(closes)
   const atr = calculateAtr(highs, lows, closes)
   const supertrend = calculateSupertrend10(highs, lows, closes)
   return Array.from({ length: Math.min(highs.length, lows.length, closes.length) }, (_, index) => ({
+    ...dmi[index],
     rsi14: rsi[index],
     atr14: atr[index],
     supertrend10: supertrend[index]?.value,

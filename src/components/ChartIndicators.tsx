@@ -44,7 +44,7 @@ export default function ChartIndicators({ visibility, onToggle, average, technic
       <small>{trade ? 'Current live trade' : 'Levels appear when a confirmed trade is live'}</small>
     </div>
     <div className="chart-indicator-context">{context}</div>
-    <div className="chart-indicator-metrics" aria-label="Chart indicator values">
+    <div className="chart-indicator-metrics" role="region" aria-label="Chart indicator values" tabIndex={0}>
       <div className="chart-indicator-metric" aria-label="VWAP indicator">
         <span className="chart-indicator-metric-title">VWAP</span><strong>{vwap === undefined ? 'Unavailable' : number(vwap)}</strong>
         <small className={`indicator-${vwapPosition}`}>{vwap === undefined ? spotIndex ? 'Spot index has no traded volume' : 'Waiting for candle volume' : close > vwap ? 'Price above' : close < vwap ? 'Price below' : 'Price at VWAP'}</small>
@@ -65,6 +65,10 @@ export default function ChartIndicators({ visibility, onToggle, average, technic
       <div className="chart-indicator-metric" aria-label="ATR 14 indicator">
         <span className="chart-indicator-metric-title">ATR (14)</span><strong>{technical.atr14 === undefined ? '—' : `${technical.atr14.toFixed(1)} pts`}</strong>
         <small>{technical.atr14 === undefined ? 'Needs 14 candles' : trade ? `Trade SL ${Math.abs(trade.entry - trade.stopLoss).toFixed(1)} · TGT ${Math.abs(trade.target - trade.entry).toFixed(1)} pts` : '14-candle volatility'}</small>
+      </div>
+      <div className="chart-indicator-metric" aria-label="ADX and DMI indicators">
+        <span className="chart-indicator-metric-title">ADX / DMI (14)</span><strong>{technical.adx14?.toFixed(1) ?? '—'}</strong>
+        <small>{technical.adx14 === undefined ? 'Needs 28 candles' : `${technical.adx14 >= 25 ? 'Strong trend' : technical.adx14 >= 20 ? 'Developing trend' : 'Weak trend'} · +DI ${technical.plusDi14?.toFixed(1) ?? '—'} / −DI ${technical.minusDi14?.toFixed(1) ?? '—'}`}</small>
       </div>
       <div className="chart-indicator-metric" aria-label="India VIX indicator">
         <span className="chart-indicator-metric-title">INDIA VIX</span>

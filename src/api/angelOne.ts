@@ -1,4 +1,5 @@
 import { decodeStreamPacket } from './streamPacket'
+import { isAngelOneAuthError } from './angelOneSession'
 
 export type AngelOneLoginInput = {
   clientcode: string
@@ -136,8 +137,8 @@ async function readResponse<T>(response: Response, fallback: string): Promise<T>
     }
   }
   if (!response.ok) {
-    const message = (result as { message?: string }).message
-    throw new Error(message || `${fallback} (${response.status}).`)
+    const body = result as { message?: string; errorcode?: string; errorCode?: string }
+    throw Object.assign(new Error(body.message || `${fallback} (${response.status}).`), { status: response.status, errorcode: body.errorcode || body.errorCode })
   }
   return result
 }
@@ -183,7 +184,9 @@ export async function getAngelOneProfile(token: string): Promise<AngelOneProfile
   const response = await fetch('/api/angelone/profile', {
     headers: { Authorization: `Bearer ${token}` },
   })
-  return readResponse<AngelOneProfileResponse>(response, 'Angel One profile request failed')
+  const result = await readResponse<AngelOneProfileResponse>(response, 'Angel One profile request failed')
+  if (isAngelOneAuthError(result)) throw Object.assign(new Error(result.message || 'Angel One session expired.'), { status: 401, errorcode: result.errorcode })
+  return result
 }
 
 export async function refreshAngelOneToken(
@@ -234,8 +237,8 @@ export const getGttRuleDetails = (token: string, id: string) =>
 export const listGttRules = (token: string, status: string[], page = 1, count = 10) =>
   postGtt('list', token, { status, page, count })
 
-export async function getInstrumentMaster(): Promise<AngelOneInstrument[]> {
-  const response = await fetch('/api/instruments')
+export async function getInstrumentMaster(scope?: 'indices'): Promise<AngelOneInstrument[]> {
+  const response = await fetch(scope === 'indices' ? '/api/instruments?scope=indices' : '/api/instruments')
   const result = await readResponse<AngelOneInstrument[] | AngelOneDataResponse<AngelOneInstrument[]>>(response, 'Instrument master request failed')
   return Array.isArray(result) ? result : result.data || []
 }
@@ -250,16 +253,24 @@ export async function getAngelOneLtp(token: string, instrument: Pick<AngelOneIns
   return readResponse<AngelOneDataResponse<AngelOneLtp | AngelOneLtp[]>>(response, 'Angel One LTP request failed')
 }
 
-async function postHistorical<T extends AngelOneCandle[] | AngelOneOi[]>(path: 'candles' | 'oi', token: string, body: object) {
-  const response = await fetch(`/api/angelone/historical/${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify(body),
-  })
-  return readResponse<AngelOneDataResponse<T>>(response, `Angel One historical ${path} request failed`)
+export class HistoricalRequestError extends Error {
+  constructor(message: string, public status: number, public retryAfterMs = 0) { super(message) }
 }
 
-export const getHistoricalCandles = (token: string, body: object) => postHistorical<AngelOneCandle[]>('candles', token, body)
+async function postHistorical<T extends AngelOneCandle[] | AngelOneOi[]>(path: 'candles' | 'oi', token: string, body: object, signal?: AbortSignal) {
+  const response = await fetch(`/api/angelone/historical/${path}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body), signal,
+  })
+  let result: AngelOneDataResponse<T> & { retryAfterMs?: number }
+  try { result = await response.json() } catch { throw new HistoricalRequestError(`Angel One historical request failed (${response.status}).`, response.ok ? 502 : response.status) }
+  if (!response.ok || result.status !== true) throw new HistoricalRequestError(`${result.message || 'Historical request rejected'}${result.errorcode ? ` (${result.errorcode})` : ''}`, response.status, result.retryAfterMs)
+  if (!Array.isArray(result.data)) throw new HistoricalRequestError('Angel One returned invalid historical data.', 502)
+  return result
+}
+
+export const getHistoricalCandles = (token: string, body: object, signal?: AbortSignal) => postHistorical<AngelOneCandle[]>('candles', token, body, signal)
 export const getHistoricalOi = (token: string, body: object) => postHistorical<AngelOneOi[]>('oi', token, body)
 
 export function connectAngelOneStream(

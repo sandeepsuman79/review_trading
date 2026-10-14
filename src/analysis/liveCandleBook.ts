@@ -59,11 +59,15 @@ export class LiveCandleBook {
     return merged
   }
 
-  flush(save: (token: string, interval: PriceActionInterval, candles: AngelOneCandle[]) => void) {
+  flush(save: (token: string, interval: PriceActionInterval, candles: AngelOneCandle[]) => void, limit = Infinity) {
+    let saved = 0
     for (const key of this.dirty) {
+      if (saved >= limit) break
       const snapshot = this.snapshots.get(key)!
       save(snapshot.token, snapshot.interval, snapshot.candles)
       this.dirty.delete(key)
+      saved++
     }
+    return this.dirty.size
   }
 }

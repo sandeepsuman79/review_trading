@@ -1,3 +1,5 @@
+import { createOptionPremiumService, nearestIndexOptions } from './optionPremiums.js'
+import { createHistoricalProxy } from './historicalProxy.js'
 import { createAiCache } from './aiCache.js'
 import { createGeminiClient } from './geminiClient.js'
 import { createAiNewsService } from './aiNews.js'
@@ -7,6 +9,8 @@ import { createServer } from 'node:http'
 import { existsSync, readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { extname, join, resolve, sep } from 'node:path'
+import { gzip } from 'node:zlib'
+import { promisify } from 'node:util'
 
 if (existsSync('.env')) {
   for (const line of readFileSync('.env', 'utf8').split(/\r?\n/)) {
@@ -31,13 +35,32 @@ const angelOneGttUrls = {
   list: 'https://apiconnect.angelone.in/rest/secure/angelbroking/gtt/v1/ruleList',
 }
 const instrumentMasterUrl = 'https://margincalculator.angelone.in/OpenAPI_File/files/OpenAPIScripMaster.json'
+let instrumentMasterCache
+let instrumentMasterPending
+async function loadInstrumentMaster() {
+  if (!instrumentMasterPending) instrumentMasterPending = (async () => {
+    const response = await fetch(instrumentMasterUrl, { signal: AbortSignal.timeout(30_000) })
+    const data = await response.json()
+    if (!response.ok || !Array.isArray(data)) throw new Error('Invalid instrument master')
+    const options = nearestIndexOptions(data, Date.now())
+    instrumentMasterCache = { expiresAt: Math.min(Date.now() + 6 * 3_600_000, ...Object.values(options).map(group => group.expiryAt)), options,
+      data: data.filter(item => ['99926000', '99919000', '99926009'].includes(String(item.token)) || /INDIAVIX/i.test(`${item.name} ${item.symbol}`.replace(/[^a-z0-9]/gi, ''))) }
+    return data
+  })().finally(() => { instrumentMasterPending = undefined })
+  return instrumentMasterPending
+}
+const optionPremiums = createOptionPremiumService({ loadOptions: async () => {
+  if (!instrumentMasterCache || instrumentMasterCache.expiresAt <= Date.now()) await loadInstrumentMaster()
+  return instrumentMasterCache.options
+} })
+const compressedAssets = new Map()
+const compress = promisify(gzip)
 const angelOneLtpUrl = 'https://apiconnect.angelone.in/order-service/rest/secure/angelbroking/order/v1/getLtpData'
 const angelOneHistoricalUrls = {
   candles: 'https://apiconnect.angelone.in/rest/secure/angelbroking/historical/v1/getCandleData',
   oi: 'https://apiconnect.angelone.in/rest/secure/angelbroking/historical/v1/getOIData',
 }
-const historicalResponseCache = new Map()
-const historicalCacheTtlMs = 30_000
+const historicalRequest = createHistoricalProxy()
 const marketContextService = createMarketContextService()
 const aiCache = createAiCache(resolve('.cache/ai-news.json'))
 const gemini = createGeminiClient({ apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite', savedState: aiCache.providerState, saveState: state => { aiCache.providerState = state; aiCache.save() } })
@@ -124,9 +147,21 @@ async function serveFrontend(request, response) {
   }
 
   const extension = extname(filePath)
+  const gzipAccepted = /\bgzip\b/.test(request.headers['accept-encoding'] || '')
+  const compressed = gzipAccepted && ['.js', '.css', '.svg', '.json'].includes(extension) && content.length > 1024
+  if (compressed) {
+    if (!compressedAssets.has(filePath)) {
+      if (compressedAssets.size >= 50) compressedAssets.delete(compressedAssets.keys().next().value)
+      compressedAssets.set(filePath, await compress(content))
+    }
+    content = compressedAssets.get(filePath)
+  }
   response.writeHead(200, {
     'Content-Type': contentTypes[extension] || 'application/octet-stream',
     'Cache-Control': extension === '.html' ? 'no-cache' : 'public, max-age=31536000, immutable',
+    Vary: 'Accept-Encoding',
+    ...(compressed ? { 'Content-Encoding': 'gzip' } : {}),
+    'Content-Length': content.length,
   })
   response.end(request.method === 'HEAD' ? undefined : content)
 }
@@ -142,13 +177,16 @@ const server = createServer(async (request, response) => {
     return
   }
 
-  if (request.method === 'GET' && request.url === '/api/instruments') {
+  if (request.method === 'GET' && ['/api/instruments', '/api/instruments?scope=indices'].includes(request.url)) {
     try {
-      const instrumentResponse = await fetch(instrumentMasterUrl)
-      const text = await instrumentResponse.text()
+      const indicesOnly = request.url.includes('?scope=indices')
       let body
-      try { body = JSON.parse(text) } catch { body = { message: 'Instrument master returned invalid JSON.' } }
-      sendJson(response, instrumentResponse.status, body)
+      if (indicesOnly && instrumentMasterCache?.expiresAt > Date.now()) body = instrumentMasterCache.data
+      else {
+        const data = await loadInstrumentMaster()
+        body = indicesOnly ? instrumentMasterCache.data : data
+      }
+      sendJson(response, 200, body)
     } catch {
       sendJson(response, 502, { message: 'Unable to fetch instrument master.' })
     }
@@ -357,6 +395,19 @@ const server = createServer(async (request, response) => {
     }
   }
 
+  if (request.method === 'POST' && request.url === '/api/angelone/option-premiums') {
+    const authorization = request.headers.authorization, privateKey = process.env.ANGELONE_PRIVATE_KEY
+    if (!authorization?.startsWith('Bearer ')) return sendJson(response, 401, { message: 'Angel One authorization token is required.' })
+    if (!privateKey) return sendJson(response, 503, { message: 'ANGELONE_PRIVATE_KEY is not configured on the server.' })
+    try {
+      const input = JSON.parse(await readBody(request))
+      const result = await optionPremiums.get(input, { Authorization: authorization, Accept: 'application/json', 'Content-Type': 'application/json', 'X-ClientLocalIP': process.env.ANGELONE_CLIENT_LOCAL_IP || '', 'X-ClientPublicIP': process.env.ANGELONE_CLIENT_PUBLIC_IP || '', 'X-MACAddress': process.env.ANGELONE_MAC_ADDRESS || '', 'X-PrivateKey': privateKey, 'X-SourceID': 'WEB', 'X-UserType': 'USER' })
+      return sendJson(response, 200, result)
+    } catch (error) {
+      return sendJson(response, error instanceof SyntaxError ? 400 : error.status || 502, { message: error instanceof SyntaxError ? 'Request body must be valid JSON.' : error.message || 'Option premiums are unavailable.', ...(error.errorcode ? { errorcode: error.errorcode } : {}) })
+    }
+  }
+
   if (request.method === 'POST' && request.url === '/api/angelone/ltp') {
     const authorization = request.headers.authorization
     const privateKey = process.env.ANGELONE_PRIVATE_KEY
@@ -394,32 +445,12 @@ const server = createServer(async (request, response) => {
       if (!input || required.some((key) => typeof input[key] !== 'string' || !input[key].trim())) {
         return sendJson(response, 400, { message: 'exchange, symboltoken, interval, fromdate, and todate are required.' })
       }
-      const cacheKey = JSON.stringify([
-        action,
-        input.exchange,
-        input.symboltoken,
-        input.interval,
-        input.fromdate.slice(0, 10),
-        input.todate.slice(0, 10),
-      ])
-      const cached = historicalResponseCache.get(cacheKey)
-      if (cached && cached.expiresAt > Date.now()) {
-        return sendJson(response, 200, cached.body)
-      }
-      if (cached) historicalResponseCache.delete(cacheKey)
-
-      const angelResponse = await fetch(angelOneHistoricalUrls[action], {
-        method: 'POST',
-        headers: { Authorization: authorization, Accept: 'application/json', 'Content-Type': 'application/json', 'X-ClientLocalIP': process.env.ANGELONE_CLIENT_LOCAL_IP || '', 'X-ClientPublicIP': process.env.ANGELONE_CLIENT_PUBLIC_IP || '', 'X-MACAddress': process.env.ANGELONE_MAC_ADDRESS || '', 'X-PrivateKey': privateKey, 'X-SourceID': 'WEB', 'X-UserType': 'USER' },
-        body: JSON.stringify(input),
-      })
-      const text = await angelResponse.text()
-      let body
-      try { body = JSON.parse(text) } catch { body = { message: text || 'Angel One returned an invalid response.' } }
-      if (angelResponse.ok && body?.status === true && Array.isArray(body.data)) {
-        historicalResponseCache.set(cacheKey, { body, expiresAt: Date.now() + historicalCacheTtlMs })
-      }
-      sendJson(response, angelResponse.status, body)
+      const result = await historicalRequest(angelOneHistoricalUrls[action], authorization, {
+        Authorization: authorization, Accept: 'application/json', 'Content-Type': 'application/json',
+        'X-ClientLocalIP': process.env.ANGELONE_CLIENT_LOCAL_IP || '', 'X-ClientPublicIP': process.env.ANGELONE_CLIENT_PUBLIC_IP || '',
+        'X-MACAddress': process.env.ANGELONE_MAC_ADDRESS || '', 'X-PrivateKey': privateKey, 'X-SourceID': 'WEB', 'X-UserType': 'USER',
+      }, input)
+      sendJson(response, result.status, result.body)
     } catch (error) {
       sendJson(response, error instanceof SyntaxError ? 400 : 502, { message: error instanceof SyntaxError ? 'Request body must be valid JSON.' : 'Unable to connect to Angel One.' })
     }

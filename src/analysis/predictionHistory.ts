@@ -1,6 +1,7 @@
 import type { AngelOneCandle, AngelOneStreamTick } from '../api/angelOne'
 import type { PredictionPlan } from './earlyPrediction'
 import { candleIntervalMs, completedCandles, tickTimestamp } from './candleData'
+import { withinEntryWindow } from './tradeDecision'
 import { analyzePriceAction } from './priceAction'
 
 export const predictionHistoryKey = 'traders_prediction_history_v1'
@@ -261,6 +262,7 @@ export function canEnterConfirmedPrediction(record: PredictionRecord, plan: Pred
   return Boolean(plan && plan.stage === 'CONFIRMED' && plan.id === record.id && plan.strategyVersion === record.strategyVersion
     && plan.instrument === record.instrument && plan.interval === record.interval && plan.side === record.side && plan.signalCandleTime === record.signalCandleTime
     && plan.entry === record.entry && plan.stopLoss === record.stopLoss && plan.target === record.target
+    && (record.strategyVersion !== 'technical-v2' || withinEntryWindow(now))
     && now >= checkedAt && now - checkedAt <= 30_000 && now >= signal + duration && now < signal + 2 * duration)
 }
 
@@ -277,7 +279,7 @@ export function syncPredictionRecord(record: PredictionRecord, candles: AngelOne
   if (isOpenPrediction(next) && Number.isFinite(time) && time <= now + 1_000 && time - next.observedThrough > 30_000) {
     next = { ...next, status: 'UNVERIFIED', outcomeNote: 'More than 30 seconds of quotes were missed without complete candle coverage. Outcome cannot be verified; excluded from success rate.' }
   }
-  if (tick?.ltp !== undefined && time <= now + 1_000) next = observePredictionTick(next, tick.ltp, time, allowEntry)
+  if (tick?.ltp !== undefined && time <= now + 1_000) next = observePredictionTick(next, tick.ltp, time, allowEntry && (!entryPlan || now - time <= 30_000))
   next = observePredictionReversal(next, candles, now)
   if (next.status === 'PENDING' && now >= next.expiresAt) next = { ...next, status: 'EXPIRED', outcomeNote: 'Entry not observed before the three-interval deadline.' }
   return next

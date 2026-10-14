@@ -1,14 +1,15 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
 import './index.css'
 import Navbar from './components/Navbar'
 import ProfilePage from './pages/ProfilePage'
 import FeedPage from './pages/FeedPage'
 import PostDetail from './pages/PostDetail'
-import PredictionPage from './pages/PredictionPage'
 import AngelOneLoginPage from './pages/AngelOneLoginPage'
 import { postsData } from './data/posts'
 import type { PostItem, CommentItem } from './data/posts'
+
+const PredictionPage = lazy(() => import('./pages/PredictionPage'))
 
 export default function App() {
   const [posts, setPosts] = useState<PostItem[]>(postsData)
@@ -51,7 +52,7 @@ export default function App() {
           path="/post/:id"
           element={<PostDetail posts={posts} onVote={handleVote} onReaction={handleReaction} onComment={handleComment} />}
         />
-        <Route path="/prediction" element={<PredictionPage />} />
+        <Route path="/prediction" element={<Suspense fallback={<p role="status" className="container">Loading trading dashboard…</p>}><PredictionPage /></Suspense>} />
         <Route path="/angelone/login" element={<AngelOneLoginPage />} />
       </Routes>
     </Router>
