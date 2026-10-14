@@ -1,3 +1,5 @@
+import { analyzeDirectionalAlignment, type DirectionalAlignment } from './directionalAlignment'
+import { findMomentumSetups } from './momentumSetups'
 import type { AngelOneCandle } from '../api/angelOne'
 import { completedCandles } from './candleData'
 import { calculateMovingAverageSeries } from './movingAverages'
@@ -41,9 +43,20 @@ export type PriceActionPattern =
   | 'BULLISH_FALSE_BREAKDOWN'
   | 'BEARISH_FALSE_BREAKOUT'
   | 'COMPRESSION_BREAKOUT'
+  | 'TREND_MOMENTUM_BREAK'
+  | 'EMA_PULLBACK_RECLAIM'
+  | 'OPENING_RANGE_BREAKOUT'
+  | 'LEVEL_BREAK_REVERSAL'
   | 'NO_CONFIRMED_PATTERN'
 
+export type DetectedChartSetup = {
+  side: 'CALL' | 'PUT'; pattern: PriceActionPattern; setup: string; reason: string
+  entry: number; stopLoss: number; target: number; target2?: number; targetBasis?: string
+  score: number; confluence: string[]; invalidation: string
+}
+
 export type PriceActionAnalysis = {
+  detectedSetups?: DetectedChartSetup[]
   side: PriceActionSide
   phase: PriceActionPhase
   structure: string
@@ -72,6 +85,11 @@ export type PriceActionAnalysis = {
   exponentialMovingAverage50?: number
   rsi14Momentum?: number
   rsi14?: number
+  adx14?: number
+  plusDi14?: number
+  minusDi14?: number
+  targetBasis?: string
+  alignment?: DirectionalAlignment
   atr14?: number
   supertrend10?: number
   supertrendDirection?: 'UP' | 'DOWN'
@@ -129,6 +147,7 @@ type Candidate = {
   stopLoss: number
   target: number
   target2?: number
+  targetBasis?: string
   score: number
   confluence: string[]
   invalidation: string
@@ -763,7 +782,8 @@ export function analyzePriceAction(
   now = Date.now(),
 ): PriceActionAnalysis {
   const timeframeLabel = interval === 'FIVE_MINUTE' ? '5-minute' : interval === 'FIFTEEN_MINUTE' ? '15-minute' : '1-hour'
-  const parsed = completedCandles(candles, interval, now)
+  const closedCandles = completedCandles(candles, interval, now)
+  const parsed = closedCandles
     .map(toOHLC)
     .filter((candle): candle is OHLC => Boolean(candle))
 
@@ -817,6 +837,9 @@ export function analyzePriceAction(
     rsi14: extra.rsi14 ?? latestIndicators?.rsi14,
     atr14: extra.atr14 ?? latestIndicators?.atr14,
     rsi14Momentum: extra.rsi14Momentum,
+    adx14: extra.adx14 ?? latestIndicators?.adx14,
+    plusDi14: extra.plusDi14 ?? latestIndicators?.plusDi14,
+    minusDi14: extra.minusDi14 ?? latestIndicators?.minusDi14,
     supertrend10: extra.supertrend10 ?? latestIndicators?.supertrend10,
     supertrendDirection: extra.supertrendDirection ?? latestIndicators?.supertrendDirection,
     analyzedCandles: completed.length,
@@ -890,6 +913,16 @@ export function analyzePriceAction(
   const resistance =
     nearestAbove(latest.close, allResistances)?.price ??
     resistanceLevel?.price
+
+  // Freeze the level clustering at the previous candle; the new range cannot move the crossed level.
+  const priorTolerance = Math.max(averageRange(completed, 10, completed.length - 1) * .25, previous.close * .00015)
+  const priorHighLevels = dedupeLevels(highs.filter(swing => swing.index <= completed.length - 4).slice(-10), priorTolerance, 'Prior swing high')
+  const priorLowLevels = dedupeLevels(lows.filter(swing => swing.index <= completed.length - 4).slice(-10), priorTolerance, 'Prior swing low')
+  const priorSupport = nearestBelow(previous.close, [...priorLowLevels,
+    ...[session.previousDayLow, session.previousDayClose].filter((price): price is number => price !== undefined).map(price => ({ price, touches: 1, source: 'Previous session' }))])?.price
+  const priorResistance = nearestAbove(previous.close, [...priorHighLevels,
+    ...[session.previousDayHigh, session.previousDayClose].filter((price): price is number => price !== undefined).map(price => ({ price, touches: 1, source: 'Previous session' }))])?.price
+  const alignment = analyzeDirectionalAlignment(closedCandles, movingAverageSeries, indicatorSeries, interval, { support, resistance, priorSupport, priorResistance })
 
   const nearSupport =
     support !== undefined &&
@@ -1399,6 +1432,8 @@ export function analyzePriceAction(
     })
   }
 
+  candidates.push(...findMomentumSetups(closedCandles, movingAverageSeries, indicatorSeries, interval, support, resistance, alignment))
+
   // Never manufacture a trade simply because a candle looks interesting.
   if (!candidates.length) {
     const outlook = earlyMoveOutlook(
@@ -1439,6 +1474,7 @@ export function analyzePriceAction(
         structureEvent,
         location,
         candleBehavior: behavior,
+        alignment,
         support,
         resistance,
         previousDayHigh: session.previousDayHigh,
@@ -1460,10 +1496,13 @@ export function analyzePriceAction(
     )
   }
 
+  const detectedSetups = candidates.map(candidate => ({ ...candidate, confluence: [...candidate.confluence] }))
   const eligibleCandidates = candidates.filter((candidate) => {
-    const risk = Math.abs(candidate.entry - candidate.stopLoss)
-    const reward = Math.abs(candidate.target - candidate.entry)
-    return risk > 0 && reward / risk >= 1.5
+    const d = candidate.side === 'CALL' ? 1 : -1
+    const chartRisk = (candidate.entry - candidate.stopLoss) * d
+    const risk = chartRisk
+    const reward = (candidate.target - candidate.entry) * d
+    return chartRisk > 0 && risk > 0 && reward / risk >= 1.5
   })
 
   if (!eligibleCandidates.length) {
@@ -1481,6 +1520,7 @@ export function analyzePriceAction(
         structureEvent,
         location,
         candleBehavior: behavior,
+        alignment,
         support,
         resistance,
         previousDayHigh: session.previousDayHigh,
@@ -1493,6 +1533,7 @@ export function analyzePriceAction(
           'Do not widen the stop only to manufacture a better-looking target.',
         ],
         ...outlook,
+        detectedSetups,
         tradeStatus: 'WAIT — detected setup rejected by minimum 1.5:1 reward-to-risk filter',
         movingAverage20,
         exponentialMovingAverage20,
@@ -1545,6 +1586,14 @@ export function analyzePriceAction(
   }
 
   eligibleCandidates.sort((a, b) => {
+    // Prefer candidates that also survive the final ATR risk check. Keep chart-only
+    // candidates available for monitoring reversals in an already open position.
+    const atrReady = (candidate: Candidate) => {
+      const risk = Math.max(Math.abs(candidate.entry - candidate.stopLoss), atr14 ?? 0)
+      return risk > 0 && Math.abs(candidate.target - candidate.entry) / risk >= 1.5
+    }
+    const readiness = Number(atrReady(b)) - Number(atrReady(a))
+    if (readiness) return readiness
     const rrA =
       Math.abs(a.entry - a.stopLoss) > 0
         ? Math.abs(a.target - a.entry) / Math.abs(a.entry - a.stopLoss)
@@ -1563,14 +1612,24 @@ export function analyzePriceAction(
     ? 'At / near the confirmed breakout retest level'
     : selected.pattern === 'BREAKDOWN_RETEST'
       ? 'At / near the confirmed breakdown retest level'
-      : location
+      : selected.pattern === 'EMA_PULLBACK_RECLAIM'
+        ? 'At / near the EMA(20) pullback reclaim'
+        : selected.pattern === 'OPENING_RANGE_BREAKOUT'
+          ? 'At / beyond the 15-minute opening range'
+          : selected.pattern === 'TREND_MOMENTUM_BREAK'
+            ? 'At / beyond the recent momentum break level'
+            : selected.pattern === 'LEVEL_BREAK_REVERSAL'
+              ? 'At / beyond a support/resistance break or reversal'
+              : location
 
   const context = {
+    detectedSetups,
     phase,
     structure,
     structureEvent,
     location: setupLocation,
     candleBehavior: behavior,
+    alignment,
     support,
     resistance,
     previousDayHigh: session.previousDayHigh,
@@ -1586,6 +1645,10 @@ export function analyzePriceAction(
     rsi14Momentum,
     supertrend10,
     supertrendDirection,
+    adx14: latestIndicators?.adx14,
+    plusDi14: latestIndicators?.plusDi14,
+    minusDi14: latestIndicators?.minusDi14,
+    targetBasis: selected.targetBasis,
     latestCandleTime: new Date(latest.time).toISOString(),
   }
 
@@ -1599,6 +1662,10 @@ export function analyzePriceAction(
     'BREAKDOWN_RETEST',
     'BULLISH_FALSE_BREAKDOWN',
     'BEARISH_FALSE_BREAKOUT',
+    'TREND_MOMENTUM_BREAK',
+    'EMA_PULLBACK_RECLAIM',
+    'OPENING_RANGE_BREAKOUT',
+    'LEVEL_BREAK_REVERSAL',
   ].includes(selected.pattern)
   Object.assign(
     result,

@@ -1,15 +1,20 @@
+import { findRiskyLevelSetup, type RiskyLevelSetup } from './riskyLevelSetup'
+import { cachedHistoricalOutcomes, type HistoricalOutcomes } from './historicalOutcomes'
 import type { AngelOneCandle } from '../api/angelOne'
 import type { IndiaVixSnapshot, InstitutionalFlow, MarketContext, MarketOutlook, PublicSnapshot } from '../api/marketContext'
 import type { PriceActionAnalysis, PriceActionInterval } from './priceAction'
-import { candleIntervalMs, completedCandles } from './candleData'
-import { calculateMovingAverageSeries } from './movingAverages'
-import { calculateSessionVwap } from './vwap'
+import { candleIntervalMs } from './candleData'
+import { cachedCandleIndicators } from './candleIndicatorCache'
 import { globalMarketRows, observedFlows } from './marketDashboard'
 import { buildNewsEvidence } from './newsEvidence'
-import { analyzeIndicatorTrajectory, type IndicatorTurn } from './indicatorTrajectory'
+import { buildCandidateDecision, recordTradeDiagnostics, withinEntryWindow, type CandidateDecision } from './tradeDecision'
+import { candleSession } from './vwap'
+import { type IndicatorTurn } from './indicatorTrajectory'
 
 export const tradingEvidenceRules = {
-  minimumCoverage: 70, minimumScore: 60, minimumGap: 20,
+  minimumCoverage: 70, minimumScore: 55, minimumGap: 15,
+  strongScore: 60, strongGap: 20, elevatedVixGap: 20,
+  earlyCandles: 30, earlyCoverage: 60, earlyScore: 55, earlyGap: 15,
   elevatedVixScore: 65, highVixLevel: 25, vixJumpPercent: 10,
   minimumAtrRisk: 1, minimumRewardRisk: 1.5,
 }
@@ -24,6 +29,13 @@ export type MarketSentiment = {
 export type TradingEvidence = {
   version: 'technical-v2'; instrument: string; asOf?: string; interval: PriceActionInterval
   bullishScore: number; bearishScore: number; coverage: number; bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
+  selectedAnalysis?: PriceActionAnalysis
+  decisions?: CandidateDecision[]
+  quality?: 'STANDARD' | 'STRONG'
+  requiredGap: number
+  riskySetup?: RiskyLevelSetup
+  historicalOutcomes?: HistoricalOutcomes
+  checks?: Array<{ label: string; passed: boolean; detail: string }>
   canConfirm: boolean; reason: string; layers: EvidenceLayer[]; bullishEvidence: string[]; bearishEvidence: string[]
   missing: string[]; riskNotes: string[]; atr14?: number; vwap?: number
   indiaVix?: { price: number; changePercent: number; asOf: string }; requiredScore: number; stopLoss?: number; observedFlowReports: InstitutionalFlow[]
@@ -41,11 +53,12 @@ function fresh<T extends { asOf: string }>(snapshot: PublicSnapshot<T> | undefin
 }
 
 /** Fixed evidence budgets avoid multiplying correlated signals or promoting missing data to support. */
-export function analyzeTradingEvidence({ analysis, candles, interval, instrument, context, outlook, indiaVix, flowHistory, now }: {
+function analyzeSetupEvidence({ analysis, candles, interval, instrument, context, outlook, indiaVix, flowHistory, now, historicalReference = false }: {
   analysis: PriceActionAnalysis; candles: AngelOneCandle[]; interval: PriceActionInterval; instrument: string
-  context?: MarketContext | null; outlook?: MarketOutlook; indiaVix?: IndiaVixSnapshot; flowHistory?: InstitutionalFlow[]; now: number
+  context?: MarketContext | null; outlook?: MarketOutlook; indiaVix?: IndiaVixSnapshot; flowHistory?: InstitutionalFlow[]; now: number; historicalReference?: boolean
 }): TradingEvidence {
-  const closed = completedCandles(candles, interval, now)
+  const historicalOutcomes = historicalReference ? cachedHistoricalOutcomes(candles, interval, now) : undefined
+  const { closed, averages, trajectory, vwap: vwapValues } = cachedCandleIndicators(candles, interval, now)
   const chartTime = Date.parse(analysis.latestCandleTime || '')
   const chartCurrent = analysis.analyzedCandles >= 25 && finite(chartTime) && chartTime === Date.parse(closed[closed.length - 1]?.[0] || '')
     && chartTime + candleIntervalMs(interval) <= now && now < chartTime + 2 * candleIntervalMs(interval)
@@ -86,10 +99,8 @@ export function analyzeTradingEvidence({ analysis, candles, interval, instrument
 
   const indicators = layer('indicators', 'Indicators')
   const price = chartCurrent && finite(analysis.currentPrice) ? analysis.currentPrice : undefined
-  const averages = calculateMovingAverageSeries(closed.map(candle => candle[4]))
   const previousEma = averages[averages.length - 2]?.ema20
-  const trajectory = analyzeIndicatorTrajectory(closed, interval, now)
-  const vwapValues = calculateSessionVwap(closed), vwap = vwapValues[vwapValues.length - 1]
+  const vwap = vwapValues[vwapValues.length - 1]
   const atr = chartCurrent && finite(analysis.atr14) && analysis.atr14 > 0 ? analysis.atr14 : undefined
   add(indicators, .05, price !== undefined && finite(analysis.movingAverage20) ? Math.sign(price - analysis.movingAverage20) : undefined, `SMA(20): ${finite(analysis.movingAverage20) ? format(analysis.movingAverage20) : 'warming up'}`)
   add(indicators, .05, price !== undefined && finite(analysis.exponentialMovingAverage20) ? Math.sign(price - analysis.exponentialMovingAverage20) : undefined, `EMA(20): ${finite(analysis.exponentialMovingAverage20) ? format(analysis.exponentialMovingAverage20) : 'warming up'}`)
@@ -152,18 +163,22 @@ export function analyzeTradingEvidence({ analysis, candles, interval, instrument
   }
   if (!global.votes.length) sentimentMissing.push('Current global market quotes')
 
+  const previous = closed[closed.length - 2]
+  const sessionIntact = Boolean(previous && chartTime - Date.parse(previous[0]) === candleIntervalMs(interval) && candleSession(previous[0]) === candleSession(new Date(now).toISOString()) && candleSession(previous[0]) === candleSession(analysis.latestCandleTime!))
+  let requiredGap = tradingEvidenceRules.minimumGap
   let currentVix: TradingEvidence['indiaVix'], requiredScore = tradingEvidenceRules.minimumScore
   if (fresh(indiaVix, now, 30 * 60_000) && indiaVix!.data!.symbol === '^INDIAVIX' && finite(indiaVix!.data!.price) && indiaVix!.data!.price > 0 && finite(indiaVix!.data!.changePercent)) {
     const data = indiaVix!.data!
     currentVix = { price: data.price, changePercent: data.changePercent, asOf: data.asOf }
     const elevated = data.price >= tradingEvidenceRules.highVixLevel || data.changePercent >= tradingEvidenceRules.vixJumpPercent
+    requiredGap = elevated ? tradingEvidenceRules.elevatedVixGap : requiredGap
     requiredScore = elevated ? tradingEvidenceRules.elevatedVixScore : requiredScore
     riskNotes.push(`India VIX ${format(data.price)} · ${format(data.changePercent)}% change; volatility context, not a directional vote${elevated ? ' · elevated-risk score threshold applies' : ''}`)
   } else missing.push('Current India VIX quote (volatility risk unavailable)')
 
   const bullishScore = round(layers.reduce((sum, item) => sum + item.bullish, 0)), bearishScore = round(layers.reduce((sum, item) => sum + item.bearish, 0))
   const coverage = round(layers.reduce((sum, item) => sum + item.weight * item.coverage, 0))
-  const gap = bullishScore - bearishScore
+  const gap = round(bullishScore - bearishScore)
   const bias = Math.abs(gap) < tradingEvidenceRules.minimumGap ? 'NEUTRAL' : gap > 0 ? 'BULLISH' : 'BEARISH'
   const sentimentBullishScore = round(sentimentLayers.reduce((sum, item) => sum + item.bullish, 0)), sentimentBearishScore = round(sentimentLayers.reduce((sum, item) => sum + item.bearish, 0))
   const sentimentCoverage = round(sentimentLayers.reduce((sum, item) => sum + item.weight * item.coverage, 0))
@@ -182,16 +197,61 @@ export function analyzeTradingEvidence({ analysis, candles, interval, instrument
   const stopLoss = roundedEntry !== undefined && riskDistance !== undefined ? (d === 1 ? Math.floor((roundedEntry - riskDistance) * 100) : Math.ceil((roundedEntry + riskDistance) * 100)) / 100 : undefined
   const rewardRisk = roundedEntry !== undefined && stopLoss !== undefined && finite(analysis.target) ? (Math.round(analysis.target * 100) / 100 - roundedEntry) * d / ((roundedEntry - stopLoss) * d) : undefined
   const dominant = side === 'CALL' ? bullishScore : bearishScore, opposing = side === 'CALL' ? bearishScore : bullishScore
+  const directionalLead = round(dominant - opposing)
   const coreIndicators = closed.length >= 50 && [ema20, ema50, analysis.rsi14, analysis.rsi14Momentum].every(finite) && Boolean(analysis.supertrendDirection)
+  const matchingRoutes = analysis.alignment?.routes.filter(route => route.side === side) ?? []
+  const directionalRoute = Date.parse(analysis.alignment?.at ?? '') === chartTime && matchingRoutes.length > 0
   let reason = `${side} completed chart setup and technical evidence align.`
   if (!chartCurrent) reason = 'Waiting for recent completed candles; historical or forming candles cannot confirm a trade.'
+  else if (!sessionIntact) reason = 'Waiting for consecutive completed candles from the current market session.'
+  else if (!withinEntryWindow(now)) reason = 'Outside the new-entry window (09:15–15:25 IST). Existing trades remain monitored.'
   else if (side === 'WAIT' || analysis.pattern === 'NO_CONFIRMED_PATTERN') reason = 'Waiting for a confirmed chart pattern at a valid structure / location.'
   else if (!atr) reason = 'Waiting for a valid ATR(14) risk estimate.'
   else if (!coreIndicators) reason = 'Waiting for EMA(20/50), RSI(14), momentum and Supertrend to warm up on at least 50 completed candles.'
   else if (coverage < tradingEvidenceRules.minimumCoverage) reason = `Insufficient technical evidence: ${coverage}% coverage. Need ≥70% technical coverage; missing inputs are not reweighted.`
-  else if (dominant < requiredScore || dominant - opposing < tradingEvidenceRules.minimumGap) reason = `Evidence is weak or conflicting: ${dominant}/100 support versus ${opposing}/100 opposition. Need ≥${requiredScore} support and a ≥20-point lead.`
+  else if (!directionalRoute) reason = 'Waiting for an EMA trajectory/crossover, Supertrend trajectory/flip or support/resistance break/reversal in the setup direction.'
+  else if (dominant < requiredScore || directionalLead < requiredGap) reason = `Evidence is weak or conflicting: ${dominant}/100 support versus ${opposing}/100 opposition. Need ≥${requiredScore} support and a ≥${requiredGap}-point lead.`
   else if (!finite(stopLoss) || stopLoss <= 0 || !finite(rewardRisk) || rewardRisk < tradingEvidenceRules.minimumRewardRisk) reason = 'Chart target fails the ATR / reward-to-risk check. The stop covers chart invalidation and at least 1 ATR; the target is not stretched to force a trade.'
+  const checks = [
+    { label: 'Recent completed candles', passed: chartCurrent, detail: chartCurrent ? `Latest completed candle ${analysis.latestCandleTime}` : 'Saved or forming candles cannot create a current entry.' },
+    { label: 'Confirmed price pattern', passed: side !== 'WAIT' && analysis.pattern !== 'NO_CONFIRMED_PATTERN', detail: side === 'WAIT' ? analysis.reason : analysis.setup },
+    { label: 'Indicator warmup', passed: coreIndicators, detail: `${closed.length} closed candles · EMA20/50, RSI and Supertrend require at least 50.` },
+    { label: 'ATR risk', passed: Boolean(atr), detail: atr ? `ATR(14) ${atr.toFixed(2)} points · Stop covers at least 1 ATR.` : 'A current, positive ATR estimate is required.' },
+    { label: 'Technical coverage', passed: coverage >= tradingEvidenceRules.minimumCoverage, detail: `${coverage}% available / ${tradingEvidenceRules.minimumCoverage}% required. Missing inputs are not reweighted.` },
+    { label: 'Directional agreement', passed: side !== 'WAIT' && directionalRoute && dominant >= requiredScore && directionalLead >= requiredGap, detail: `Matched route: ${directionalRoute ? matchingRoutes.map(route => route.name).join(' or ') : 'none'}. Bullish ${bullishScore}/100 · Bearish ${bearishScore}/100 · Need ${requiredScore} support and ${requiredGap}-point lead.` },
+    { label: 'Reward/risk on confirmed setup', passed: finite(stopLoss) && stopLoss > 0 && finite(rewardRisk) && rewardRisk >= tradingEvidenceRules.minimumRewardRisk, detail: finite(rewardRisk) ? `${rewardRisk.toFixed(2)} : 1 after ATR stop adjustment / ${tradingEvidenceRules.minimumRewardRisk} : 1 required.` : 'A confirmed price setup and its validated entry, stop and target are required.' },
+  ]
   const canConfirm = reason === `${side} completed chart setup and technical evidence align.`
-  return { version: 'technical-v2', instrument, interval, asOf: analysis.latestCandleTime, bullishScore, bearishScore, coverage, bias, canConfirm, reason, layers, sentiment, turns: chartCurrent ? trajectory.turns : [],
-    bullishEvidence: [...new Set(bullishEvidence)], bearishEvidence: [...new Set(bearishEvidence)], missing, riskNotes, atr14: atr, vwap, indiaVix: currentVix, requiredScore, stopLoss, observedFlowReports }
+  const riskySetup = canConfirm ? undefined : findRiskyLevelSetup({ analysis, candles: closed, checks, bullishScore, bearishScore, interval, now })
+  return { version: 'technical-v2', instrument, interval, asOf: analysis.latestCandleTime, bullishScore, bearishScore, coverage, bias, canConfirm, reason, checks, riskySetup, historicalOutcomes, layers, sentiment, turns: chartCurrent ? trajectory.turns : [],
+    bullishEvidence: [...new Set(bullishEvidence)], bearishEvidence: [...new Set(bearishEvidence)], missing, riskNotes, atr14: atr, vwap, indiaVix: currentVix, requiredScore, requiredGap, quality: canConfirm ? dominant >= tradingEvidenceRules.strongScore && directionalLead >= tradingEvidenceRules.strongGap ? 'STRONG' : 'STANDARD' : undefined, stopLoss, observedFlowReports }
+}
+
+/** Score CE and PE independently before selecting an entry candidate. Shared indicators stay memory-cached. */
+export function analyzeTradingEvidence(input: Parameters<typeof analyzeSetupEvidence>[0]): TradingEvidence {
+  const roundPrice = (price: number) => Math.round(price * 100) / 100
+  const base = analyzeSetupEvidence(input), { closed } = cachedCandleIndicators(input.candles, input.interval, input.now)
+  const sides = (['CALL', 'PUT'] as const).map(side => {
+    if (base.canConfirm && input.analysis.side === side) return { analysis: input.analysis, evidence: base, decision: buildCandidateDecision(input.analysis, base, side, closed, input.now, tradingEvidenceRules) }
+    const d = side === 'CALL' ? 1 : -1
+    const candidates = (input.analysis.detectedSetups ?? []).filter(setup => setup.side === side).sort((a, b) => {
+      const eligible = (setup: typeof a) => {
+        const entry = roundPrice(setup.entry), chartRisk = d * (entry - setup.stopLoss)
+        const risk = Math.max(chartRisk, input.analysis.atr14 ?? 0)
+        const stop = (d === 1 ? Math.floor((entry - risk) * 100) : Math.ceil((entry + risk) * 100)) / 100
+        return chartRisk > 0 && stop > 0 && d * (roundPrice(setup.target) - entry) / (d * (entry - stop)) >= 1.5
+      }
+      return Number(eligible(b)) - Number(eligible(a)) || b.score - a.score
+    })
+    const candidate = candidates[0]
+    const analysis: PriceActionAnalysis = candidate ? { ...input.analysis, ...candidate, detectedSetups: undefined, confidence: candidate.score } : input.analysis.side === side ? input.analysis : { ...input.analysis, side: 'WAIT', pattern: 'NO_CONFIRMED_PATTERN', setup: 'No completed setup', entry: undefined, stopLoss: undefined, target: undefined }
+    const same = analysis.side === input.analysis.side && analysis.pattern === input.analysis.pattern && analysis.entry === input.analysis.entry && analysis.stopLoss === input.analysis.stopLoss && analysis.target === input.analysis.target
+    const evidence = same ? base : analyzeSetupEvidence({ ...input, analysis, historicalReference: false })
+    return { analysis, evidence, decision: buildCandidateDecision(analysis, evidence, side, closed, input.now, tradingEvidenceRules) }
+  })
+  // Preserve the existing selected setup when eligible; otherwise consider the other independent pipeline.
+  const selected = base.canConfirm ? { analysis: input.analysis, evidence: base } : sides.find(item => item.evidence.canConfirm) ?? sides.find(item => item.evidence.riskySetup) ?? sides.find(item => item.decision.state === 'EARLY') ?? { analysis: input.analysis, evidence: base }
+  const decisions = sides.map(item => item.decision)
+  recordTradeDiagnostics(input.instrument, input.interval, input.analysis.latestCandleTime, input.now, decisions)
+  return { ...selected.evidence, historicalOutcomes: base.historicalOutcomes, selectedAnalysis: selected.analysis, decisions }
 }

@@ -44,7 +44,7 @@ function FlowTrend({ history }: { history: InstitutionalFlow[] }) {
   )
 }
 
-export default function MarketContextPanel({ context, loading, refresh, outlook, chartCurrent, analysis, candles, openingCandles, now }: {
+export default function MarketContextPanel({ context, loading, refresh, outlook, chartCurrent, analysis, candles, openingCandles, now, children }: {
   context: MarketContext | null
   loading: boolean
   refresh: () => void
@@ -54,6 +54,7 @@ export default function MarketContextPanel({ context, loading, refresh, outlook,
   candles: AngelOneCandle[]
   openingCandles: AngelOneCandle[]
   now: number
+  children?: ReactNode
 }) {
   const { history: flowHistory, storageError: flowStorageError } = useInstitutionalFlows(context?.inputs?.institutional)
   const dashboard = buildMarketDashboard({ analysis, candles, openingCandles, context, outlook, chartCurrent, now })
@@ -64,7 +65,8 @@ export default function MarketContextPanel({ context, loading, refresh, outlook,
       <div className="market-context-heading"><strong>What the agent analysed</strong><div className="agent-analysis-heading-actions"><span>Score: −2 bearish to +2 bullish</span><button type="button" onClick={refresh} disabled={loading} aria-label="Refresh market context" title="Refresh market context">{loading ? '…' : '↻'}</button></div></div>
       <p className="market-context-note">Free public feeds · May be delayed · Refresh every 5 minutes{loading ? ' · Updating…' : ''}</p>
       {!chartCurrent && <p className="market-context-note">Historical chart snapshot: waiting for recent completed candles.</p>}
-      <div className="agent-analysis-grid">{dashboard.tiles.map(tile => tile.key === 'news' ? <MarketNews key={tile.key} context={context} outlook={outlook} now={now} loading={loading} embedded weight={tile.weight} /> : <AnalysisCard key={tile.key} tile={tile}>
+      <p className="market-context-note">Swipe or scroll horizontally to view all cards.</p>
+      <div className="agent-analysis-grid" tabIndex={0} role="region" aria-label="Scroll agent analysis cards horizontally">{children}{dashboard.tiles.map(tile => tile.key === 'news' ? <MarketNews key={tile.key} context={context} outlook={outlook} now={now} loading={loading} embedded weight={tile.weight} /> : <AnalysisCard key={tile.key} tile={tile}>
         {tile.key === 'flows' && <><FlowTrend history={flowHistory} />{flowStorageError && <p className="market-context-note">Daily flow history could not be saved in this browser.</p>}{context?.inputs?.participantPositions.data && <p className="market-context-note"><a href={context.inputs.participantPositions.sourceUrl} target="_blank" rel="noopener noreferrer">Index futures positions ↗</a> · {reportDate(context.inputs.participantPositions.data.asOf)}</p>}</>}
         {tile.key === 'global' && <details className="agent-global-sources"><summary>Quote timestamps & sources</summary>{context?.inputs?.giftNifty && <p><a href={context.inputs.giftNifty.sourceUrl} target="_blank" rel="noopener noreferrer">GIFT Nifty futures ↗</a> · {context.inputs.giftNifty.status.toLowerCase()} · {time(context.inputs.giftNifty.data?.asOf)}{context.inputs.giftNifty.data?.expiry ? ` · Expiry ${context.inputs.giftNifty.data.expiry}` : ''}</p>}{context?.inputs?.global.map(quote => <p key={quote.name}><a href={quote.sourceUrl} target="_blank" rel="noopener noreferrer">{quote.name} ↗</a> · {quote.status.toLowerCase()} · {time(quote.data?.asOf)}</p>)}</details>}
       </AnalysisCard>)}</div>

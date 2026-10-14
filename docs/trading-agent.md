@@ -34,14 +34,17 @@ Confirmation requires:
 
 - A recent completed price-action pattern with valid entry, target and invalidation.
 - At least 50 completed bars and warmed-up EMA20/50, RSI14/momentum and Supertrend.
-- At least 70% technical coverage, directional support of 60/100, and a 20-point lead.
+- At least 70% technical coverage, directional support of 55/100, and a 15-point lead for STANDARD confirmation.
+- STRONG classification requires at least 60/100 support and a 20-point lead.
+- Consecutive completed bars from the current IST session and the 09:15–15:25 IST new-entry window.
 - A stop outside chart invalidation and at least one ATR14 from entry, rounded outward.
 - At least 1.5:1 reward/risk after widening the stop; the chart target stays unchanged.
 
 ATR and India VIX are risk checks rather than directional votes.
 [NSE describes India VIX](https://www.nseindia.com/static/products-services/indices-indiavix-index)
 as expected volatility. The existing experimental rule raises required technical
-support from 60 to 65 when VIX is at least 25 or its daily rise is at least 10%.
+support from 55 to 65 and the directional lead from 15 to 20 when VIX is at least
+25 or its daily rise is at least 10%.
 Unavailable VIX is disclosed. Thresholds require strategy validation.
 
 ## Part 2: market sentiment reference
@@ -95,3 +98,173 @@ The card displays separate score sets, coverage, contribution tables, missing da
 opposing evidence and technical risk checks. Gemini receives completed chart data,
 separate technical scores and sentiment context as an advisory second opinion.
 Saved flow reports remain browser observations, not independently verified history.
+
+## Additional completed-candle opportunities
+
+The engine also checks trend momentum breaks, EMA(20) pullback reclaims and first
+breaks of the actual 09:15–09:30 IST opening range. These setups require warmed-up
+indicators and at least one directional route: EMA20/50 trajectory or crossover,
+Supertrend trajectory or flip, or a support/resistance break or reversal. The
+routes use OR; EMA, Supertrend and DMI need not all agree. RSI and ADX/DMI remain
+context, and conflicting evidence still affects the fixed technical score. A
+completed directional candle and price event are required. The last seven bars
+must be consecutive within the same session.
+Tiny/indecisive bodies, large spikes, overextended prices and session-close entries
+are excluded. Missing opening bars cannot create an opening-range setup.
+
+ADX measures trend strength; +DI and −DI supply direction. Calculation uses
+Wilder smoothing with fourteen valid price changes for DI and fourteen DX values
+for ADX. It restarts warmup after invalid data. The concepts and interpretation
+are described in [TradingView's DMI documentation](https://www.tradingview.com/support/solutions/43000502250-directional-movement-dmi/).
+The numeric setup thresholds here are experimental rules, not calibrated accuracy.
+
+New setup stops cover both chart invalidation and at least one ATR from the outset.
+An observed support/resistance target remains a cap. When no observed target exists,
+a projected 2R target is labelled explicitly. Candidate ranking prefers setups
+that satisfy the final ATR reward/risk check. It still exposes chart-only reversals
+for managing existing positions; ATR entry rejection does not disable exit logic.
+
+The agent displays seven confirmation checks and separately reports a disconnected
+stream or missing fresh quote. Bullish/bearish scores remain weighted evidence,
+not probabilities. Current support/resistance levels are drawn with green S and
+red R price-scale labels, with full values in a legend; levels outside the current
+price viewport remain available in the legend and are visible when panning to them.
+
+## Historical outcome reference
+
+For the visible agent, a memory-cached comparison matches past candle shape,
+EMA20/50 trend and slope, price relative to EMA20, Supertrend, RSI band, ADX trend
+strength and normalized ATR volatility. An indecisive current candle is compared
+with indecisive historical candles in similar indicator conditions.
+
+Only completed candles are used. Historical outcome windows contain three
+consecutive same-session candles after each reference. Selected windows do not
+overlap, and a three-bar embargo separates them from the current reference.
+Up/down requires a net closing move greater than ±0.5 ATR of that historical
+reference; smaller changes are classified flat. Missing bars and overnight gaps
+cannot masquerade as continuous intraday moves.
+
+Percentages are withheld below thirty cases or three distinct saved sessions.
+Displayed rates are empirical frequencies of next-three-bar outcomes, not
+calibrated live forecasts or trade success probabilities. The visible 95% Wilson
+sampling ranges follow [NIST's proportion interval method](https://www.itl.nist.gov/div898/handbook/prc/section2/prc241.htm).
+Non-overlapping windows still need not be independent; correlated market regimes,
+limited history, slippage and transaction costs are outside those sampling ranges.
+
+Historical bias requires a directional outcome rate ≥60% with its Wilson lower
+bound above 50%. It is recorded separately from technical evidence scores and
+cannot override a missing current pattern, expired signal, ATR/RR failure or missing
+live quote. The current watch levels remain visible while waiting. Hidden agents
+skip this optional reference to avoid repeating historical comparison work. No extra history or AI requests are needed.
+
+## Partial-check risky level setups
+
+When full technical confirmation fails, the agent can display a separate `RISKY`
+conditional setup after at least four of the seven full-confirmation checks pass.
+The count is a screening threshold, not permission to ignore any missing input.
+Recent completed candles, fifty-bar EMA/RSI warmup, a positive ATR, chronological
+same-session bars, and market hours remain required.
+
+A risky CALL requires a recent support touch; a risky PUT requires a resistance
+touch. The current close must be on the supported side and within 1.5 ATR of the
+observed level. At least one current EMA, Supertrend or support/resistance route
+must match the proposed direction. Opposing RSI, EMA, Supertrend and DMI readings
+are disclosed, rather than adding another all-indicators agreement gate.
+Directional evidence must supply at least
+40 points with a ten-point lead. These partial thresholds are experimental rules,
+not calibrated trade probabilities.
+
+Entry is a proposed break beyond the last two completed candle highs/lows. The
+stop covers the level/candle invalidation and at least one ATR. Observed opposing
+support/resistance caps the target; insufficient room rejects the idea. When no
+observed opposing target exists, the 2R projection is labelled explicitly. Rounded
+prices must still offer at least 1.5:1 reward/risk. Stale data, missing/distant
+levels, absent directional routes, insufficient score/lead, late-session data and
+poor risk/reward remain WAIT even if four arbitrary checks passed.
+
+The card shows an amber “RISKY · CONDITIONAL SETUP” label, trigger/stop/target,
+matched level, aligned/conflicting indicators and unmet confirmation checks. The
+original seven checks continue to describe full confirmation. This conditional
+idea is not a confirmed entry: it does not reserve a live trade, write a confirmed
+ledger entry or trigger an entry notification. Only a subsequent fully confirmed
+setup and observed live entry use the existing trade lifecycle. An already open
+index trade remains the displayed trade and cannot be overlapped by a risky idea.
+
+`npm run test:agent` includes partial CALL/PUT setup tests, threshold/freshness/
+chronology/target-cap rejection, confirmed-stage preservation and seeded OHLC
+end-to-end detection. These checks verify implementation, not market profitability.
+
+## Directional alignment routes for CALL and PUT
+
+CALL/CE and PUT/PE use mirrored rules. EMA20/50 crossovers compare the previous
+completed pair with the current pair; trajectory compares EMA20 and EMA50 over
+three consecutive bars, with EMA50 flat or moving in the same direction.
+Supertrend uses a direction flip or movement of its line over three bars, with
+price on the indicated side. Both trajectories use a 0.03 ATR noise band.
+
+Support/resistance breaks compare consecutive closes across a level known before
+the latest candle. Prior swing levels exclude pivots that only become detectable
+with the latest candle. A reversal requires a recent level touch, a directional
+improvement in close, and a close in the directional 55% of the candle range.
+Routes never compare across session boundaries or missing bars. Forming candles
+are excluded before calculating routes or patterns.
+
+The card lists matched bullish and bearish routes in “Directional alignment”.
+These routes do not add a second indicator weight. Full confirmation still
+requires a current completed pattern, a route in that pattern's direction,
+existing fixed-budget technical score/lead and coverage thresholds, warmed-up
+indicators, and ATR/reward-risk validation. A route by itself cannot confirm a
+trade. Partial proposals remain explicitly RISKY and cannot enter confirmed
+trade history. One live trade per index and exit-before-replacement are retained.
+
+`npm run test:agent` verifies each of the six route variants independently for
+both CALL and PUT, disagreement with other indicators, absent routes, candle
+indecision, missing bars and overnight boundaries. These rules and tests do not
+establish calibrated live-market accuracy or profitability.
+
+## Independent candidate decisions and rejection diagnostics
+
+Chart detection retains CALL and PUT candidates, including candidates rejected
+by the initial reward/risk filter. Their original target and invalidation levels
+remain inspectable. Each direction is scored independently against the same
+completed candles and current indicator/positioning data. If the original chart
+selection is ineligible, the other direction can qualify independently. A valid
+original selection retains priority; only one plan is submitted to the existing
+one-position-per-index tracker.
+
+Initial candidates require at least 30 completed bars, 60% technical coverage,
+55 supporting points and a 15-point lead, a matching route, available initial
+EMA20/RSI/momentum/Supertrend inputs, and fresh same-session data, valid ATR and
+entry hours. High-VIX score/lead requirements also apply to these early
+candidates. They can be displayed as EARLY while EMA50 warmup or a completed
+pattern/risk check is missing. Fifty bars, full indicator readiness, 70% coverage
+and at least 1.5:1 reward/risk remain mandatory for actual confirmation. Standard
+55/15 and strong 60/20 classifications are experimental thresholds chosen by
+the user, not calibrated probabilities. Missing weights remain undistributed.
+
+The CALL / PUT decisions disclosure shows each direction's support/opposing
+scores, lead, coverage, pattern, routes, actual candidate levels and checked
+reward/risk. All failed checks have reason codes, including insufficient
+candles, stale data, session gaps, indicator readiness, missing routes/patterns,
+coverage, score, lead, invalid ATR/levels, reward/risk and entry hours.
+
+A separate entry section distinguishes technical confirmation from a disconnected
+stream, missing/stale quote, quote predating issue, unreached trigger and poor
+reward/risk at the actual quote. Quote-dependent reward/risk is not checked
+until the entry is reached. Full confirmation is not an observed fill. Standard
+versus strong quality is retained in entered-plan snapshots. No option contract
+is selected or validated by this index-level engine; it does not manufacture an
+OPTION_CONTRACT_INVALID result for an integration it does not perform.
+
+The page keeps a bounded memory log of the last 400 changed assessments, with
+both directions and their thresholds/reasons on each snapshot. Identical
+heartbeat evaluations are deduplicated. The download button exports the selected
+index's session log without broker credentials or news/provider responses. Reload
+clears this diagnostic memory; the existing entered-trade ledger persists.
+
+The core scorer and live entry guard both reject new entries at/after 15:25 IST.
+Open-position target/stop/reversal monitoring continues. The entry tracker
+continues requiring a fresh matching assessment and now explicitly refuses a
+stale live quote when a current technical confirmation is supplied. Data
+freshness, ATR, source-session integrity and quote/entry checks are not relaxed
+by the new score thresholds.
