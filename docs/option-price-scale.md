@@ -2,7 +2,12 @@
 
 The chart's right price scale is a three-column horizontal scroller: CE, index
 levels, PE. It opens on the center index column. Buttons provide the same
-navigation for keyboard/mouse use. Nifty 50 levels use fixed 50-point multiples;
+navigation for keyboard/mouse use. These controls sit below the chart at the
+bottom right. The center button displays the nearest option expiry as `DD/MM E`
+and still selects the index column. The existing cached index-instrument response
+supplies expiry metadata before premiums load, without an extra quote request;
+missing or expired metadata displays `— E`. Public expiry metadata loads even
+without an active broker session. Nifty 50 levels use fixed 50-point multiples;
 Sensex and Bank Nifty use 100-point multiples. Rows and grid lines use the actual
 underlying price coordinate. Normally the candle range is preserved; a tight
 range containing no strike is extended just enough to expose the nearest level.

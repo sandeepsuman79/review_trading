@@ -217,6 +217,7 @@ export default function PredictionPage() {
   const [profileError, setProfileError] = useState('')
   const [instrumentError, setInstrumentError] = useState('')
   const [instrumentLoading, setInstrumentLoading] = useState(false)
+  const [optionExpiries, setOptionExpiries] = useState<Record<string, string>>({})
   const [selectedIndexToken, setSelectedIndexToken] = useState(trackedInstruments[0].token)
   const chartSectionRef = useRef<HTMLDivElement>(null)
   const [chartInterval, setChartInterval] = useState<ChartInterval>('FIVE_MINUTE')
@@ -537,13 +538,14 @@ export default function PredictionPage() {
 
   async function fetchInstrumentQuotes() {
     const token = localStorage.getItem('angelone_jwt_token')
-    if (!token) return
     setInstrumentLoading(true)
     setInstrumentError('')
     try {
       const master = await getInstrumentMaster('indices')
+      setOptionExpiries(Object.fromEntries(trackedInstruments.map(instrument => [instrument.name, master.find(item => String(item.token) === instrument.token)?.optionExpiry || ''])))
       const vix = resolveIndiaVixInstrument(master)
       setIndiaVixInstrument(current => current?.token === vix?.token && current?.symbol === vix?.symbol ? current : vix)
+      if (!token) return
       await Promise.all(trackedInstruments.map(async (tracked) => {
         const instrument = master.find((item) => item.token === tracked.token)
           || { token: tracked.token, symbol: tracked.symbol, exch_seg: tracked.exchange === 'BSE' ? 'bse_cm' : 'nse_cm' }
@@ -617,6 +619,7 @@ export default function PredictionPage() {
                   intervalLabel={intervalLabel(chartInterval)}
                   savedCandleCount={chartCandles[instrument.name]?.length || 0}
                   spotIndex
+                  optionExpiry={optionExpiries[instrument.name]}
                   levels={structureLevels[instrument.name]}
                   trade={chartTradeLevels[instrument.name]}
                   indiaVix={indiaVix}

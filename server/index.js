@@ -44,7 +44,11 @@ async function loadInstrumentMaster() {
     if (!response.ok || !Array.isArray(data)) throw new Error('Invalid instrument master')
     const options = nearestIndexOptions(data, Date.now())
     instrumentMasterCache = { expiresAt: Math.min(Date.now() + 6 * 3_600_000, ...Object.values(options).map(group => group.expiryAt)), options,
-      data: data.filter(item => ['99926000', '99919000', '99926009'].includes(String(item.token)) || /INDIAVIX/i.test(`${item.name} ${item.symbol}`.replace(/[^a-z0-9]/gi, ''))) }
+      data: data.filter(item => ['99926000', '99919000', '99926009'].includes(String(item.token)) || /INDIAVIX/i.test(`${item.name} ${item.symbol}`.replace(/[^a-z0-9]/gi, ''))).map(item => {
+        const indexName = { '99926000': 'Nifty 50', '99919000': 'Sensex', '99926009': 'Bank Nifty' }[String(item.token)]
+        const group = options[indexName]
+        return { ...item, ...(group?.contracts.length ? { optionExpiry: new Date(group.expiryAt).toISOString().slice(0, 10) } : {}) }
+      }) }
     return data
   })().finally(() => { instrumentMasterPending = undefined })
   return instrumentMasterPending
