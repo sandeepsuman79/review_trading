@@ -13,7 +13,7 @@ export function diagnoseTradeEntry(plan: PredictionPlan | undefined, tick: Angel
   if (!confirmed || !plan) return { state: 'NOT CHECKED', checks }
   const signal = Date.parse(plan.signalCandleTime), duration = candleIntervalMs(plan.interval)
   const window = withinEntryWindow(now) && now < plan.expiresAt && now >= signal + duration && now < signal + 2 * duration
-  add('OUTSIDE_ENTRY_WINDOW', 'Current entry window', window, 'Current completed setup, before its deadline and within 09:15–15:25 IST')
+  add('OUTSIDE_ENTRY_WINDOW', 'Current entry window', window, 'Current completed setup, before its deadline and within Mon–Fri 09:15–15:15 IST')
   add('LIVE_STREAM_DISCONNECTED', 'Stream', streamConnected, streamConnected ? 'Connected' : 'New entries paused')
   const time = tick ? tickTimestamp(tick) : NaN, price = tick?.ltp
   const quoteFresh = Number.isFinite(time) && now - time >= -1000 && now - time <= 30000 && price !== undefined && Number.isFinite(price) && price > 0

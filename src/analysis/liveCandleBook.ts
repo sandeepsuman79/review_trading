@@ -1,8 +1,9 @@
 import type { AngelOneCandle, AngelOneStreamTick } from '../api/angelOne'
 import type { PriceActionInterval } from './priceAction'
 import { applyLiveTick, candleBucketTime, normalizeCandles, tickTimestamp } from './candleData'
+import { candleIntervals } from './timeframes'
 
-const intervals: PriceActionInterval[] = ['FIVE_MINUTE', 'FIFTEEN_MINUTE', 'ONE_HOUR']
+const intervals = candleIntervals
 type Snapshot = { token: string; interval: PriceActionInterval; candles: AngelOneCandle[] }
 
 /** Consume every exchange tick synchronously, independently of React's render batching. */

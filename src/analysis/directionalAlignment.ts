@@ -31,6 +31,15 @@ export function analyzeDirectionalAlignment(candles: AngelOneCandle[], averages:
         if (d * fast > noise && d * slow >= -noise && d * (current[4] - avg.ema20!) >= -.25 * atr) add('EMA', side, `EMA20/50 trajectory ${direction}`)
       }
     }
+    const turnStart = averages[end - 6], turnMiddle = averages[end - 3]
+    if (sameBars(6) && finite(turnStart?.ema20) && finite(turnMiddle?.ema20) && finite(avg.ema20) && finite(point.rsi14) && finite(prior.rsi14)) {
+      const before = turnMiddle.ema20 - turnStart.ema20, after = avg.ema20 - turnMiddle.ema20
+      const priceBreak = d === 1 ? previous[2] : previous[3]
+      // A fast turn needs completed price and RSI confirmation while EMA50 can still lag.
+      if (d * before < -noise && d * after > noise && d * (current[4] - avg.ema20) > buffer && d * (current[4] - current[1]) > buffer && d * (current[4] - priceBreak) > buffer && d * (point.rsi14 - prior.rsi14) > 0) {
+        add('EMA', side, `EMA20 turned ${direction} with price break and RSI momentum`)
+      }
+    }
     const trendDirection = d === 1 ? 'UP' : 'DOWN'
     if (point.supertrendDirection === trendDirection && finite(point.supertrend10) && d * (current[4] - point.supertrend10) > 0) {
       if (prior.supertrendDirection && prior.supertrendDirection !== point.supertrendDirection) add('SUPERTREND', side, `Supertrend flipped ${direction}`, point.supertrend10)

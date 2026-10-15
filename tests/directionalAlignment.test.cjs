@@ -68,3 +68,63 @@ test('conflicting directional routes remain visible rather than becoming one una
   assert(result.bullish.some(name => name.includes('EMA')))
   assert(result.bearish.some(name => name.includes('Supertrend')))
 })
+
+test('fast EMA20 turns can precede EMA50 alignment, but require a completed price break and improving RSI', () => {
+  for (const d of [1, -1]) {
+    const data = fixture('none', d), side = d === 1 ? 'CALL' : 'PUT'
+    data.averages[53].ema20 = 100 + d * .9
+    data.averages[56].ema20 = 100 + d * .2
+    data.averages[59].ema20 = 100 + d * .6
+    data.indicators[59].rsi14 = data.indicators[58].rsi14 + d * 2
+    const getTurns = () => analyzeDirectionalAlignment(data.candles, data.averages, data.indicators, 'FIVE_MINUTE').routes.filter(route => route.name.includes('turned'))
+    assert.equal(getTurns().length, 1); assert.equal(getTurns()[0].side, side)
+    assert(d * (data.averages[59].ema20 - data.averages[59].ema50) < 0, 'EMA50 has not crossed yet')
+    const rsi = data.indicators[59].rsi14
+    data.indicators[59].rsi14 = data.indicators[58].rsi14
+    assert.equal(getTurns().length, 0)
+    data.indicators[59].rsi14 = rsi
+    const close = data.candles[59][4]
+    data.candles[59][4] = d === 1 ? data.candles[58][2] : data.candles[58][3]
+    assert.equal(getTurns().length, 0)
+    data.candles[59][4] = close
+    data.averages[53].ema20 = data.averages[56].ema20
+    assert.equal(getTurns().length, 0, 'a one-way slope is not a turn')
+    data.averages[53].ema20 = 100 + d * .9
+    data.candles[54][0] = new Date(Date.parse(data.candles[54][0]) + 60000).toISOString()
+    assert.equal(getTurns().length, 0, 'missing bars invalidate the six-bar comparison')
+  }
+})
+
+test('three-candle reversals mirror CALL and PUT at observed levels, without manufacturing a missing setup', () => {
+  for (const d of [1, -1]) {
+    const data = fixture('none', 1)
+    data.candles = data.candles.map((c, i) => [new Date(start + i * 60000).toISOString(), ...c.slice(1)])
+    data.candles[57] = [data.candles[57][0], 102, 102.2, 99.8, 100, 0]
+    data.candles[58] = [data.candles[58][0], 99.9, 100.4, 99.5, 100, 0]
+    data.candles[59] = [data.candles[59][0], 100.1, 102.3, 100, 102, 0]
+    if (d === -1) {
+      data.candles = data.candles.map(c => [c[0], 200-c[1], 200-c[3], 200-c[2], 200-c[4], 0])
+      data.averages = data.averages.map(p => ({ ema20: 200-p.ema20, ema50: 200-p.ema50 }))
+    }
+    const side = d === 1 ? 'CALL' : 'PUT', level = d === 1 ? 99.7 : 100.3
+    const alignment = { at: data.candles[59][0], routes: [{ family: 'LEVEL', side, level, name: 'Observed level reaction' }] }
+    const find = (support = d === 1 ? level : undefined, resistance = d === -1 ? level : undefined, routes = alignment) => findMomentumSetups(data.candles, data.averages, data.indicators, 'ONE_MINUTE', support, resistance, routes).filter(item => item.pattern === 'THREE_CANDLE_REVERSAL')
+    const result = find()
+    assert.equal(result.length, 1); assert.equal(result[0].side, side)
+    const extreme = d === 1 ? Math.min(...data.candles.slice(-3).map(c => c[3])) : Math.max(...data.candles.slice(-3).map(c => c[2]))
+    assert(d * (extreme - result[0].stopLoss) > 0, 'stop covers all three candles')
+    assert(!findMomentumSetups(data.candles, data.averages, data.indicators, 'ONE_MINUTE', undefined, undefined, alignment).some(item => item.pattern === 'THREE_CANDLE_REVERSAL'), 'a missing observed level cannot be invented')
+    assert.equal(find(undefined, undefined, { ...alignment, routes: [] }).length, 0)
+    assert.equal(find(d === 1 ? level - 10 : undefined, d === -1 ? level + 10 : undefined).length, 0, 'a distant level does not qualify')
+    const open = data.candles[58][1]
+    data.candles[58][1] = data.candles[58][4] + d * .4
+    assert.equal(find().length, 0, 'middle candle must lose momentum')
+    data.candles[58][1] = open
+    const timestamp = data.candles[57][0]
+    data.candles[57][0] = new Date(Date.parse(timestamp) + 10000).toISOString()
+    assert.equal(find().length, 0, 'missing bars interrupt the reversal pattern')
+    data.candles[57][0] = timestamp
+    data.candles[57][1] = data.candles[57][4] - d * .1
+    assert.equal(find().length, 0, 'first candle must oppose the reversal')
+  }
+})

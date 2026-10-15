@@ -2,6 +2,7 @@ import type { AngelOneCandle } from '../api/angelOne'
 import type { PriceActionAnalysis, PriceActionInterval } from './priceAction'
 import { candleIntervalMs } from './candleData'
 import { candleSession } from './vwap'
+import { inTradingEntryWindow } from './tradingSession'
 
 export type RiskyLevelSetup = {
   side: 'CALL' | 'PUT'; entry: number; stopLoss: number; target: number; riskReward: number
@@ -22,8 +23,7 @@ export function findRiskyLevelSetup({ analysis, candles, checks, bullishScore, b
   if (passedChecks < 4 || candles.length < 50 || !latest || !previous || !valid(atr) || !valid(ema20) || !valid(ema50) || rsi === undefined || momentum === undefined || !Number.isFinite(rsi) || !Number.isFinite(momentum)) return undefined
   const time = Date.parse(latest[0]), duration = candleIntervalMs(interval)
   if (Date.parse(analysis.latestCandleTime ?? '') !== time || time + duration > now || now >= time + 2 * duration || candleSession(latest[0]) !== candleSession(previous[0]) || time - Date.parse(previous[0]) !== duration) return undefined
-  const local = new Date(now + 330 * 60_000), minute = local.getUTCHours() * 60 + local.getUTCMinutes()
-  if (minute < 555 || minute >= 925) return undefined
+  if (!inTradingEntryWindow(now)) return undefined
   const setups: RiskyLevelSetup[] = []
   for (const d of [1, -1] as const) {
     const level = d === 1 ? analysis.support : analysis.resistance

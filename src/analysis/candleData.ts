@@ -1,13 +1,14 @@
 import type { AngelOneCandle, AngelOneStreamTick } from '../api/angelOne'
 import type { PriceActionInterval } from './priceAction'
+import { timeframeInfo } from './timeframes'
 
 export function candleIntervalMs(interval: PriceActionInterval) {
-  return interval === 'FIVE_MINUTE' ? 300_000 : interval === 'FIFTEEN_MINUTE' ? 900_000 : 3_600_000
+  return timeframeInfo[interval].milliseconds
 }
 
 /** SmartAPI limits each historical request to 100 / 200 / 400 calendar days. */
 export function historicalCandleRequestStart(candles: AngelOneCandle[], interval: PriceActionInterval, now: number) {
-  const days = interval === 'FIVE_MINUTE' ? 100 : interval === 'FIFTEEN_MINUTE' ? 200 : 400
+  const days = timeframeInfo[interval].requestDays + 1
   const earliest = now - days * 86_400_000
   const history = normalizeCandles(candles)
   // A few live-only bars must not prevent loading the history needed for indicators.

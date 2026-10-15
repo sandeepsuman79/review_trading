@@ -2,7 +2,9 @@ import type { AngelOneCandle, AngelOneStreamTick } from '../api/angelOne'
 import type { PredictionPlan } from './earlyPrediction'
 import { candleIntervalMs, completedCandles, tickTimestamp } from './candleData'
 import { withinEntryWindow } from './tradeDecision'
+import { agentInterval, candleIntervals } from './timeframes'
 import { analyzePriceAction } from './priceAction'
+import { squareOffTime, tradingSession } from './tradingSession'
 
 export const predictionHistoryKey = 'traders_prediction_history_v1'
 export type PredictionStatus = 'PENDING' | 'ACTIVE' | 'TARGET_HIT' | 'STOP_LOSS_HIT' | 'EARLY_EXIT' | 'EXPIRED' | 'AMBIGUOUS' | 'UNVERIFIED'
@@ -17,7 +19,7 @@ export type PredictionRecord = PredictionPlan & {
   latestPrice?: number
   latestPriceAt?: number
   latestPriceSource?: 'LIVE' | 'CANDLE'
-  earlyExitSource?: 'MANUAL' | 'AGENT_REVERSAL'
+  earlyExitSource?: 'MANUAL' | 'AGENT_REVERSAL' | 'SESSION_SQUARE_OFF'
   earlyExitAcknowledgedAt?: number
   reversalCheckedCandle?: string
   outcomeNote: string
@@ -51,7 +53,7 @@ export function reconcilePredictionRecords(records: PredictionRecord[]): Predict
 /** A confirmed candidate may reserve an entry, but cannot overlap a live index trade. */
 export function registerConfirmedPrediction(records: PredictionRecord[], plan: PredictionPlan, now = plan.generatedAt): PredictionRecord[] {
   const current = reconcilePredictionRecords(records)
-  if (plan.stage !== 'CONFIRMED' || !Number.isFinite(now) || now >= plan.expiresAt || current.some(record => record.instrument === plan.instrument && record.status === 'ACTIVE'
+  if (plan.stage !== 'CONFIRMED' || !Number.isFinite(now) || !withinEntryWindow(now) || now >= plan.expiresAt || current.some(record => record.instrument === plan.instrument && record.status === 'ACTIVE'
     || record.entryAt !== undefined && record.instrument === plan.instrument && record.interval === plan.interval && record.side === plan.side && record.signalCandleTime === plan.signalCandleTime)) return current
   const existing = current.find(record => record.id === plan.id)
   if (existing) {
@@ -93,7 +95,7 @@ function validRecord(value: unknown): value is PredictionRecord {
   const d = record.side === 'CALL' ? 1 : -1
   return typeof record.id === 'string' && record.id.length > 0 && ['early-v1', 'combined-v1', 'technical-v2'].includes(record.strategyVersion)
     && ['Nifty 50', 'Sensex', 'Bank Nifty'].includes(record.instrument)
-    && ['FIVE_MINUTE', 'FIFTEEN_MINUTE', 'ONE_HOUR'].includes(record.interval)
+    && (candleIntervals as readonly string[]).includes(record.interval)
     && ['CALL', 'PUT'].includes(record.side) && ['EARLY', 'CONFIRMED'].includes(record.stage)
     && statuses.includes(record.status) && ['NEWS_ALIGNED', 'TECHNICAL_ONLY'].includes(record.contextMode)
     && [record.generatedAt, record.expiresAt, record.observedThrough, record.entry, record.target, record.stopLoss, record.riskReward, record.bullishScore, record.bearishScore].every(Number.isFinite)
@@ -108,7 +110,7 @@ function validRecord(value: unknown): value is PredictionRecord {
     && [record.entryAt, record.entryPrice, record.exitAt, record.exitPrice, record.points, record.latestPrice, record.latestPriceAt].every(item => item === undefined || Number.isFinite(item))
     && (record.status !== 'ACTIVE' || (record.entryPrice !== undefined && record.entryAt !== undefined))
     && (record.latestPriceSource === undefined || ['LIVE', 'CANDLE'].includes(record.latestPriceSource))
-    && (record.earlyExitSource === undefined || ['MANUAL', 'AGENT_REVERSAL'].includes(record.earlyExitSource))
+    && (record.earlyExitSource === undefined || ['MANUAL', 'AGENT_REVERSAL', 'SESSION_SQUARE_OFF'].includes(record.earlyExitSource))
     && (record.earlyExitAcknowledgedAt === undefined || record.status === 'EARLY_EXIT' && Number.isFinite(record.earlyExitAcknowledgedAt) && record.earlyExitAcknowledgedAt >= record.exitAt!)
     && (record.reversalCheckedCandle === undefined || Number.isFinite(Date.parse(record.reversalCheckedCandle)))
     && (record.status !== 'EARLY_EXIT' || record.earlyExitSource !== undefined)
@@ -150,6 +152,7 @@ export function observePredictionTick(record: PredictionRecord, price: number, t
   let next: PredictionRecord = { ...record, observedThrough: time, latestPrice: price, latestPriceAt: time, latestPriceSource: 'LIVE' }
   const d = direction(record)
   if (next.status === 'PENDING') {
+    if (!withinEntryWindow(time)) return { ...next, status: 'EXPIRED', outcomeNote: 'Entry window closed; no entry at or after the 15:15 IST square-off cutoff.' }
     if (time >= record.expiresAt) return { ...next, status: 'EXPIRED', outcomeNote: 'Entry was not observed before the three-interval deadline.' }
     if ((price - record.stopLoss) * d <= 0) return { ...next, status: 'EXPIRED', outcomeNote: 'Setup invalidated at its stop level before entry; no simulated entry.' }
     if (!allowEntry) return { ...next, outcomeNote: 'Entry paused while current chart and market evidence is checked.' }
@@ -157,6 +160,10 @@ export function observePredictionTick(record: PredictionRecord, price: number, t
     const rr = ((record.target - price) * d) / ((price - record.stopLoss) * d)
     if (!Number.isFinite(rr) || rr < 1.5) return { ...next, status: 'EXPIRED', outcomeNote: 'Entry quote passed the trigger with insufficient reward to risk; no simulated entry.' }
     next = { ...next, status: 'ACTIVE', entryPrice: price, entryAt: time, outcomeNote: 'Entry observed in live index quotes.' }
+  }
+  if (time >= squareOffTime(next.entryAt!)) {
+    if (tradingSession(time).date !== tradingSession(next.entryAt!).date) return { ...next, status: 'UNVERIFIED', outcomeNote: 'No same-session square-off quote was observed. An overnight price cannot verify the 15:15 IST exit.' }
+    return close({ ...next, earlyExitSource: 'SESSION_SQUARE_OFF' }, 'EARLY_EXIT', price, time, 'Automatic 15:15 IST square-off; exit uses the first observed quote at or after the cutoff, not a backdated fill.')
   }
   if ((price - record.stopLoss) * d <= 0) return close(next, 'STOP_LOSS_HIT', price, time, 'Stop crossed in live index quotes; exit uses the observed quote.')
   if ((price - record.target) * d >= 0) return close(next, 'TARGET_HIT', record.target, time, 'Target observed in live index quotes; points use the planned target.')
@@ -171,6 +178,8 @@ export function observePredictionCandles(record: PredictionRecord, candles: Ange
   for (const candle of completedCandles(candles, record.interval, now)) {
     const time = Date.parse(candle[0]), end = time + duration
     if (end <= next.observedThrough || end <= record.generatedAt) continue
+    const cutoff = squareOffTime(next.entryAt ?? next.generatedAt)
+    if (time >= cutoff) break // Later candles cannot reconstruct a scheduled exit or overnight trade.
     // A partial bar contains moves before issue / after the last observed tick with unknown ordering.
     if (time !== next.observedThrough) {
       return { ...next, status: 'UNVERIFIED', observedThrough: end, outcomeNote: 'A partial or missing candle overlaps an unobserved period. Outcome cannot be verified; excluded from success rate.' }
@@ -179,6 +188,7 @@ export function observePredictionCandles(record: PredictionRecord, candles: Ange
     const d = direction(next)
     next = { ...next, observedThrough: end, latestPrice: closing, latestPriceAt: end, latestPriceSource: 'CANDLE' }
     if (next.status === 'PENDING') {
+      if (!withinEntryWindow(end)) return { ...next, status: 'EXPIRED', outcomeNote: 'Entry was not verified before the 15:15 IST square-off cutoff.' }
       if (time >= next.expiresAt) return { ...next, status: 'EXPIRED', outcomeNote: 'Entry deadline elapsed before a trigger was observed.' }
       if ((open - next.stopLoss) * d <= 0) return { ...next, status: 'EXPIRED', outcomeNote: 'Opening quote invalidated the setup before entry.' }
       if (!allowEntry) {
@@ -244,6 +254,14 @@ export function observePredictionReversal(record: PredictionRecord, candles: Ang
   return exitPredictionEarly(next, now, 'AGENT_REVERSAL', `Agent confirmed an opposite ${opposite} setup on the completed ${latest[0]} candle; exited at the observed live index quote.`)
 }
 
+/** A fresh confirmed one-minute reversal also manages positions opened on older chart timeframes. */
+export function observeConfirmedAgentReversal(record: PredictionRecord, plan: PredictionPlan | undefined, now: number): PredictionRecord {
+  if (!plan || !canExitPredictionEarly(record, now) || record.entryAt === undefined || plan.stage !== 'CONFIRMED' || plan.strategyVersion !== 'technical-v2' || plan.interval !== agentInterval || plan.instrument !== record.instrument || plan.side === record.side) return record
+  const start = Date.parse(plan.signalCandleTime), duration = candleIntervalMs(plan.interval)
+  if (!Number.isFinite(start) || start < record.entryAt || now < start + duration || now >= start + 2 * duration || record.latestPriceAt! < start + duration || !Number.isFinite(plan.generatedAt) || now < plan.generatedAt || now - plan.generatedAt > 30_000 || !Number.isFinite(plan.expiresAt) || now >= plan.expiresAt) return record
+  return exitPredictionEarly({ ...record, reversalCheckedCandle: plan.signalCandleTime }, now, 'AGENT_REVERSAL', `Agent confirmed an opposite ${plan.side} setup on the completed 1-minute candle ${plan.signalCandleTime}; exited at the observed live index quote before any replacement trade.`)
+}
+
 export function predictionHistoryStats(records: PredictionRecord[]) {
   const settled = records.filter(record => predictionSuccessScore(record) !== null)
   const wins = settled.filter(record => record.points! > 0).length
@@ -266,8 +284,9 @@ export function canEnterConfirmedPrediction(record: PredictionRecord, plan: Pred
     && now >= checkedAt && now - checkedAt <= 30_000 && now >= signal + duration && now < signal + 2 * duration)
 }
 
-export function syncPredictionRecord(record: PredictionRecord, candles: AngelOneCandle[], tick: AngelOneStreamTick | undefined, now: number, allowEntry = true, entryPlan?: PredictionPlan): PredictionRecord {
+export function syncPredictionRecord(record: PredictionRecord, candles: AngelOneCandle[], tick: AngelOneStreamTick | undefined, now: number, allowEntry = true, entryPlan?: PredictionPlan, reversalPlan?: PredictionPlan | null): PredictionRecord {
   if (!isOpenPrediction(record)) return record
+  if (record.status === 'PENDING' && !withinEntryWindow(now)) return { ...record, status: 'EXPIRED', outcomeNote: 'Candidate retired outside the Mon–Fri 09:15–15:15 IST entry window.' }
   const time = tick ? tickTimestamp(tick) : NaN
   if (record.status === 'PENDING' && entryPlan) {
     allowEntry = allowEntry && canEnterConfirmedPrediction(record, entryPlan, now, Math.max(now, Number.isFinite(time) ? time : now))
@@ -276,11 +295,14 @@ export function syncPredictionRecord(record: PredictionRecord, candles: AngelOne
   const continuous = tick && Number.isFinite(time) && time <= now + 1_000 && now - time <= 30_000 && time - record.observedThrough <= 30_000
   // Replay gaps before a reconnect quote; a missed stop must not turn into a later win.
   let next = continuous ? record : observePredictionCandles(record, candles, now, allowEntry)
-  if (isOpenPrediction(next) && Number.isFinite(time) && time <= now + 1_000 && time - next.observedThrough > 30_000) {
+  if (isOpenPrediction(next) && Number.isFinite(time) && time <= now + 1_000 && time - next.observedThrough > 30_000 && next.observedThrough < squareOffTime(next.entryAt ?? next.generatedAt)) {
     next = { ...next, status: 'UNVERIFIED', outcomeNote: 'More than 30 seconds of quotes were missed without complete candle coverage. Outcome cannot be verified; excluded from success rate.' }
   }
   if (tick?.ltp !== undefined && time <= now + 1_000) next = observePredictionTick(next, tick.ltp, time, allowEntry && (!entryPlan || now - time <= 30_000))
-  next = observePredictionReversal(next, candles, now)
+  if (next.status === 'ACTIVE' && now >= squareOffTime(next.entryAt!)) return tradingSession(now).date !== tradingSession(next.entryAt!).date
+    ? { ...next, status: 'UNVERIFIED', outcomeNote: 'No same-session square-off quote was observed. The 15:15 IST exit and its P/L cannot be verified.' }
+    : { ...next, outcomeNote: '15:15 IST square-off is due. Waiting for an observed same-session exit quote; no exit price has been invented.' }
+  next = reversalPlan === undefined ? observePredictionReversal(next, candles, now) : observeConfirmedAgentReversal(next, reversalPlan ?? undefined, now)
   if (next.status === 'PENDING' && now >= next.expiresAt) next = { ...next, status: 'EXPIRED', outcomeNote: 'Entry not observed before the three-interval deadline.' }
   return next
 }

@@ -1,3 +1,4 @@
+import { timeframeInfo } from '../analysis/timeframes'
 import { useEffect, useRef } from 'react'
 import { confirmedTradePoints, todayConfirmedTrades } from '../analysis/confirmedTrades'
 import type { PredictionRecord } from '../analysis/predictionHistory'
@@ -11,7 +12,7 @@ const reason = (record: PredictionRecord) => {
     case 'ACTIVE': return 'Agent managing trade'
     case 'TARGET_HIT': return 'Target hit'
     case 'STOP_LOSS_HIT': return 'Stop-loss hit'
-    case 'EARLY_EXIT': return record.earlyExitSource === 'AGENT_REVERSAL' ? 'Agent-confirmed reversal' : 'Early exit'
+    case 'EARLY_EXIT': return record.earlyExitSource === 'SESSION_SQUARE_OFF' ? 'Square-off · 15:15 IST' : record.earlyExitSource === 'AGENT_REVERSAL' ? 'Agent-confirmed reversal' : 'Early exit'
     case 'AMBIGUOUS': return 'Unclear price ordering'
     default: return 'Outcome unverified'
   }
@@ -42,7 +43,7 @@ export default function ConfirmedTrades({ records, now, streamConnected, storage
           <div className="confirmed-trade-right"><span className="confirmed-trade-label">Direction</span><span className={`confirmed-side confirmed-side-${record.side.toLowerCase()}`}>{record.side}</span></div>
         </div>
         <div className="confirmed-trade-row">
-          <div><span className="confirmed-trade-label">Index</span><strong>{record.instrument}</strong><small>{record.interval === 'FIVE_MINUTE' ? '5-minute' : record.interval === 'FIFTEEN_MINUTE' ? '15-minute' : '1-hour'} · {active ? 'LIVE' : settled ? 'DONE' : 'UNVERIFIED'}</small></div>
+          <div><span className="confirmed-trade-label">Index</span><strong>{record.instrument}</strong><small>{timeframeInfo[record.interval].label} · {active ? 'LIVE' : settled ? 'DONE' : 'UNVERIFIED'}</small></div>
           <div className="confirmed-trade-right"><span className="confirmed-trade-label">Entry (index)</span><strong>{price(record.entryPrice)}</strong></div>
         </div>
         <div className="confirmed-trade-row">

@@ -109,8 +109,9 @@ test('actual tracker rejects stale entry quotes and outside-hour entries while k
   const plan={...original,generatedAt:now+5000}, record={...createPredictionRecord(plan),observedThrough:now+19000}
   const paused=syncPredictionRecord(record,input.candles,{timestamp:now+20000,ltp:100},now+60000,true,plan)
   assert.equal(paused.status,'PENDING');assert.equal(paused.entryAt,undefined)
-  const late=Date.parse('2026-10-14T15:25:00+05:30'), latePlan={...original,generatedAt:late-2000,signalCandleTime:new Date(late-300000).toISOString(),expiresAt:late+900000}
+  const late=Date.parse('2026-10-14T15:15:00+05:30'), latePlan={...original,generatedAt:late-2000,signalCandleTime:new Date(late-300000).toISOString(),expiresAt:late+900000}
   assert.equal(canEnterConfirmedPrediction(createPredictionRecord(latePlan),latePlan,late,late),false)
   const active={...createPredictionRecord(latePlan),status:'ACTIVE',entryAt:late-1000,entryPrice:100,observedThrough:late-1000}
-  assert.equal(syncPredictionRecord(active,[],{timestamp:late,ltp:120},late,false).status,'TARGET_HIT')
+  const closed=syncPredictionRecord(active,[],{timestamp:late,ltp:120},late,false)
+  assert.equal(closed.status,'EARLY_EXIT');assert.equal(closed.earlyExitSource,'SESSION_SQUARE_OFF')
 })

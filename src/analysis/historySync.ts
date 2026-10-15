@@ -1,22 +1,25 @@
 import type { AngelOneCandle } from '../api/angelOne'
 import type { PriceActionInterval } from './priceAction'
 import { candleIntervalMs, normalizeCandles } from './candleData'
+import { agentInterval, timeframeInfo } from './timeframes'
 
 export type HistoryJob = { token: string; interval: PriceActionInterval }
 export function prioritizeHistoryJobs<T extends HistoryJob>(jobs: T[], token: string, interval: PriceActionInterval) {
   return [...jobs].sort((a, b) => {
-    const priority = (job: HistoryJob) => job.token === token ? job.interval === interval ? 0 : 1 : job.interval === interval ? 2 : 3
+    const priority = (job: HistoryJob) => job.token === token ? job.interval === agentInterval ? 0 : job.interval === interval ? 1 : 2 : job.interval === agentInterval ? 3 : job.interval === interval ? 4 : 5
     return priority(a) - priority(b)
   })
 }
 
-/** Small cold start; cached history requests only the overlap and missing tail. */
+/** Live-only candles cannot prove that the earlier part of today's session was synced. */
 export function historySyncRange(candles: AngelOneCandle[], interval: PriceActionInterval, now: number) {
-  const history = normalizeCandles(candles)
-  const days = interval === 'FIVE_MINUTE' ? 14 : interval === 'FIFTEEN_MINUTE' ? 45 : 120
+  const history = normalizeCandles(candles).filter(candle => Date.parse(candle[0]) <= now)
+  const days = timeframeInfo[interval].coldDays
   const latest = history.length >= 60 ? Date.parse(history[history.length - 1][0]) : now - days * 86_400_000
-  const from = latest - candleIntervalMs(interval)
-  const limit = interval === 'FIVE_MINUTE' ? 99 : interval === 'FIFTEEN_MINUTE' ? 199 : 399
+  const ist = new Date(now + 330 * 60_000)
+  const sessionOpen = Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate(), 3, 45)
+  const from = Math.min(latest - candleIntervalMs(interval), sessionOpen)
+  const limit = timeframeInfo[interval].requestDays
   return { from, to: Math.min(now, from + limit * 86_400_000) }
 }
 
