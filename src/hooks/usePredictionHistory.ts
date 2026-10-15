@@ -49,20 +49,20 @@ export function usePredictionHistory(onError: (message: string) => void, onEvent
     mutate(current => registerConfirmedPrediction(current, plan, Date.now()))
   }, [mutate])
 
-  const sync = useCallback((observe: (record: PredictionRecord) => Observation, now: number, confirmEntry?: (record: PredictionRecord) => PredictionPlan | undefined) => {
+  const sync = useCallback((observe: (record: PredictionRecord) => Observation, now: number, confirmEntry?: (record: PredictionRecord) => PredictionPlan | undefined, confirmReversal?: (record: PredictionRecord) => PredictionPlan | undefined) => {
     mutate(current => reconcilePredictionRecords(current).map(record => {
       if (!isOpenPrediction(record)) return record
       const { candles, tick } = observe(record)
       const plan = confirmEntry?.(record)
-      return syncPredictionRecord(record, candles, tick, now, confirmEntry ? Boolean(plan) : true, plan)
+      return syncPredictionRecord(record, candles, tick, now, confirmEntry ? Boolean(plan) : true, plan, confirmReversal ? confirmReversal(record) ?? null : undefined)
     }))
   }, [mutate])
 
-  const syncTick = useCallback((instrument: string, tick: AngelOneStreamTick, candlesFor: (record: PredictionRecord) => AngelOneCandle[], now: number, confirmEntry?: (record: PredictionRecord) => PredictionPlan | undefined) => {
+  const syncTick = useCallback((instrument: string, tick: AngelOneStreamTick, candlesFor: (record: PredictionRecord) => AngelOneCandle[], now: number, confirmEntry?: (record: PredictionRecord) => PredictionPlan | undefined, confirmReversal?: (record: PredictionRecord) => PredictionPlan | undefined) => {
     mutate(current => reconcilePredictionRecords(current).map(record => {
       if (record.instrument !== instrument || !isOpenPrediction(record)) return record
       const plan = confirmEntry?.(record)
-      return syncPredictionRecord(record, candlesFor(record), tick, now, confirmEntry ? Boolean(plan) : true, plan)
+      return syncPredictionRecord(record, candlesFor(record), tick, now, confirmEntry ? Boolean(plan) : true, plan, confirmReversal ? confirmReversal(record) ?? null : undefined)
     }))
   }, [mutate])
   return { records, storageError, recordPrediction, sync, syncTick }

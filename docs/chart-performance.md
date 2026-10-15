@@ -34,19 +34,27 @@ instrument endpoint continues to fetch and return the full master.
 
 Login, page reload and the refresh button start one cancellable sync pass. Index
 or timeframe changes reprioritize pending work; they do not start another pass.
-The current index and timeframe come first, then that index's other timeframes,
-then remaining indices. Cached charts remain interactive throughout the pass.
+The current index's 1-minute agent feed comes first, then its displayed chart
+timeframe and other intervals, then remaining indices with their agent feed first.
+Cached charts remain interactive throughout the pass. All twelve index/timeframe
+combinations are maintained locally; chart selection never changes the fixed
+1-minute agent analysis or starts another sync pass.
 
-Cold starts request 14 days of 5-minute, 45 days of 15-minute and 120 days of hourly
+Cold starts request 7 days of 1-minute, 14 days of 5-minute, 45 days of 15-minute and 120 days of hourly
 candles. Warm starts overlap the most recent saved candle and fetch the missing
-tail. Old gaps are split into requests below SmartAPI's 100/200/400-day caps.
+tail, starting no later than the current IST session's 09:15 opening. A new live
+candle after a late login cannot hide a missing morning block or a hole inside
+today's cached session. Candles dated after the current clock cannot advance the
+sync cursor. Old gaps are split into requests below SmartAPI's 30/100/200/400-day caps.
 All dates use IST `yyyy-MM-dd HH:mm`. Cached history is retained, and merging
 protects live ticks newer than the request's minute-precision cutoff.
 
 The client issues one request at a time, spaced by at least 1.2 seconds. HTTP 200
 responses with `status: false` are rejected. Transient failures retry at most twice
 with increasing delays; rate-limit responses use at least 15/30-second waits and
-respect the broker's `Retry-After`. Expired authorization stops the remaining pass.
+respect the broker's `Retry-After`. History starts independently of profile loading.
+Rejected authorization gets one shared token refresh and retry per job, using the
+same recovery as profile/premium requests; failed recovery stops the remaining pass.
 Successful empty responses preserve cached candles instead of reporting a
 rejected request. A cold empty response is reported as missing data.
 

@@ -204,7 +204,7 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
   let reason = `${side} completed chart setup and technical evidence align.`
   if (!chartCurrent) reason = 'Waiting for recent completed candles; historical or forming candles cannot confirm a trade.'
   else if (!sessionIntact) reason = 'Waiting for consecutive completed candles from the current market session.'
-  else if (!withinEntryWindow(now)) reason = 'Outside the new-entry window (09:15–15:25 IST). Existing trades remain monitored.'
+  else if (!withinEntryWindow(now)) reason = 'Outside the Mon–Fri entry window (09:15–15:15 IST). Open trades are due for automatic square-off at 15:15.'
   else if (side === 'WAIT' || analysis.pattern === 'NO_CONFIRMED_PATTERN') reason = 'Waiting for a confirmed chart pattern at a valid structure / location.'
   else if (!atr) reason = 'Waiting for a valid ATR(14) risk estimate.'
   else if (!coreIndicators) reason = 'Waiting for EMA(20/50), RSI(14), momentum and Supertrend to warm up on at least 50 completed candles.'

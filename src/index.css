@@ -747,3 +747,12 @@ input, textarea, select { min-width: 0; max-width: 100%; }
 .chart-scale-column.is-pe .chart-scale-value { color: #b91c1c; }
 .chart-scale-badge { position: absolute; z-index: 1; top: 0; left: 1px; right: 1px; transform: translateY(-50%); padding: 1px 2px; border: 0; border-radius: 2px; font: 600 10px/14px Helvetica, Arial, sans-serif; white-space: nowrap; text-align: center; }
 button.chart-scale-badge { cursor: pointer; }
+.gap-outlook { margin: 10px 0; border: 1px solid var(--border-color, #dfe3ed); border-radius: 10px; background: var(--surface, #fff); font-size: 12px; }
+.gap-outlook > summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; padding: 10px 12px; cursor: pointer; }
+.gap-outlook > summary > span { color: var(--text-secondary); font-size: 11px; }
+.gap-outlook-content { padding: 0 12px 10px; line-height: 1.5; }
+.gap-outlook-content p { margin: 6px 0; }
+.gap-outlook-content ul { margin: 6px 0; padding-left: 18px; }
+.gap-outlook-result { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 12px; }
+.gap-outlook-result > strong { font-size: 15px; }
+.gap-outlook-result > span, .gap-outlook-caveat { color: var(--text-secondary); font-size: 11px; }

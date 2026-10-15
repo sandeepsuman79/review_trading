@@ -6,6 +6,21 @@ delays, vetoes, reverses or closes a trade. Both scores are reproducible evidenc
 ratings, not calibrated probabilities. Profitability has not been established by
 an out-of-sample backtest. The tracker records index points and does not submit orders.
 
+The agent always analyses completed **1-minute candles** for every index, independent
+of the displayed chart's 1/5/15-minute or hourly timeframe. Each newly closed minute
+updates candle patterns, EMA/SMA, RSI, ATR, ADX, Supertrend and genuine VWAP where
+volume exists. Latest available OI/PCR, India VIX, flows, news and global observations
+retain their existing source freshness checks; changing cadence does not manufacture
+new external data or require a Gemini request every minute. Forming candles are
+excluded, and the card identifies its analysis as 1-minute. Chart timeframe changes
+neither restart the agent nor change its analysis timeframe.
+
+A new red candle alone does not confirm a PUT. Both directions still require a
+completed setup, matching directional route, technical score/lead, coverage and
+ATR/reward-risk checks. The separate CALL/PUT diagnostics explain unmet conditions.
+Session high/low and previous-day reference levels use the full saved history,
+even though short-term structure detection uses a bounded recent window.
+
 ## Part 1: technical confirmation
 
 | Input group | Fixed budget | Inputs |
@@ -36,7 +51,7 @@ Confirmation requires:
 - At least 50 completed bars and warmed-up EMA20/50, RSI14/momentum and Supertrend.
 - At least 70% technical coverage, directional support of 55/100, and a 15-point lead for STANDARD confirmation.
 - STRONG classification requires at least 60/100 support and a 20-point lead.
-- Consecutive completed bars from the current IST session and the 09:15–15:25 IST new-entry window.
+- Consecutive completed bars from the current IST session and the Mon–Fri 09:15–15:15 IST new-entry window.
 - A stop outside chart invalidation and at least one ATR14 from entry, rounded outward.
 - At least 1.5:1 reward/risk after widening the stop; the chart target stays unchanged.
 
@@ -77,6 +92,46 @@ never reconstructed from a candle formed while confirmation paused.
 One active trade is allowed per index. Recorded risk levels remain fixed, with
 continued target, stop and completed-chart reversal monitoring. Profit/loss is
 booked before another trade can enter for that index.
+
+Position management also consumes the current fully confirmed 1-minute opposite
+plan, including for positions opened on older chart timeframes. Reversal exits
+require a full post-entry candle and a fresh live quote after its close. Developing,
+stale, missing or wrong-index plans cannot exit a position. Observed stops/targets
+take precedence; booked P/L and the existing one-active-trade guard precede any
+replacement entry. Older records retain their original timeframe for persistence
+and gap replay; they are not relabelled as new one-minute entries.
+
+The user's strategy automatically squares off at **15:15 IST** for all three
+indices and expires unentered candidates. This is an application cutoff, separate
+from the [exchange's trading/closing-auction timetable](https://www.nseindia.com/static/market-data/market-timings). The first observed
+same-session quote at or after the cutoff supplies the actual tracked exit time
+and price, with `SESSION_SQUARE_OFF` as the exit reason. No quote means the card
+shows square-off due; it does not invent a fill. Missing pre-cutoff observations
+still require continuous candle replay, and an unobserved overnight exit remains
+UNVERIFIED. The tracker records index points; it does not submit broker orders.
+
+## Next-session gap outlook at 15:00 IST
+
+Each index independently saves one outlook during the live 15:00 minute on
+weekdays. It uses only completed candles through 14:59, at least fifty bars,
+warmed-up indicators, 70% technical coverage and thirty consecutive current-session
+minute bars. The same existing technical and sentiment evidence supplies a
+heuristic score: 60% technical directional lead plus 40% sentiment directional
+lead. Missing sentiment retains its missing weight. A directional gap bias needs
+sentiment availability, 60% combined coverage and an absolute score of at least
+15; otherwise it remains MIXED. These are explicit experimental thresholds,
+not calibrated overnight probabilities. The card shows source reasoning, missing
+inputs, coverage, the reference index value and its actual generation time.
+
+The outlook targets the **next trading session**, so weekends and exchange
+holidays are not labelled as a guaranteed next-day open. No holiday calendar is
+inferred or future holiday date guessed. Overnight news and the remainder of the
+current session are unknown at 15:00. Snapshots are browser-local and generated
+only while the dashboard is running with data available; late opening, missing
+data or a suspended/offline browser is disclosed without backdating an outlook.
+The saved snapshot survives reload and is not revised with later candles. This
+outlook cannot create, veto or close an intraday trade, and requires no additional
+AI/API polling.
 
 New candidates use `technical-v2` and save three technical contribution groups plus
 a separate sentiment summary. Existing `combined-v1` and `early-v1` records remain
@@ -121,8 +176,9 @@ The numeric setup thresholds here are experimental rules, not calibrated accurac
 New setup stops cover both chart invalidation and at least one ATR from the outset.
 An observed support/resistance target remains a cap. When no observed target exists,
 a projected 2R target is labelled explicitly. Candidate ranking prefers setups
-that satisfy the final ATR reward/risk check. It still exposes chart-only reversals
-for managing existing positions; ATR entry rejection does not disable exit logic.
+that satisfy the final ATR reward/risk check. Rejected chart candidates remain
+visible in diagnostics. The live dashboard uses the fully confirmed one-minute
+opposite plan for reversal exits, independently of the displayed timeframe.
 
 The agent displays seven confirmation checks and separately reports a disconnected
 stream or missing fresh quote. Bullish/bearish scores remain weighted evidence,
@@ -202,6 +258,23 @@ three consecutive bars, with EMA50 flat or moving in the same direction.
 Supertrend uses a direction flip or movement of its line over three bars, with
 price on the indicated side. Both trajectories use a 0.03 ATR noise band.
 
+An additional fast EMA20 turn compares the preceding three-bar slope with the
+current three-bar slope, across seven consecutive same-session candles. The old
+slope must oppose the proposed direction, and the new slope must exceed the
+0.03 ATR noise band in that direction. A completed directional close must be
+beyond EMA20 and the preceding candle's high/low by the normal price buffer,
+with improving RSI in the same direction. EMA50 may still lag. This route adds
+no extra indicator weight and cannot bypass the remaining confirmation checks.
+
+A three-candle reversal can qualify near observed support (CALL) or resistance
+(PUT): a strong opposing first body, a small middle body touching the level,
+then a directional close beyond both the first body's midpoint and the middle
+candle's high/low. Stops cover all three candles and at least one ATR. Existing
+target caps and reward/risk checks apply. This is an intraday price-action rule,
+not a claim that the candles form a textbook gap-based Morning/Evening Star.
+All thresholds scale with current price/ATR; no index price or reversal time is
+hardcoded.
+
 Support/resistance breaks compare consecutive closes across a level known before
 the latest candle. Prior swing levels exclude pivots that only become detectable
 with the latest candle. A reversal requires a recent level touch, a directional
@@ -217,7 +290,7 @@ indicators, and ATR/reward-risk validation. A route by itself cannot confirm a
 trade. Partial proposals remain explicitly RISKY and cannot enter confirmed
 trade history. One live trade per index and exit-before-replacement are retained.
 
-`npm run test:agent` verifies each of the six route variants independently for
+`npm run test:agent` verifies the alignment route variants independently for
 both CALL and PUT, disagreement with other indicators, absent routes, candle
 indecision, missing bars and overnight boundaries. These rules and tests do not
 establish calibrated live-market accuracy or profitability.
@@ -262,8 +335,8 @@ heartbeat evaluations are deduplicated. The download button exports the selected
 index's session log without broker credentials or news/provider responses. Reload
 clears this diagnostic memory; the existing entered-trade ledger persists.
 
-The core scorer and live entry guard both reject new entries at/after 15:25 IST.
-Open-position target/stop/reversal monitoring continues. The entry tracker
+The core scorer and live entry guard both reject new entries at/after 15:15 IST.
+Open-position management automatically requests tracked square-off. The entry tracker
 continues requiring a fresh matching assessment and now explicitly refuses a
 stale live quote when a current technical confirmation is supplied. Data
 freshness, ATR, source-session integrity and quote/entry checks are not relaxed

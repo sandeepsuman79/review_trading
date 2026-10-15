@@ -5,6 +5,7 @@ import { completedCandles } from './candleData'
 import { calculateMovingAverageSeries } from './movingAverages'
 import { calculateTechnicalIndicatorSeries } from './technicalIndicators'
 import { candleSession } from './vwap'
+import { timeframeInfo, type CandleInterval } from './timeframes'
 
 /**
  * OHLC price-action agent for the selected chart timeframe.
@@ -17,10 +18,7 @@ import { candleSession } from './vwap'
  * - The live/incomplete candle is excluded from decisions.
  */
 
-export type PriceActionInterval =
-  | 'FIVE_MINUTE'
-  | 'FIFTEEN_MINUTE'
-  | 'ONE_HOUR'
+export type PriceActionInterval = CandleInterval
 
 export type PriceActionSide = 'CALL' | 'PUT' | 'WAIT'
 
@@ -47,6 +45,7 @@ export type PriceActionPattern =
   | 'EMA_PULLBACK_RECLAIM'
   | 'OPENING_RANGE_BREAKOUT'
   | 'LEVEL_BREAK_REVERSAL'
+  | 'THREE_CANDLE_REVERSAL'
   | 'NO_CONFIRMED_PATTERN'
 
 export type DetectedChartSetup = {
@@ -781,7 +780,7 @@ export function analyzePriceAction(
   interval: PriceActionInterval = 'FIVE_MINUTE',
   now = Date.now(),
 ): PriceActionAnalysis {
-  const timeframeLabel = interval === 'FIVE_MINUTE' ? '5-minute' : interval === 'FIFTEEN_MINUTE' ? '15-minute' : '1-hour'
+  const timeframeLabel = timeframeInfo[interval].label
   const closedCandles = completedCandles(candles, interval, now)
   const parsed = closedCandles
     .map(toOHLC)
@@ -884,7 +883,7 @@ export function analyzePriceAction(
   const supportLevel = nearestBelow(latest.close, lowLevels)
   const resistanceLevel = nearestAbove(latest.close, highLevels)
 
-  const session = previousSessionLevels(completed)
+  const session = previousSessionLevels(parsed)
 
   const allSupports: Level[] = [
     ...lowLevels,
@@ -1620,7 +1619,9 @@ export function analyzePriceAction(
             ? 'At / beyond the recent momentum break level'
             : selected.pattern === 'LEVEL_BREAK_REVERSAL'
               ? 'At / beyond a support/resistance break or reversal'
-              : location
+              : selected.pattern === 'THREE_CANDLE_REVERSAL'
+                ? 'At / near a three-candle support/resistance reversal'
+                : location
 
   const context = {
     detectedSetups,
@@ -1666,6 +1667,7 @@ export function analyzePriceAction(
     'EMA_PULLBACK_RECLAIM',
     'OPENING_RANGE_BREAKOUT',
     'LEVEL_BREAK_REVERSAL',
+    'THREE_CANDLE_REVERSAL',
   ].includes(selected.pattern)
   Object.assign(
     result,

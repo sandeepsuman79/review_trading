@@ -1,3 +1,5 @@
+import { timeframeInfo } from '../analysis/timeframes'
+import { squareOffTime } from '../analysis/tradingSession'
 import TradeDecisionPanel from './TradeDecisionPanel'
 import type { CSSProperties } from 'react'
 import type { AngelOneStreamTick } from '../api/angelOne'
@@ -16,7 +18,7 @@ function time(value?: number) {
 }
 
 function timeframe(interval: PriceActionInterval) {
-  return interval === 'FIVE_MINUTE' ? '5-minute' : interval === 'FIFTEEN_MINUTE' ? '15-minute' : '1-hour'
+  return timeframeInfo[interval].label
 }
 
 export default function AgentTradeCard({ analysis, evidence, prediction, activeTrade, pendingTrade, instrument, interval, now, tick, streamConnected }: {
@@ -72,9 +74,10 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
       </div>
       <div className="agent-trade-direction-row">
         <strong className="agent-trade-direction">{side === 'WAIT' ? 'WAIT' : `${side} · ${side === 'CALL' ? 'BULLISH' : 'BEARISH'}`}</strong>
-        <div className="agent-trade-instrument"><strong>{instrument}</strong><span>{timeframe(activeTrade?.interval ?? interval)} · Index levels</span></div>
+        <div className="agent-trade-instrument"><strong>{instrument}</strong><span>Analysis: {timeframe(interval)} · Index levels{activeTrade && activeTrade.interval !== interval ? ` · Open trade: ${timeframe(activeTrade.interval)}` : ''}</span></div>
       </div>
       {!streamConnected && <p className="agent-entry-status" role="status">Live stream disconnected · New entries paused; saved trade monitoring continues.</p>}
+      {activeTrade?.entryAt !== undefined && now >= squareOffTime(activeTrade.entryAt) && <p className="agent-entry-status" role="status">15:15 IST square-off is due · Waiting for an observed exit quote. No exit price has been assumed.</p>}
       {streamConnected && (!isFreshTick(tick, now) || !activeTrade && !freshEntryQuote) && <p className="agent-entry-status" role="status">Waiting for a fresh index quote · Entry requires a quote no more than 30 seconds old.</p>}
       <div className="early-prediction-result" aria-live="polite"><p>{reason}</p></div>
       {risky && plan.risk && <div className="agent-risk-details" role="status"><strong>Elevated-risk setup · {plan.risk.passedChecks}/7 full-confirmation checks passed</strong><p>{plan.risk.levelType === 'SUPPORT' ? 'Support' : 'Resistance'} {price(plan.risk.level)} · Matched route: {plan.risk.alignedIndicators.join(' or ')}</p><p>Still missing: {plan.risk.unmetChecks.join(' · ')}{plan.risk.opposedIndicators.length > 0 && ` · Conflicting indicators: ${plan.risk.opposedIndicators.join(' · ')}`}</p><p>The proposed levels pass ATR and 1.5:1 reward/risk checks. Full confirmation still needs a valid completed setup and a fresh live quote.</p></div>}
@@ -99,7 +102,7 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
 
       <div className="agent-market-view">
         <div className="agent-market-view-heading"><strong className={`agent-text-${marketTone}`}>Technical analysis: {marketView}</strong><span>· {strength}</span></div>
-        <p className="agent-analysis-time">{timeframe(interval)} analysis · {analysis.analyzedCandles} completed candles · Forming candle excluded{historical ? ' · Historical snapshot' : ''}</p>
+        <p className="agent-analysis-time">{timeframe(interval)} analysis · {analysis.analyzedCandles} completed candles · Forming candle excluded{analysis.latestCandleTime && <> · Last closed <time dateTime={analysis.latestCandleTime}>{time(Date.parse(analysis.latestCandleTime))}</time></>}{historical ? ' · Historical snapshot' : ''}</p>
         <div className="agent-evidence-scores"><span className="agent-text-bullish">Bullish score: <strong>{bullishScore}/100</strong></span><span className="agent-text-bearish">Bearish score: <strong>{bearishScore}/100</strong></span></div>
         <p className="agent-score-note">Technical evidence scores, not probabilities.{evidence && ` Technical coverage: ${evidence.coverage}%.`} Sentiment cannot create or veto a confirmed trade.</p>
         {analysis.alignment && <details className="agent-evidence-checks agent-directional-routes"><summary>Directional alignment · EMA or Supertrend or support/resistance</summary>

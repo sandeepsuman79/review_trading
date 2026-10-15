@@ -5,9 +5,10 @@ import type { TechnicalIndicatorPoint } from './technicalIndicators'
 import type { PriceActionInterval } from './priceAction'
 import { candleIntervalMs } from './candleData'
 import { candleSession } from './vwap'
+import { inTradingEntryWindow } from './tradingSession'
 
 export type MomentumCandidate = {
-  side: 'CALL' | 'PUT'; pattern: 'TREND_MOMENTUM_BREAK' | 'EMA_PULLBACK_RECLAIM' | 'OPENING_RANGE_BREAKOUT' | 'LEVEL_BREAK_REVERSAL'
+  side: 'CALL' | 'PUT'; pattern: 'TREND_MOMENTUM_BREAK' | 'EMA_PULLBACK_RECLAIM' | 'OPENING_RANGE_BREAKOUT' | 'LEVEL_BREAK_REVERSAL' | 'THREE_CANDLE_REVERSAL'
   setup: string; reason: string; entry: number; stopLoss: number; target: number; score: number
   confluence: string[]; invalidation: string; targetBasis: string
 }
@@ -19,9 +20,7 @@ export function findMomentumSetups(candles: AngelOneCandle[], averages: MovingAv
   if (!latest || !previous || !current || !avg || !oldAvg || candles.length < 50) return []
   const atr = current.atr14, adx = current.adx14, rsi = current.rsi14
   if (!atr || adx === undefined || rsi === undefined || current.plusDi14 === undefined || current.minusDi14 === undefined || avg.ema20 === undefined || avg.ema50 === undefined || oldAvg.ema20 === undefined) return []
-  const local = new Date(Date.parse(latest[0]) + 330 * 60_000)
-  const minute = local.getUTCHours() * 60 + local.getUTCMinutes()
-  if (minute < 555 || minute + candleIntervalMs(interval) / 60_000 >= 930) return []
+  if (!inTradingEntryWindow(Date.parse(latest[0]) + candleIntervalMs(interval))) return []
   const session = candleSession(latest[0]), recent = candles.slice(-7)
   if (recent.some((bar, i) => candleSession(bar[0]) !== session || i > 0 && Date.parse(bar[0]) - Date.parse(recent[i - 1][0]) !== candleIntervalMs(interval))) return []
   const candleRange = latest[2] - latest[3], body = Math.abs(latest[4] - latest[1])
@@ -35,7 +34,7 @@ export function findMomentumSetups(candles: AngelOneCandle[], averages: MovingAv
     const time = new Date(Date.parse(bar[0]) + 330 * 60_000), minute = time.getUTCHours() * 60 + time.getUTCMinutes()
     return minute >= 555 && minute < 570
   })
-  const openingReady = interval !== 'ONE_HOUR' && opening.length === (interval === 'FIVE_MINUTE' ? 3 : 1)
+  const openingReady = interval !== 'ONE_HOUR' && opening.length === 900_000 / candleIntervalMs(interval)
     && new Date(Date.parse(opening[0][0]) + 330 * 60_000).toISOString().slice(11, 16) === '09:15'
     && opening.every((bar, i) => Date.parse(bar[0]) === Date.parse(opening[0][0]) + i * candleIntervalMs(interval))
     && Date.parse(latest[0]) >= Date.parse(opening[0][0]) + 900_000
@@ -62,6 +61,14 @@ export function findMomentumSetups(candles: AngelOneCandle[], averages: MovingAv
     if (routes.some(route => route.family === 'EMA') && touchedEma && d * (latest[4] - reclaimLevel) > buffer) add('EMA_PULLBACK_RECLAIM', `EMA(20) pullback + ${d === 1 ? 'bullish' : 'bearish'} reclaim`, oldAvg.ema20, 79)
     for (const route of routes.filter(route => route.family === 'LEVEL' && route.level !== undefined)) {
       add('LEVEL_BREAK_REVERSAL', route.name, route.level!, 78)
+    }
+    const first = candles[end - 2], firstRange = first[2] - first[3], middleRange = previous[2] - previous[3]
+    const reaction = d === 1 ? support : resistance
+    const firstBody = Math.abs(first[4] - first[1]), middleBody = Math.abs(previous[4] - previous[1])
+    const touchedLevel = reaction !== undefined && (d === 1 ? previous[3] <= reaction + .25 * atr : previous[2] >= reaction - .25 * atr) && Math.abs(previous[4] - reaction) <= .75 * atr && d * (latest[4] - reaction) > buffer
+    if (touchedLevel && firstRange > 0 && middleRange > 0 && d * (first[4] - first[1]) < 0 && firstBody >= .5 * firstRange && middleBody <= .35 * middleRange && d * (previous[4] - first[4]) <= .25 * atr && d * (latest[4] - (first[1] + first[4]) / 2) > buffer && d * (latest[4] - (d === 1 ? previous[2] : previous[3])) > buffer) {
+      const invalidation = d === 1 ? Math.min(first[3], previous[3], latest[3], reaction!) : Math.max(first[2], previous[2], latest[2], reaction!)
+      add('THREE_CANDLE_REVERSAL', `${d === 1 ? 'Bullish' : 'Bearish'} three-candle reversal at ${d === 1 ? 'support' : 'resistance'}`, invalidation, 81)
     }
     if (openingReady) {
       const level = d === 1 ? Math.max(...opening.map(bar => bar[2])) : Math.min(...opening.map(bar => bar[3]))

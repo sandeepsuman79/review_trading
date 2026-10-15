@@ -3,6 +3,7 @@ import type { PriceActionAnalysis } from './priceAction'
 import type { TradingEvidence } from './tradingEvidence'
 import { candleIntervalMs } from './candleData'
 import { candleSession } from './vwap'
+import { inTradingEntryWindow } from './tradingSession'
 
 export type TradeReasonCode = 'INSUFFICIENT_CANDLES' | 'STALE_DATA' | 'SESSION_DATA_GAP' | 'INDICATOR_NOT_READY' | 'NO_DIRECTIONAL_ROUTE' | 'SCORE_BELOW_THRESHOLD' | 'DIRECTIONAL_LEAD_TOO_SMALL' | 'TECHNICAL_COVERAGE_LOW' | 'NO_CONFIRMED_PATTERN' | 'ATR_INVALID' | 'TRADE_LEVELS_INVALID' | 'RR_BELOW_MINIMUM' | 'OUTSIDE_ENTRY_WINDOW' | 'ENTRY_NOT_REACHED' | 'LIVE_STREAM_DISCONNECTED' | 'QUOTE_STALE' | 'QUOTE_BEFORE_SIGNAL' | 'SETUP_NOT_CONFIRMED' | 'TRADE_ALREADY_OPEN'
 export type DecisionCheck = { code: TradeReasonCode; label: string; status: 'PASS' | 'FAIL' | 'NOT_CHECKED'; detail: string }
@@ -13,12 +14,8 @@ export type CandidateDecision = {
   checks: DecisionCheck[]; reasons: TradeReasonCode[]
 }
 
-/** New entries end at 15:25 IST; this gate never stops management of an open trade. */
-export function withinEntryWindow(now: number) {
-  if (!Number.isFinite(now)) return false
-  const time = new Date(now + 330 * 60_000), minutes = time.getUTCHours() * 60 + time.getUTCMinutes()
-  return minutes >= 555 && minutes < 925
-}
+/** User's strategy cutoff; open positions are managed separately. */
+export const withinEntryWindow = inTradingEntryWindow
 
 export function buildCandidateDecision(analysis: PriceActionAnalysis, evidence: TradingEvidence, side: 'CALL' | 'PUT', candles: AngelOneCandle[], now: number, early: { earlyCandles: number; earlyCoverage: number; earlyScore: number; earlyGap: number }): CandidateDecision {
   const supportScore = side === 'CALL' ? evidence.bullishScore : evidence.bearishScore
@@ -40,7 +37,7 @@ export function buildCandidateDecision(analysis: PriceActionAnalysis, evidence: 
   add('INSUFFICIENT_CANDLES', 'Initial analysis', candles.length >= early.earlyCandles, `${candles.length} completed candles / ${early.earlyCandles} for initial analysis; 50 for full scoring`)
   add('STALE_DATA', 'Data freshness', fresh, 'Latest completed candle must match the current chart and remain within its confirmation interval')
   add('SESSION_DATA_GAP', 'Session continuity', consecutive, 'Consecutive completed bars from the current IST session')
-  add('OUTSIDE_ENTRY_WINDOW', 'Entry window', withinEntryWindow(now), '09:15–15:25 IST; open trades remain monitored')
+  add('OUTSIDE_ENTRY_WINDOW', 'Entry window', withinEntryWindow(now), 'Mon–Fri 09:15–15:15 IST; automatic square-off at 15:15')
   add('INDICATOR_NOT_READY', 'Full indicator readiness', warm, '50 completed candles and available EMA20/50, RSI/momentum and Supertrend')
   add('ATR_INVALID', 'ATR(14)', atr, atr ? `${evidence.atr14!.toFixed(2)} points` : 'Current positive ATR required')
   add('NO_CONFIRMED_PATTERN', 'Price pattern', pattern, pattern ? analysis.setup : 'No completed price setup detected for this direction')

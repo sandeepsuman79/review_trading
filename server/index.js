@@ -84,6 +84,7 @@ const contentTypes = {
   '.woff2': 'font/woff2',
 }
 const ohlcIntervals = {
+  ONE_MINUTE: 60_000,
   FIVE_MINUTE: 5 * 60_000,
   FIFTEEN_MINUTE: 15 * 60_000,
   ONE_HOUR: 60 * 60_000,

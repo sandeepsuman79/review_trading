@@ -255,7 +255,7 @@ export async function getAngelOneLtp(token: string, instrument: Pick<AngelOneIns
 }
 
 export class HistoricalRequestError extends Error {
-  constructor(message: string, public status: number, public retryAfterMs = 0) { super(message) }
+  constructor(message: string, public status: number, public retryAfterMs = 0, public errorcode?: string) { super(message) }
 }
 
 async function postHistorical<T extends AngelOneCandle[] | AngelOneOi[]>(path: 'candles' | 'oi', token: string, body: object, signal?: AbortSignal) {
@@ -264,9 +264,10 @@ async function postHistorical<T extends AngelOneCandle[] | AngelOneOi[]>(path: '
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body), signal,
   })
-  let result: AngelOneDataResponse<T> & { retryAfterMs?: number }
+  let result: AngelOneDataResponse<T> & { retryAfterMs?: number; errorCode?: string }
   try { result = await response.json() } catch { throw new HistoricalRequestError(`Angel One historical request failed (${response.status}).`, response.ok ? 502 : response.status) }
-  if (!response.ok || result.status !== true) throw new HistoricalRequestError(`${result.message || 'Historical request rejected'}${result.errorcode ? ` (${result.errorcode})` : ''}`, response.status, result.retryAfterMs)
+  const code = result.errorcode || result.errorCode
+  if (!response.ok || result.status !== true) throw new HistoricalRequestError(`${result.message || 'Historical request rejected'}${code ? ` (${code})` : ''}`, isAngelOneAuthError({ ...result, status: response.status }) ? 401 : response.status, result.retryAfterMs, code)
   if (!Array.isArray(result.data)) throw new HistoricalRequestError('Angel One returned invalid historical data.', 502)
   return result
 }
