@@ -1,5 +1,6 @@
 import { decodeStreamPacket } from './streamPacket'
 import { isAngelOneAuthError } from './angelOneSession'
+import { angelOneExchange } from './angelOneExchange'
 
 export type AngelOneLoginInput = {
   clientcode: string
@@ -238,8 +239,8 @@ export const getGttRuleDetails = (token: string, id: string) =>
 export const listGttRules = (token: string, status: string[], page = 1, count = 10) =>
   postGtt('list', token, { status, page, count })
 
-export async function getInstrumentMaster(scope?: 'indices'): Promise<AngelOneInstrument[]> {
-  const response = await fetch(scope === 'indices' ? '/api/instruments?scope=indices' : '/api/instruments')
+export async function getInstrumentMaster(scope?: 'indices' | 'commodities'): Promise<AngelOneInstrument[]> {
+  const response = await fetch(scope ? `/api/instruments?scope=${scope}` : '/api/instruments')
   const result = await readResponse<AngelOneInstrument[] | AngelOneDataResponse<AngelOneInstrument[]>>(response, 'Instrument master request failed')
   return Array.isArray(result) ? result : result.data || []
 }
@@ -249,9 +250,11 @@ export async function getAngelOneLtp(token: string, instrument: Pick<AngelOneIns
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     signal,
-    body: JSON.stringify({ exchange: instrument.exch_seg === 'bse_cm' ? 'BSE' : 'NSE', tradingsymbol: instrument.symbol, symboltoken: instrument.token }),
+    body: JSON.stringify({ exchange: angelOneExchange(instrument.exch_seg), tradingsymbol: instrument.symbol, symboltoken: instrument.token }),
   })
-  return readResponse<AngelOneDataResponse<AngelOneLtp | AngelOneLtp[]>>(response, 'Angel One LTP request failed')
+  const result = await readResponse<AngelOneDataResponse<AngelOneLtp | AngelOneLtp[]> & { errorCode?: string }>(response, 'Angel One LTP request failed')
+  if (result.status !== true) throw Object.assign(new Error(result.message || 'Angel One quote is unavailable.'), { status: isAngelOneAuthError({ ...result, status: response.status }) ? 401 : response.status, errorcode: result.errorcode || result.errorCode })
+  return result
 }
 
 export class HistoricalRequestError extends Error {
@@ -275,9 +278,11 @@ async function postHistorical<T extends AngelOneCandle[] | AngelOneOi[]>(path: '
 export const getHistoricalCandles = (token: string, body: object, signal?: AbortSignal) => postHistorical<AngelOneCandle[]>('candles', token, body, signal)
 export const getHistoricalOi = (token: string, body: object) => postHistorical<AngelOneOi[]>('oi', token, body)
 
+export type StreamSubscription = { mode: 1 | 2 | 3; tokenList: Array<{ exchangeType: number; tokens: string[] }> }
 export function connectAngelOneStream(
   onTick: (tick: AngelOneStreamTick) => void,
   onStatus: (status: string) => void,
+  subscriptions: StreamSubscription[] = [{ mode: 1, tokenList: [{ exchangeType: 1, tokens: ['99926000', '99926009'] }, { exchangeType: 3, tokens: ['99919000'] }] }],
 ) {
   const jwt = localStorage.getItem('angelone_jwt_token')
   const feedToken = localStorage.getItem('angelone_feed_token')
@@ -300,17 +305,13 @@ export function connectAngelOneStream(
   }
   socket.onopen = () => {
     reportStatus('Connected')
-    socket.send(JSON.stringify({
-      correlationID: 'indices01',
+    subscriptions.forEach((subscription, index) => socket.send(JSON.stringify({
+      correlationID: `market${index}`,
       action: 1,
       params: {
-        mode: 1,
-        tokenList: [
-          { exchangeType: 1, tokens: ['99926000', '99926009'] },
-          { exchangeType: 3, tokens: ['99919000'] },
-        ],
+        ...subscription,
       },
-    }))
+    })))
     heartbeat = window.setInterval(() => {
       if (socket.readyState === WebSocket.OPEN) socket.send('ping')
     }, 30000)

@@ -1,0 +1,134 @@
+{
+  "Natural Gas": {
+    "query": "\"natural gas\" (prices OR LNG OR storage OR weather)",
+    "benchmarks": [
+      {
+        "symbol": "NG=F",
+        "name": "Natural Gas \u00b7 US futures",
+        "kind": "commodity",
+        "unit": "MMBtu",
+        "cueSign": 1
+      },
+      {
+        "symbol": "INR=X",
+        "name": "USD/INR",
+        "kind": "fx",
+        "unit": "USD",
+        "cueSign": 1
+      },
+      {
+        "symbol": "DX-Y.NYB",
+        "name": "US Dollar Index",
+        "kind": "index",
+        "unit": "",
+        "cueSign": 0
+      },
+      {
+        "symbol": "^TNX",
+        "name": "US 10Y Yield",
+        "kind": "yield",
+        "unit": "",
+        "cueSign": 0
+      }
+    ]
+  },
+  "Crude Oil": {
+    "query": "\"crude oil\" (prices OR OPEC OR inventories OR supply)",
+    "benchmarks": [
+      {
+        "symbol": "CL=F",
+        "name": "Crude Oil \u00b7 US futures",
+        "kind": "commodity",
+        "unit": "bbl",
+        "cueSign": 1
+      },
+      {
+        "symbol": "INR=X",
+        "name": "USD/INR",
+        "kind": "fx",
+        "unit": "USD",
+        "cueSign": 1
+      },
+      {
+        "symbol": "DX-Y.NYB",
+        "name": "US Dollar Index",
+        "kind": "index",
+        "unit": "",
+        "cueSign": 0
+      },
+      {
+        "symbol": "^TNX",
+        "name": "US 10Y Yield",
+        "kind": "yield",
+        "unit": "",
+        "cueSign": 0
+      }
+    ]
+  },
+  "Silver": {
+    "query": "silver (prices OR bullion OR demand OR mining)",
+    "benchmarks": [
+      {
+        "symbol": "SI=F",
+        "name": "Silver \u00b7 US futures",
+        "kind": "commodity",
+        "unit": "oz",
+        "cueSign": 1
+      },
+      {
+        "symbol": "INR=X",
+        "name": "USD/INR",
+        "kind": "fx",
+        "unit": "USD",
+        "cueSign": 1
+      },
+      {
+        "symbol": "DX-Y.NYB",
+        "name": "US Dollar Index",
+        "kind": "index",
+        "unit": "",
+        "cueSign": 0
+      },
+      {
+        "symbol": "^TNX",
+        "name": "US 10Y Yield",
+        "kind": "yield",
+        "unit": "",
+        "cueSign": 0
+      }
+    ]
+  },
+  "Gold": {
+    "query": "gold (prices OR bullion OR demand OR central banks)",
+    "benchmarks": [
+      {
+        "symbol": "GC=F",
+        "name": "Gold \u00b7 US futures",
+        "kind": "commodity",
+        "unit": "oz",
+        "cueSign": 1
+      },
+      {
+        "symbol": "INR=X",
+        "name": "USD/INR",
+        "kind": "fx",
+        "unit": "USD",
+        "cueSign": 1
+      },
+      {
+        "symbol": "DX-Y.NYB",
+        "name": "US Dollar Index",
+        "kind": "index",
+        "unit": "",
+        "cueSign": 0
+      },
+      {
+        "symbol": "^TNX",
+        "name": "US 10Y Yield",
+        "kind": "yield",
+        "unit": "",
+        "cueSign": 0
+      }
+    ]
+  }
+}

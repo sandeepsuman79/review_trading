@@ -61,6 +61,7 @@ export function usePredictionHistory(onError: (message: string) => void, onEvent
   const syncTick = useCallback((instrument: string, tick: AngelOneStreamTick, candlesFor: (record: PredictionRecord) => AngelOneCandle[], now: number, confirmEntry?: (record: PredictionRecord) => PredictionPlan | undefined, confirmReversal?: (record: PredictionRecord) => PredictionPlan | undefined) => {
     mutate(current => reconcilePredictionRecords(current).map(record => {
       if (record.instrument !== instrument || !isOpenPrediction(record)) return record
+      if (record.contract && (record.contract.token !== tick.token || tick.exchangeType !== 5)) return record
       const plan = confirmEntry?.(record)
       return syncPredictionRecord(record, candlesFor(record), tick, now, confirmEntry ? Boolean(plan) : true, plan, confirmReversal ? confirmReversal(record) ?? null : undefined)
     }))

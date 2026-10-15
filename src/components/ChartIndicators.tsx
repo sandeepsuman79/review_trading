@@ -15,10 +15,10 @@ const controls: Array<{ key: ChartIndicator; label: string; color: string }> = [
 ]
 const number = (value?: number) => value === undefined ? '—' : value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-export default function ChartIndicators({ visibility, onToggle, average, technical, vwap, hasVwap, spotIndex, close, context, trade, indiaVix, indiaVixLoading, now }: {
+export default function ChartIndicators({ visibility, onToggle, average, technical, vwap, hasVwap, spotIndex, showIndexContext = true, showTradeContext = showIndexContext, close, context, trade, indiaVix, indiaVixLoading, now }: {
   visibility: ChartIndicatorVisibility; onToggle: (key: ChartIndicator) => void;
   average: MovingAveragePoint; technical: TechnicalIndicatorPoint; vwap?: number;
-  hasVwap: boolean; spotIndex: boolean; close: number; context: string; trade?: ChartTradeLevels;
+  hasVwap: boolean; spotIndex: boolean; showIndexContext?: boolean; showTradeContext?: boolean; close: number; context: string; trade?: ChartTradeLevels;
   indiaVix?: IndiaVixSnapshot; indiaVixLoading?: boolean; now: number
 }) {
   const vwapPosition = vwap === undefined ? 'neutral' : close > vwap ? 'positive' : close < vwap ? 'negative' : 'neutral'
@@ -35,14 +35,14 @@ export default function ChartIndicators({ visibility, onToggle, average, technic
     <div className="chart-indicator-controls" role="group" aria-label="Chart indicator visibility">
       <span className="chart-indicator-controls-label">Indicators <small>(tap to show/hide)</small></span>
       {controls.map(control => <button key={control.key} type="button" aria-pressed={visibility[control.key] && (control.key !== 'vwap' || hasVwap)} disabled={control.key === 'vwap' && !hasVwap}
-        onClick={() => onToggle(control.key)} title={control.key === 'vwap' && !hasVwap ? 'VWAP needs traded candle volume. These spot-index candles have zero volume, so a genuine VWAP cannot be calculated.' : `${visibility[control.key] ? 'Hide' : 'Show'} ${control.label}`}>
+        onClick={() => onToggle(control.key)} title={control.key === 'vwap' && !hasVwap ? spotIndex ? 'VWAP needs traded candle volume. These spot-index candles have zero volume, so a genuine VWAP cannot be calculated.' : 'VWAP needs traded candle volume. Waiting for historical or observed volume.' : `${visibility[control.key] ? 'Hide' : 'Show'} ${control.label}`}>
         <i aria-hidden="true" style={{ background: control.color }} />{control.label}{control.key === 'vwap' && !hasVwap && <small>N/A</small>}
       </button>)}
     </div>
-    <div className="chart-trade-legend" aria-label="Trade level legend">
+    {showTradeContext && <div className="chart-trade-legend" aria-label="Trade level legend">
       <span><i className="is-entry" />Entry</span><span><i className="is-stop" />Stop-loss</span><span><i className="is-target" />Target</span>
       <small>{trade ? 'Current live trade' : 'Levels appear when a confirmed trade is live'}</small>
-    </div>
+    </div>}
     <div className="chart-indicator-context">{context}</div>
     <div className="chart-indicator-metrics" role="region" aria-label="Chart indicator values" tabIndex={0}>
       <div className="chart-indicator-metric" aria-label="VWAP indicator">
@@ -70,11 +70,11 @@ export default function ChartIndicators({ visibility, onToggle, average, technic
         <span className="chart-indicator-metric-title">ADX / DMI (14)</span><strong>{technical.adx14?.toFixed(1) ?? '—'}</strong>
         <small>{technical.adx14 === undefined ? 'Needs 28 candles' : `${technical.adx14 >= 25 ? 'Strong trend' : technical.adx14 >= 20 ? 'Developing trend' : 'Weak trend'} · +DI ${technical.plusDi14?.toFixed(1) ?? '—'} / −DI ${technical.minusDi14?.toFixed(1) ?? '—'}`}</small>
       </div>
-      <div className="chart-indicator-metric" aria-label="India VIX indicator">
+      {showIndexContext && <div className="chart-indicator-metric" aria-label="India VIX indicator">
         <span className="chart-indicator-metric-title">INDIA VIX</span>
         <strong className="indicator-vix-values">{vix ? <><span>{vixNumber(vix.price)}</span><small className={`indicator-${vixColor}`}>{vix.changePercent > 0 ? '+' : ''}{vixNumber(vix.changePercent)}%</small></> : indiaVixLoading ? 'Loading…' : 'Unavailable'}</strong>
         <small>{vix ? <a href={indiaVix!.sourceUrl} target="_blank" rel="noopener noreferrer" title="Latest public India VIX quote; independent of the inspected chart candle">{vixCurrent ? vix.timeBasis === 'RECEIVED' ? 'Angel One · Fetched' : 'As of' : 'Last quote'} {new Date(vix.asOf).toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} IST</a> : 'Waiting for a public quote'}</small>
-      </div>
+      </div>}
     </div>
   </div>
 }

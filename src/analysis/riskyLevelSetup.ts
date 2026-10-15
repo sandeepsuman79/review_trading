@@ -12,9 +12,9 @@ export type RiskyLevelSetup = {
 const valid = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0
 
 /** Partial confirmation may produce a labelled conditional idea, never full confirmation. */
-export function findRiskyLevelSetup({ analysis, candles, checks, bullishScore, bearishScore, interval, now }: {
+export function findRiskyLevelSetup({ analysis, candles, checks, bullishScore, bearishScore, interval, now, instrument }: {
   analysis: PriceActionAnalysis; candles: AngelOneCandle[]; checks: Array<{ label: string; passed: boolean }>
-  bullishScore: number; bearishScore: number; interval: PriceActionInterval; now: number
+  bullishScore: number; bearishScore: number; interval: PriceActionInterval; now: number; instrument?: string
 }): RiskyLevelSetup | undefined {
   const passedChecks = checks.filter(check => check.passed).length
   const latest = candles[candles.length - 1], previous = candles[candles.length - 2]
@@ -23,7 +23,7 @@ export function findRiskyLevelSetup({ analysis, candles, checks, bullishScore, b
   if (passedChecks < 4 || candles.length < 50 || !latest || !previous || !valid(atr) || !valid(ema20) || !valid(ema50) || rsi === undefined || momentum === undefined || !Number.isFinite(rsi) || !Number.isFinite(momentum)) return undefined
   const time = Date.parse(latest[0]), duration = candleIntervalMs(interval)
   if (Date.parse(analysis.latestCandleTime ?? '') !== time || time + duration > now || now >= time + 2 * duration || candleSession(latest[0]) !== candleSession(previous[0]) || time - Date.parse(previous[0]) !== duration) return undefined
-  if (!inTradingEntryWindow(now)) return undefined
+  if (!inTradingEntryWindow(now, instrument)) return undefined
   const setups: RiskyLevelSetup[] = []
   for (const d of [1, -1] as const) {
     const level = d === 1 ? analysis.support : analysis.resistance

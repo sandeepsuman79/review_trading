@@ -47,24 +47,24 @@ export function isFreshTick(tick: AngelOneStreamTick | undefined, now: number) {
   return Number.isFinite(age) && age >= -5_000 && age <= 60_000
 }
 
-export function candleBucketTime(timestamp: number, interval: PriceActionInterval) {
+export function candleBucketTime(timestamp: number, interval: PriceActionInterval, sessionOpenMinute = 555) {
   const intervalMs = candleIntervalMs(interval)
-  const alignment = interval === 'ONE_HOUR' ? 45 * 60_000 : 0
+  const alignment = interval === 'ONE_HOUR' ? (sessionOpenMinute - 330) % 60 * 60_000 : 0
   return Math.floor((timestamp - alignment) / intervalMs) * intervalMs + alignment
 }
 
 /** Never advance an old tick into a candle for the current wall-clock time. */
-export function applyLiveTick(candles: AngelOneCandle[], tick: AngelOneStreamTick | undefined, interval: PriceActionInterval) {
+export function applyLiveTick(candles: AngelOneCandle[], tick: AngelOneStreamTick | undefined, interval: PriceActionInterval, sessionOpenMinute = 555, volumeDelta = 0) {
   if (!tick || !Number.isFinite(tick.ltp) || tick.ltp! <= 0 || !Number.isFinite(tickTimestamp(tick)) || tickTimestamp(tick) <= 0 || !Number.isFinite(new Date(tickTimestamp(tick)).getTime())) return candles
   const price = tick.ltp!
-  const bucket = candleBucketTime(tickTimestamp(tick), interval)
+  const bucket = candleBucketTime(tickTimestamp(tick), interval, sessionOpenMinute)
   const last = candles[candles.length - 1]
-  const lastBucket = last ? candleBucketTime(new Date(last[0]).getTime(), interval) : -Infinity
+  const lastBucket = last ? candleBucketTime(new Date(last[0]).getTime(), interval, sessionOpenMinute) : -Infinity
   if (bucket < lastBucket) return candles
   // Stream volume is session cumulative; it is not the volume of this interval.
   if (last && bucket === lastBucket) {
-    if (price === last[4] && price <= last[2] && price >= last[3]) return candles
-    return [...candles.slice(0, -1), [last[0], last[1], Math.max(last[2], price), Math.min(last[3], price), price, last[5]] as AngelOneCandle]
+    if (price === last[4] && price <= last[2] && price >= last[3] && volumeDelta === 0) return candles
+    return [...candles.slice(0, -1), [last[0], last[1], Math.max(last[2], price), Math.min(last[3], price), price, last[5] + volumeDelta] as AngelOneCandle]
   }
-  return [...candles, [new Date(bucket).toISOString(), price, price, price, price, 0] as AngelOneCandle]
+  return [...candles, [new Date(bucket).toISOString(), price, price, price, price, volumeDelta] as AngelOneCandle]
 }

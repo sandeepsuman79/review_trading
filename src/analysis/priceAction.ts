@@ -779,6 +779,7 @@ export function analyzePriceAction(
   candles: AngelOneCandle[],
   interval: PriceActionInterval = 'FIVE_MINUTE',
   now = Date.now(),
+  instrument?: string,
 ): PriceActionAnalysis {
   const timeframeLabel = timeframeInfo[interval].label
   const closedCandles = completedCandles(candles, interval, now)
@@ -1431,7 +1432,7 @@ export function analyzePriceAction(
     })
   }
 
-  candidates.push(...findMomentumSetups(closedCandles, movingAverageSeries, indicatorSeries, interval, support, resistance, alignment))
+  candidates.push(...findMomentumSetups(closedCandles, movingAverageSeries, indicatorSeries, interval, support, resistance, alignment, instrument))
 
   // Never manufacture a trade simply because a candle looks interesting.
   if (!candidates.length) {

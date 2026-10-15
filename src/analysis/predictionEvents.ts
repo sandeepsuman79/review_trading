@@ -1,3 +1,5 @@
+import { isCommodity } from './commodities'
+import { squareOffLabel } from './tradingSession'
 import { isConfirmedTrade, type PredictionRecord } from './predictionHistory'
 
 export type PredictionEvent = {
@@ -25,15 +27,15 @@ export function predictionEvents(previous: PredictionRecord[], next: PredictionR
       id: `${record.id}:${kind}`, recordId: record.id, instrument: record.instrument, side: record.side, reason, detail,
     })
     if (!old || old.entryAt === undefined) {
-      add('entry', 'Confirm call · Entry reached', `Entry ${record.entryPrice!.toFixed(2)}. Target ${record.target.toFixed(2)} · Stop loss ${record.stopLoss.toFixed(2)}.`)
+      add('entry', isCommodity(record.instrument) ? 'Confirmed trade · Entry reached' : 'Confirm call · Entry reached', `Entry ${record.entryPrice!.toFixed(2)}. Target ${record.target.toFixed(2)} · Stop loss ${record.stopLoss.toFixed(2)}.`)
     }
     if ((!old || old.status !== record.status) && record.status !== 'PENDING' && record.status !== 'ACTIVE') {
       const reason = record.status === 'TARGET_HIT' ? 'Target achieved · Exit'
         : record.status === 'STOP_LOSS_HIT' ? 'Stop loss · Exit'
-        : record.status === 'EARLY_EXIT' ? record.earlyExitSource === 'SESSION_SQUARE_OFF' ? '15:15 square-off · Exit' : record.earlyExitSource === 'AGENT_REVERSAL' ? 'Agent reversal · Exit' : 'Exit'
+        : record.status === 'EARLY_EXIT' ? record.earlyExitSource === 'SESSION_SQUARE_OFF' ? `${squareOffLabel(record.instrument, record.entryAt ?? record.generatedAt)} square-off · Exit` : record.earlyExitSource === 'AGENT_REVERSAL' ? 'Agent reversal · Exit' : 'Exit'
         : record.status === 'EXPIRED' ? 'Exit · Setup expired'
         : record.status === 'AMBIGUOUS' ? 'Exit · Outcome ambiguous' : 'Exit · Outcome unverified'
-      const result = record.points === undefined ? '' : `Booked ${record.points > 0 ? 'profit' : record.points < 0 ? 'loss' : 'break-even'}: ${record.points > 0 ? '+' : ''}${record.points.toFixed(2)} index points. `
+      const result = record.points === undefined ? '' : `Booked ${record.points > 0 ? 'profit' : record.points < 0 ? 'loss' : 'break-even'}: ${record.points > 0 ? '+' : ''}${record.points.toFixed(2)} price points. `
       add(record.status, reason, `${record.exitPrice === undefined ? '' : `Exit ${record.exitPrice.toFixed(2)}. `}${result}${record.outcomeNote}`)
     }
     return events

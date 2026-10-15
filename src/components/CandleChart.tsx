@@ -25,6 +25,8 @@ type Props = {
   savedCandleCount: number
   marketHeartbeat: string
   spotIndex?: boolean
+  showIndexContext?: boolean
+  showTradeContext?: boolean
   optionExpiry?: string
   trade?: ChartTradeLevels
   levels?: { support?: number; resistance?: number }
@@ -112,7 +114,7 @@ function readIndicatorPreferences(): ChartIndicatorVisibility {
   } catch { return defaultIndicators }
 }
 
-export default function CandleChart({ candles: inputCandles, name, intervalLabel, tick, isLive, savedCandleCount, marketHeartbeat, spotIndex = false, optionExpiry, trade, levels, indiaVix, indiaVixLoading, now }: Props) {
+export default function CandleChart({ candles: inputCandles, name, intervalLabel, tick, isLive, savedCandleCount, marketHeartbeat, spotIndex = false, showIndexContext = true, showTradeContext = showIndexContext, optionExpiry, trade, levels, indiaVix, indiaVixLoading, now }: Props) {
   const [scaleView, setScaleView] = useState<ScaleView>('INDEX')
   const [scaleGeometry, setScaleGeometry] = useState<ScaleGeometry>()
   const candles = useMemo(() => normalizeCandles(inputCandles), [inputCandles])
@@ -491,15 +493,15 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
         <div><button type="button" className={scaleView === 'CE' ? 'is-selected' : ''} onClick={() => { setMarker(null); setScaleView('CE') }} aria-label="Show CE premiums">← CE</button><button type="button" className={scaleView === 'INDEX' ? 'is-selected' : ''} onClick={() => { setMarker(null); setScaleView('INDEX') }} aria-label="Show index price levels" title={expiry ? `Nearest option expiry: ${expiry}` : 'Option expiry unavailable'}>{expiryLabel}</button><button type="button" className={scaleView === 'PE' ? 'is-selected' : ''} onClick={() => { setMarker(null); setScaleView('PE') }} aria-label="Show PE premiums">PE →</button></div>
       </div>}
       <details className="chart-indicator-disclosure">
-        <summary aria-label="Support, resistance and chart indicators">
-          <span className="chart-indicator-summary-levels">
+        <summary aria-label={showTradeContext ? 'Support, resistance and chart indicators' : 'Chart indicators'}>
+          {showTradeContext ? <span className="chart-indicator-summary-levels">
             <span className="agent-text-bullish">Support (S): {levels?.support === undefined ? 'Not established' : price(levels.support)}</span>
             <span className="agent-text-bearish">Resistance (R): {levels?.resistance === undefined ? 'Not established' : price(levels.resistance)}</span>
-          </span>
+          </span> : <span>Chart indicators</span>}
           <svg className="card-disclosure-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
         </summary>
         <ChartIndicators visibility={indicatorVisibility} onToggle={key => { setMarker(null); setIndicatorVisibility(current => ({ ...current, [key]: !current[key] })) }}
-          average={averages[selectedIndex] || {}} technical={indicators[selectedIndex] || {}} vwap={vwap[selectedIndex]} hasVwap={hasVwap} spotIndex={spotIndex}
+          average={averages[selectedIndex] || {}} technical={indicators[selectedIndex] || {}} vwap={vwap[selectedIndex]} hasVwap={hasVwap} spotIndex={spotIndex} showIndexContext={showIndexContext} showTradeContext={showTradeContext}
           close={selected[4]} trade={trade} indiaVix={indiaVix} indiaVixLoading={indiaVixLoading} now={now} context={`${inspectedIndex >= 0 ? 'Selected candle' : 'Latest candle'} · ${candleDate(selected[0])} IST`} />
       </details>
     </section>

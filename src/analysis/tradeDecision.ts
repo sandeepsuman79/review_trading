@@ -3,7 +3,7 @@ import type { PriceActionAnalysis } from './priceAction'
 import type { TradingEvidence } from './tradingEvidence'
 import { candleIntervalMs } from './candleData'
 import { candleSession } from './vwap'
-import { inTradingEntryWindow } from './tradingSession'
+import { inTradingEntryWindow, marketHours, squareOffLabel } from './tradingSession'
 
 export type TradeReasonCode = 'INSUFFICIENT_CANDLES' | 'STALE_DATA' | 'SESSION_DATA_GAP' | 'INDICATOR_NOT_READY' | 'NO_DIRECTIONAL_ROUTE' | 'SCORE_BELOW_THRESHOLD' | 'DIRECTIONAL_LEAD_TOO_SMALL' | 'TECHNICAL_COVERAGE_LOW' | 'NO_CONFIRMED_PATTERN' | 'ATR_INVALID' | 'TRADE_LEVELS_INVALID' | 'RR_BELOW_MINIMUM' | 'OUTSIDE_ENTRY_WINDOW' | 'ENTRY_NOT_REACHED' | 'LIVE_STREAM_DISCONNECTED' | 'QUOTE_STALE' | 'QUOTE_BEFORE_SIGNAL' | 'SETUP_NOT_CONFIRMED' | 'TRADE_ALREADY_OPEN'
 export type DecisionCheck = { code: TradeReasonCode; label: string; status: 'PASS' | 'FAIL' | 'NOT_CHECKED'; detail: string }
@@ -37,7 +37,7 @@ export function buildCandidateDecision(analysis: PriceActionAnalysis, evidence: 
   add('INSUFFICIENT_CANDLES', 'Initial analysis', candles.length >= early.earlyCandles, `${candles.length} completed candles / ${early.earlyCandles} for initial analysis; 50 for full scoring`)
   add('STALE_DATA', 'Data freshness', fresh, 'Latest completed candle must match the current chart and remain within its confirmation interval')
   add('SESSION_DATA_GAP', 'Session continuity', consecutive, 'Consecutive completed bars from the current IST session')
-  add('OUTSIDE_ENTRY_WINDOW', 'Entry window', withinEntryWindow(now), 'Mon–Fri 09:15–15:15 IST; automatic square-off at 15:15')
+  add('OUTSIDE_ENTRY_WINDOW', 'Entry window', withinEntryWindow(now, evidence.instrument), `${marketHours(evidence.instrument, now)}; automatic square-off at ${squareOffLabel(evidence.instrument, now)}`)
   add('INDICATOR_NOT_READY', 'Full indicator readiness', warm, '50 completed candles and available EMA20/50, RSI/momentum and Supertrend')
   add('ATR_INVALID', 'ATR(14)', atr, atr ? `${evidence.atr14!.toFixed(2)} points` : 'Current positive ATR required')
   add('NO_CONFIRMED_PATTERN', 'Price pattern', pattern, pattern ? analysis.setup : 'No completed price setup detected for this direction')
@@ -47,7 +47,7 @@ export function buildCandidateDecision(analysis: PriceActionAnalysis, evidence: 
   add('DIRECTIONAL_LEAD_TOO_SMALL', 'Directional lead', lead >= evidence.requiredGap, `${lead} points / ${evidence.requiredGap} required`)
   add('TRADE_LEVELS_INVALID', 'Trade levels', levels, 'Positive entry, ATR-adjusted stop and target on the correct sides', pattern)
   add('RR_BELOW_MINIMUM', 'Reward/risk', riskReward !== undefined && riskReward >= 1.5, riskReward !== undefined ? `${riskReward.toFixed(2)}:1 / 1.50:1 required` : 'No validated trade levels', pattern && levels)
-  const hardReady = fresh && consecutive && withinEntryWindow(now) && atr && candles.length >= early.earlyCandles
+  const hardReady = fresh && consecutive && withinEntryWindow(now, evidence.instrument) && atr && candles.length >= early.earlyCandles
   const initialIndicators = [analysis.exponentialMovingAverage20, analysis.rsi14, analysis.rsi14Momentum].every(value => value !== undefined && Number.isFinite(value)) && Boolean(analysis.supertrendDirection)
   const earlyReady = hardReady && initialIndicators && routes.length > 0 && evidence.coverage >= early.earlyCoverage && supportScore >= Math.max(early.earlyScore, evidence.requiredScore) && lead >= Math.max(early.earlyGap, evidence.requiredGap)
   const state = pattern && evidence.canConfirm ? 'CONFIRMED' : hardReady && evidence.riskySetup?.side === side ? 'RISKY' : earlyReady ? 'EARLY' : pattern || routes.length > 0 ? 'REJECTED' : 'WAIT'

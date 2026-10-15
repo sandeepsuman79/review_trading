@@ -14,6 +14,7 @@
     "test:analysis": "node --test tests/priceAction.test.cjs tests/tradingEvidence.test.cjs",
     "test:indicators": "node --test tests/chartIndicators.test.cjs tests/indiaVix.test.cjs",
     "test:stream": "node --test tests/liveCandles.test.cjs",
+    "test:commodities": "node --test tests/commodities.test.cjs tests/commodityAgent.test.cjs tests/commodityContext.test.js",
     "test:context": "node --test tests/marketContext.test.js",
     "test:dashboard": "node --test tests/marketInputs.test.js tests/marketDashboard.test.cjs tests/newsEvidence.test.cjs",
     "test:sync": "node --test tests/historySync.test.cjs tests/historicalProxy.test.js",

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getMarketContext, type MarketContext } from '../api/marketContext'
 
-export function useMarketContext(instrument: string) {
+export function useMarketContext(instrument: string, enabled = true) {
   const [context, setContext] = useState<MarketContext | null>(null)
   const [loading, setLoading] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
   const controllerRef = useRef<AbortController | null>(null)
   const refresh = useCallback(async () => {
+    if (!enabled) return
     controllerRef.current?.abort()
     const controller = new AbortController()
     controllerRef.current = controller
@@ -26,13 +27,15 @@ export function useMarketContext(instrument: string) {
       window.clearTimeout(timeout)
       if (controllerRef.current === controller) { setLoading(false); setLoaded(true) }
     }
-  }, [instrument])
+  }, [instrument, enabled])
   useEffect(() => {
     setContext(null)
     setLoaded(false)
+    setError('')
+    if (!enabled) { setLoading(false); return }
     void refresh()
     const timer = window.setInterval(() => void refresh(), 5 * 60_000)
     return () => { window.clearInterval(timer); controllerRef.current?.abort(); controllerRef.current = null }
-  }, [refresh])
+  }, [refresh, enabled])
   return { context, loading, loaded, error, refresh }
 }
