@@ -79,14 +79,14 @@ test('MCX hourly bars start at 09:00 IST and align with historical data, while i
 test('commodity live volume counts only observed within-bar deltas, not the session cumulative total',()=>{
  const book=new LiveCandleBook(()=>[],()=>540,()=>true)
  const accept=(time,volume,ltp=300)=>book.accept({token:'1000',exchangeType:5,mode:2,timestamp:at(time),ltp,volume},at(time))
- accept('18:00:01',10000);assert.equal(book.get('1000','ONE_MINUTE')[0][5],0)
+ accept('18:00:01',10000);assert.equal(book.get('1000','FIVE_MINUTE')[0][5],0)
  accept('18:00:02',10005);accept('18:00:03',10008,310)
- assert.equal(book.get('1000','ONE_MINUTE')[0][5],8)
- assert.deepEqual(book.get('1000','ONE_MINUTE')[0].slice(1,5),[300,310,300,310])
- accept('18:01:01',10020);assert.equal(book.get('1000','ONE_MINUTE')[1][5],0,'unknown cross-boundary volume is not assigned to a candle')
- accept('18:01:02',10023);assert.equal(book.get('1000','ONE_MINUTE')[1][5],3)
- accept('18:01:40',11000);assert.equal(book.get('1000','ONE_MINUTE')[1][5],3,'reconnect gaps cannot fabricate volume')
- accept('18:01:41',100);assert.equal(book.get('1000','ONE_MINUTE')[1][5],3,'counter resets do not subtract volume')
+ assert.equal(book.get('1000','FIVE_MINUTE')[0][5],8)
+ assert.deepEqual(book.get('1000','FIVE_MINUTE')[0].slice(1,5),[300,310,300,310])
+ accept('18:05:01',10020);assert.equal(book.get('1000','FIVE_MINUTE')[1][5],0,'unknown cross-boundary volume is not assigned to a candle')
+ accept('18:05:02',10023);assert.equal(book.get('1000','FIVE_MINUTE')[1][5],3)
+ accept('18:05:40',11000);assert.equal(book.get('1000','FIVE_MINUTE')[1][5],3,'reconnect gaps cannot fabricate volume')
+ accept('18:05:41',100);assert.equal(book.get('1000','FIVE_MINUTE')[1][5],3,'counter resets do not subtract volume')
 })
 
 test('commodity history backfills from 09:00 and prioritizes the selected chart without index-agent constraints',()=>{
@@ -94,7 +94,7 @@ test('commodity history backfills from 09:00 and prioritizes the selected chart 
  assert.equal(historySyncRange(candles,'ONE_MINUTE',at('18:00:00'),540).from,at('09:00:00'))
  const jobs=['ONE_MINUTE','FIVE_MINUTE','FIFTEEN_MINUTE','ONE_HOUR'].flatMap(interval=>['nifty','gas'].map(token=>({token,interval})))
  assert.deepEqual(prioritizeHistoryJobs(jobs,'gas','ONE_HOUR',false)[0],{token:'gas',interval:'ONE_HOUR'})
- assert.deepEqual(prioritizeHistoryJobs(jobs,'nifty','ONE_HOUR')[0],{token:'nifty',interval:'ONE_MINUTE'})
+ assert.deepEqual(prioritizeHistoryJobs(jobs,'nifty','ONE_HOUR')[0],{token:'nifty',interval:'FIVE_MINUTE'})
 })
 
 test('server commodity scope exposes only the four standard futures and keeps their broker metadata',async()=>{

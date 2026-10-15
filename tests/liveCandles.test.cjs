@@ -9,7 +9,7 @@ const { decodeStreamPacket } = require('../src/api/streamPacket.ts')
 const { LiveCandleBook } = require('../src/analysis/liveCandleBook.ts')
 const { applyLiveTick, candleBucketTime, historicalCandleRequestStart, isFreshTick, normalizeCandles } = require('../src/analysis/candleData.ts')
 const start = Date.parse('2026-10-09T09:15:00+05:30')
-const intervals = ['ONE_MINUTE', 'FIVE_MINUTE', 'FIFTEEN_MINUTE', 'ONE_HOUR']
+const intervals = ['FIVE_MINUTE', 'FIFTEEN_MINUTE', 'ONE_HOUR']
 const bar = (time, open, high, low, close, volume = 0) => [new Date(time).toISOString(), open, high, low, close, volume]
 const tick = (ltp, offset = 0, extra = {}) => ({ token: '99926000', mode: 1, exchangeType: 1, timestamp: start + offset, ltp, ...extra })
 const packet = (mode = 1, cents = 2252045n) => {
@@ -51,7 +51,7 @@ test('a burst preserves every high and low for all timeframes before one cache f
   for (const interval of intervals) assert.deepEqual(book.get('99926000', interval), [bar(start, 100, 120, 90, 105)])
   const writes = []
   book.flush((token, interval, candles) => writes.push({ token, interval, candles }))
-  assert.equal(writes.length, 4)
+  assert.equal(writes.length, 3)
   book.flush(() => assert.fail('Already-saved snapshots must not be written again'))
 })
 
@@ -119,7 +119,7 @@ test('all indices persist independently across refresh and failed saves can retr
   for (const [token, value] of [['99926000', 22000], ['99919000', 80000], ['99926009', 50000]]) book.accept(tick(value, 0, { token }), start)
   assert.throws(() => book.flush(() => { throw new Error('Storage unavailable') }))
   book.flush((token, interval, candles) => saved.set(`${token}:${interval}`, candles))
-  assert.equal(saved.size, 12)
+  assert.equal(saved.size, 9)
   const refreshed = new LiveCandleBook(load)
   refreshed.accept(tick(22020, 1000), start + 1000)
   for (const interval of intervals) {

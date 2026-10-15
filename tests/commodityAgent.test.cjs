@@ -14,16 +14,16 @@ const instruments = [['Natural Gas', 'NATURALGAS', 300, .2, .1], ['Crude Oil', '
 const contract = (name = 'Natural Gas', root = 'NATURALGAS', tickSize = .1, date = '2026-11-20') => ({ name, root, token: String(1000 + instruments.findIndex(x => x[0] === name)), symbol: `${root}20NOV26FUT`, exchange: 'MCX', exchangeType: 5, expiry: date, expiresAt: mcxSession(at('12:00:00', date)).close, lotSize: 100, tickSize })
 function assess(row = instruments[0], d = 1, end = at('18:00:00')) {
  const [instrument, root, base, scale, tickSize] = row
- const candles = Array.from({ length: 52 }, (_, i) => { const open = base + d * (i * .3 + Math.sin(i / 4) * 6) * scale, close = open + d * 2 * scale; return [new Date(end - (52 - i) * 60000).toISOString(), open, Math.max(open, close) + .7 * scale, Math.min(open, close) - .7 * scale, close, 100] })
- const analysis = analyzePriceAction(candles, 'ONE_MINUTE', end, instrument)
- const evidence = analyzeTradingEvidence({ analysis, candles, instrument, interval: 'ONE_MINUTE', now: end })
+ const candles = Array.from({ length: 52 }, (_, i) => { const open = base + d * (i * .3 + Math.sin(i / 4) * 6) * scale, close = open + d * 2 * scale; return [new Date(end - (52 - i) * 300000).toISOString(), open, Math.max(open, close) + .7 * scale, Math.min(open, close) - .7 * scale, close, 100] })
+ const analysis = analyzePriceAction(candles, 'FIVE_MINUTE', end, instrument)
+ const evidence = analyzeTradingEvidence({ analysis, candles, instrument, interval: 'FIVE_MINUTE', now: end })
  const selected = contract(instrument, root, tickSize)
- return { instrument, candles, analysis, evidence, now: end, contract: selected, prediction: buildEarlyPrediction(analysis, instrument, 'ONE_MINUTE', end, undefined, undefined, evidence, selected) }
+ return { instrument, candles, analysis, evidence, now: end, contract: selected, prediction: buildEarlyPrediction(analysis, instrument, 'FIVE_MINUTE', end, undefined, undefined, evidence, selected) }
 }
 const quote = (record, time, ltp) => ({ token: record.contract.token, exchangeType: 5, mode: 2, timestamp: time, ltp })
 function active(plan, time = plan.generatedAt) { return { ...createPredictionRecord(plan), status: 'ACTIVE', entryAt: time, entryPrice: plan.entry, observedThrough: time, latestPrice: plan.entry, latestPriceAt: time, latestPriceSource: 'LIVE' } }
 
-test('all four commodities support symmetric LONG and SHORT confirmation on real one-minute OHLC after index close', () => {
+test('all four commodities support symmetric LONG and SHORT confirmation on real five-minute OHLC after index close', () => {
  for (const row of instruments) for (const d of [1,-1]) {
   const x = assess(row,d)
   assert.equal(x.evidence.canConfirm,true, `${row[0]} ${d}: ${x.evidence.reason}`)
@@ -42,13 +42,13 @@ test('commodity entries respect own hours, weekends and contract expiry rather t
  }
  assert(!withinEntryWindow(at('18:00:00','2026-10-17'),'Gold'));assert(!withinEntryWindow(at('18:00:00'),'Nifty 50'))
  const x=assess(),expired={...x.contract,expiry:'2026-10-14',expiresAt:at('23:30:00','2026-10-14')}
- assert.equal(buildEarlyPrediction(x.analysis,x.instrument,'ONE_MINUTE',x.now,null,undefined,x.evidence).side,'WAIT')
- assert.equal(buildEarlyPrediction(x.analysis,x.instrument,'ONE_MINUTE',x.now,null,undefined,x.evidence,expired).side,'WAIT')
+ assert.equal(buildEarlyPrediction(x.analysis,x.instrument,'FIVE_MINUTE',x.now,null,undefined,x.evidence).side,'WAIT')
+ assert.equal(buildEarlyPrediction(x.analysis,x.instrument,'FIVE_MINUTE',x.now,null,undefined,x.evidence,expired).side,'WAIT')
  assert.equal(registerConfirmedPrediction([],{...x.prediction.plan,contract:expired},x.now).length,0)
 })
 
 test('open futures ignore other tokens, persist contract identity, and close before opposite entries', () => {
- const x=assess(),short=assess(instruments[0],-1),plan=x.prediction.plan,record=active({...plan,entry:short.prediction.plan.entry+1,stopLoss:short.prediction.plan.entry-10,target:short.prediction.plan.entry+20},x.now-180000)
+ const x=assess(),short=assess(instruments[0],-1),plan=x.prediction.plan,record=active({...plan,entry:short.prediction.plan.entry+1,stopLoss:short.prediction.plan.entry-10,target:short.prediction.plan.entry+20},x.now-600000)
  record.observedThrough=x.now-1000
  const price=short.prediction.plan.entry
  const wrong=syncPredictionRecord(record,[],{...quote(record,x.now,price),token:'different'},x.now,false,undefined,short.prediction.plan)
@@ -67,7 +67,7 @@ test('open futures ignore other tokens, persist contract identity, and close bef
 })
 
 test('a new front-month contract cannot reverse or enter a position belonging to the previous expiry', () => {
- const x=assess(), record=active(x.prediction.plan,x.now-180000), changed={...x.prediction.plan,id:'next-contract',side:'PUT',contract:{...x.contract,token:'2000',symbol:'NATURALGAS20DEC26FUT'}}
+ const x=assess(), record=active(x.prediction.plan,x.now-600000), changed={...x.prediction.plan,id:'next-contract',side:'PUT',contract:{...x.contract,token:'2000',symbol:'NATURALGAS20DEC26FUT'}}
  record.observedThrough=x.now-1000
  assert.equal(syncPredictionRecord(record,[],quote(record,x.now,record.entryPrice),x.now,false,undefined,changed).status,'ACTIVE')
  assert.equal(diagnoseTradeEntry(changed,quote(record,x.now,changed.entry),true,x.now,false).checks.find(c=>c.code==='QUOTE_STALE').status,'FAIL')
@@ -98,7 +98,7 @@ test('commodity global references use direct benchmark and FX cues, with no inve
 test('commodity assessment rejects index context/VIX/flows but accepts matching commodity global sentiment',()=>{
  const x=assess(), ctx=context(x.instrument), flow={status:'AVAILABLE',fetchedAt:ctx.retrievedAt,data:{asOf:ctx.retrievedAt,unit:'INR_CRORE',fiiCash:10000,diiCash:10000,netFlow:20000}}
  ctx.inputs.institutional=flow;ctx.inputs.openInterest={...flow,data:{...flow.data,pcr:2,expiry:'20-Nov-2026'}}
- const options={analysis:x.analysis,candles:x.candles,instrument:x.instrument,interval:'ONE_MINUTE',now:x.now,indiaVix:{...flow,data:{...flow.data,symbol:'^INDIAVIX',price:99,changePercent:50}}}
+ const options={analysis:x.analysis,candles:x.candles,instrument:x.instrument,interval:'FIVE_MINUTE',now:x.now,indiaVix:{...flow,data:{...flow.data,symbol:'^INDIAVIX',price:99,changePercent:50}}}
  const equity=analyzeTradingEvidence({...options,context:{...ctx,marketType:undefined}})
  const mcx=analyzeTradingEvidence({...options,context:ctx})
  assert.equal(equity.bullishScore,x.evidence.bullishScore);assert.equal(mcx.bullishScore,x.evidence.bullishScore);assert.equal(mcx.indiaVix,undefined)
@@ -111,10 +111,10 @@ test('commodity reversals develop symmetrically from completed trajectories rath
   const [instrument,,base,scale]=row, candles=[];let price=base,found=false
   for(let i=0;i<115;i++){
    const change=scale*d*(i<80?1.2+Math.sin(i/3)*.7:-1.8+Math.sin(i/2)*.6)
-   candles.push([new Date(at('17:00:00')+i*60000).toISOString(),price,Math.max(price,price+change)+.4*scale,Math.min(price,price+change)-.4*scale,price+change,100]);price+=change
+   candles.push([new Date(at('10:00:00')+i*300000).toISOString(),price,Math.max(price,price+change)+.4*scale,Math.min(price,price+change)-.4*scale,price+change,100]);price+=change
    if(i<80)continue
-   const now=at('17:00:00')+(i+1)*60000, analysis=analyzePriceAction(candles,'ONE_MINUTE',now,instrument)
-   const evidence=analyzeTradingEvidence({analysis,candles,instrument,interval:'ONE_MINUTE',now})
+   const now=at('10:00:00')+(i+1)*300000, analysis=analyzePriceAction(candles,'FIVE_MINUTE',now,instrument)
+   const evidence=analyzeTradingEvidence({analysis,candles,instrument,interval:'FIVE_MINUTE',now})
    if(evidence.canConfirm&&evidence.selectedAnalysis.side===(d===1?'PUT':'CALL')){found=true;break}
   }
   assert(found,`${instrument} must support ${d===1?'SHORT':'LONG'} after a confirmed reversal`)
