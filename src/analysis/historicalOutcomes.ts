@@ -4,6 +4,7 @@ import { candleIntervalMs, completedCandles, candleBucketTime } from './candleDa
 import { calculateMovingAverageSeries } from './movingAverages'
 import { calculateTechnicalIndicatorSeries } from './technicalIndicators'
 import { candleSession } from './vwap'
+import { isCommodity, mcxSession } from './commodities'
 
 export type HistoricalOutcomes = {
   status: 'READY' | 'INSUFFICIENT'; samples: number; sessions: number; horizonBars: number; thresholdAtr: number
@@ -20,7 +21,7 @@ export function wilsonInterval(successes: number, samples: number): [number, num
 }
 
 /** Past analogues are outcome frequencies, not calibrated live trade probabilities. */
-export function analyzeHistoricalOutcomes(input: AngelOneCandle[], interval: PriceActionInterval, now: number): HistoricalOutcomes {
+export function analyzeHistoricalOutcomes(input: AngelOneCandle[], interval: PriceActionInterval, now: number, instrument?: string): HistoricalOutcomes {
   const candles = completedCandles(input, interval, now), end = candles.length - 1, horizonBars = 3, thresholdAtr = .5
   const base: HistoricalOutcomes = { status: 'INSUFFICIENT', samples: 0, sessions: 0, horizonBars, thresholdAtr, asOf: candles[end]?.[0], up: 0, down: 0, flat: 0, bias: 'UNAVAILABLE', message: 'Need at least 30 similar non-overlapping cases across 3 saved sessions.' }
   if (candles.length < 60) return base
@@ -50,7 +51,8 @@ export function analyzeHistoricalOutcomes(input: AngelOneCandle[], interval: Pri
     const date = candleSession(candles[i][0]), window = candles.slice(i, i + horizonBars + 1)
     if (window.some((bar, offset) => candleSession(bar[0]) !== date || offset > 0 && Date.parse(bar[0]) - Date.parse(window[offset - 1][0]) !== candleIntervalMs(interval))) continue
     const local = new Date(Date.parse(candles[i][0]) + 330 * 60_000), minute = local.getUTCHours() * 60 + local.getUTCMinutes()
-    if (minute < 555 || minute + (horizonBars + 1) * candleIntervalMs(interval) / 60_000 > 930) continue
+    const commodity = isCommodity(instrument), session = commodity ? mcxSession(Date.parse(candles[i][0])) : undefined
+    if (minute < (commodity ? 540 : 555) || Date.parse(window[window.length - 1][0]) + candleIntervalMs(interval) > (session?.close ?? Date.parse(`${date}T15:30:00+05:30`))) continue
     const movement = candles[i + horizonBars][4] - candles[i][4]
     if (movement > thresholdAtr * feature.atr) base.up++
     else if (movement < -thresholdAtr * feature.atr) base.down++
@@ -66,11 +68,11 @@ export function analyzeHistoricalOutcomes(input: AngelOneCandle[], interval: Pri
     message: `Observed next-${horizonBars}-candle outcomes for similar candle shape, EMA trend/slope, Supertrend, RSI, ADX and volatility. A move requires more than ${thresholdAtr} ATR at the historical reference.` }
 }
 
-const memory = new WeakMap<AngelOneCandle[], { interval: PriceActionInterval; boundary: number; result: HistoricalOutcomes }>()
-export function cachedHistoricalOutcomes(candles: AngelOneCandle[], interval: PriceActionInterval, now: number) {
+const memory = new WeakMap<AngelOneCandle[], { interval: PriceActionInterval; instrument?: string; boundary: number; result: HistoricalOutcomes }>()
+export function cachedHistoricalOutcomes(candles: AngelOneCandle[], interval: PriceActionInterval, now: number, instrument?: string) {
   const boundary = candleBucketTime(now, interval), saved = memory.get(candles)
-  if (saved?.interval === interval && saved.boundary === boundary) return saved.result
-  const result = analyzeHistoricalOutcomes(candles, interval, now)
-  memory.set(candles, { interval, boundary, result })
+  if (saved?.interval === interval && saved.boundary === boundary && saved.instrument === instrument) return saved.result
+  const result = analyzeHistoricalOutcomes(candles, interval, now, instrument)
+  memory.set(candles, { interval, instrument, boundary, result })
   return result
 }

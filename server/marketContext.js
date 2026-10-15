@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { XMLParser, XMLValidator } from 'fast-xml-parser'
 import { createMarketInputsService } from './marketInputs.js'
@@ -7,6 +8,8 @@ export const indexSources = {
   'Bank Nifty': { url: 'https://archives.nseindia.com/content/indices/ind_niftybanklist.csv', fallbackUrl: 'https://niftyindices.com/IndexConstituent/ind_niftybanklist.csv', kind: 'csv', publisher: 'NSE Indices' },
   Sensex: { url: 'https://www.bseindices.com/AsiaIndexAPI/api/Codewise_Indices/w?code=16', kind: 'json', publisher: 'BSE Indices' },
 }
+export const commoditySources = JSON.parse(readFileSync(new URL('../src/data/commodityMarkets.json', import.meta.url), 'utf8'))
+export const supportsMarket = instrument => Object.hasOwn(indexSources, instrument) || Object.hasOwn(commoditySources, instrument)
 const announcementsUrl = 'https://archives.nseindia.com/content/RSS/Online_announcements.xml'
 const ttl = 5 * 60_000
 const maxAge = 48 * 60 * 60_000
@@ -127,16 +130,20 @@ export function createMarketContextService({ fetchFn = fetch, now = Date.now } =
   }
 
   async function getContext(instrument) {
-    if (!Object.hasOwn(indexSources, instrument)) throw new Error('Unsupported index.')
-    const inputsPromise = marketInputs.getInputs(instrument)
-    const config = indexSources[instrument]
+    if (!supportsMarket(instrument)) throw new Error('Unsupported instrument.')
+    const commodity = Object.hasOwn(commoditySources, instrument)
+    const inputsPromise = commodity ? marketInputs.getCommodityInputs(instrument) : marketInputs.getInputs(instrument)
+    const config = commodity ? { url: 'https://www.mcxindia.com/', publisher: 'MCX commodity references' } : indexSources[instrument]
     let membershipSourceUrl = config.url
-    let membership = await source(config.url, 24 * 60 * 60_000, raw => parseConstituents(raw, config.kind))
+    let membership = commodity ? { data: [], fetchedAt: null, stale: false, error: 'Equity constituents are not applicable to commodity futures.' } : await source(config.url, 24 * 60 * 60_000, raw => parseConstituents(raw, config.kind))
     if (membership.stale && config.fallbackUrl) {
       const fallback = await source(config.fallbackUrl, 24 * 60 * 60_000, raw => parseConstituents(raw, config.kind))
       if (!fallback.stale || !membership.data.length && fallback.data.length) { membership = fallback; membershipSourceUrl = config.fallbackUrl }
     }
-    const specs = [
+    const specs = commodity ? [
+      { category: 'india', name: `${instrument} · India / MCX news`, url: googleNewsUrl(`(${commoditySources[instrument].query}) (India OR MCX OR rupee)`) },
+      { category: 'global', name: `${instrument} · Global supply & demand`, url: googleNewsUrl(commoditySources[instrument].query) },
+    ] : [
       { category: 'india', name: 'Indian market news', url: googleNewsUrl('("India stock market" OR RBI OR "India inflation")') },
       { category: 'global', name: 'Global market news', url: googleNewsUrl('("Federal Reserve" OR "US inflation" OR "crude oil" OR "Asian stocks")') },
       { category: 'companies', name: 'Index company news', url: announcementsUrl },
@@ -177,9 +184,9 @@ export function createMarketContextService({ fetchFn = fetch, now = Date.now } =
       inputs: { ...Object.fromEntries(['openInterest', 'institutional', 'participantPositions', 'giftNifty'].map(key => [key, { status: inputs[key].status, data: inputs[key].data }])), global: inputs.global.map(({ name, status, data }) => ({ name, status, data })) },
     })).digest('hex').slice(0, 20)
     return {
-      instrument, revision, retrievedAt: new Date(now()).toISOString(), delayNotice: 'Free public feeds may be delayed. Headlines are evidence to review, not live prices or confirmed company impacts.',
+      instrument, ...(commodity ? { marketType: 'COMMODITY' } : {}), revision, retrievedAt: new Date(now()).toISOString(), delayNotice: 'Free public feeds may be delayed. Headlines are evidence to review, not live prices or confirmed company impacts.',
       constituents: { companies: membership.data, sourceUrl: membershipSourceUrl, publisher: config.publisher, fetchedAt: membership.fetchedAt ? new Date(membership.fetchedAt).toISOString() : null, status: membership.error ? membership.fetchedAt ? 'STALE' : 'UNAVAILABLE' : 'AVAILABLE', message: membership.error, weightsAvailable: false },
-      globalWatchlist, feeds, articles, inputs,
+      globalWatchlist: commodity ? [] : globalWatchlist, feeds, articles, inputs,
     }
   }
   return { getContext, getIndiaVix: marketInputs.getIndiaVix }
@@ -208,7 +215,7 @@ export function contextForAi(context, indiaVix) {
   const referenceTime = Date.parse(context.retrievedAt)
   const inputs = context.inputs
   return {
-    instrument: context.instrument, revision: context.revision, retrievedAt: context.retrievedAt,
+    instrument: context.instrument, marketType: context.marketType || 'INDEX', revision: context.revision, retrievedAt: context.retrievedAt,
     availableCategories, unavailableCategories: context.feeds.filter(feed => feed.status !== 'AVAILABLE').map(feed => feed.category),
     constituentStatus: context.constituents.status, weightsAvailable: false,
     // Stale feed results and stale membership never become current directional evidence.
@@ -221,7 +228,7 @@ export function contextForAi(context, indiaVix) {
       global: inputs.global.map(quote => ({ name: quote.name, ...inputForAi(quote, referenceTime, 4 * 86400000) })),
     } } : {}),
     ...(indiaVix ? { indiaVix: inputForAi(indiaVix, referenceTime, 30 * 60000) } : {}),
-    limitations: ['Headlines only, not full articles or verified earnings surprises.', 'Current constituent weights and constituent price breadth are unavailable; do not invent them.', 'Global company watchlist indicates potential exposure, not established causal relationships.', 'Public feeds may be delayed; market reaction may already be priced in.', 'OI positioning does not establish call/put writing without price changes; max pain and OI walls are reference levels, not guaranteed price targets.', 'FII/DII flows are market-wide daily reports, not live index transactions.', 'India VIX measures volatility, not a guaranteed equity direction.'],
+    limitations: context.marketType === 'COMMODITY' ? ['Assess news for the named MCX futures price, not Indian equities. Higher oil or USD/INR must not receive the inverse equity interpretation.', 'Foreign futures benchmarks are delayed references with different currency, expiry and quote units; never substitute them for MCX prices.', 'Equity FII/DII, India VIX and index OI/PCR are not applicable. Missing commodity option-chain data remains unavailable.', 'Headlines are unverified potential impacts, not probabilities or trade triggers.'] : ['Headlines only, not full articles or verified earnings surprises.', 'Current constituent weights and constituent price breadth are unavailable; do not invent them.', 'Global company watchlist indicates potential exposure, not established causal relationships.', 'Public feeds may be delayed; market reaction may already be priced in.', 'OI positioning does not establish call/put writing without price changes; max pain and OI walls are reference levels, not guaranteed price targets.', 'FII/DII flows are market-wide daily reports, not live index transactions.', 'India VIX measures volatility, not a guaranteed equity direction.'],
   }
 }
 

@@ -10,6 +10,8 @@ import { buildNewsEvidence } from './newsEvidence'
 import { buildCandidateDecision, recordTradeDiagnostics, withinEntryWindow, type CandidateDecision } from './tradeDecision'
 import { candleSession } from './vwap'
 import { type IndicatorTurn } from './indicatorTrajectory'
+import { isCommodity } from './commodities'
+import { marketHours, squareOffLabel } from './tradingSession'
 
 export const tradingEvidenceRules = {
   minimumCoverage: 70, minimumScore: 55, minimumGap: 15,
@@ -57,13 +59,14 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
   analysis: PriceActionAnalysis; candles: AngelOneCandle[]; interval: PriceActionInterval; instrument: string
   context?: MarketContext | null; outlook?: MarketOutlook; indiaVix?: IndiaVixSnapshot; flowHistory?: InstitutionalFlow[]; now: number; historicalReference?: boolean
 }): TradingEvidence {
-  const historicalOutcomes = historicalReference ? cachedHistoricalOutcomes(candles, interval, now) : undefined
+  const commodity = isCommodity(instrument)
+  const historicalOutcomes = historicalReference ? cachedHistoricalOutcomes(candles, interval, now, instrument) : undefined
   const { closed, averages, trajectory, vwap: vwapValues } = cachedCandleIndicators(candles, interval, now)
   const chartTime = Date.parse(analysis.latestCandleTime || '')
   const chartCurrent = analysis.analyzedCandles >= 25 && finite(chartTime) && chartTime === Date.parse(closed[closed.length - 1]?.[0] || '')
     && chartTime + candleIntervalMs(interval) <= now && now < chartTime + 2 * candleIntervalMs(interval)
   const contextAge = context ? now - Date.parse(context.retrievedAt) : NaN
-  const market = context?.instrument === instrument && finite(contextAge) && contextAge >= -60_000 && contextAge <= 10 * 60_000 ? context : null
+  const market = (!commodity || context?.marketType === 'COMMODITY') && context?.instrument === instrument && finite(contextAge) && contextAge >= -60_000 && contextAge <= 10 * 60_000 ? context : null
   const layers: EvidenceLayer[] = [], bullishEvidence: string[] = [], bearishEvidence: string[] = [], missing: string[] = [], riskNotes: string[] = []
   const sentimentLayers: EvidenceLayer[] = [], sentimentBullish: string[] = [], sentimentBearish: string[] = [], sentimentMissing: string[] = []
   const layer = (key: keyof typeof technicalWeights | keyof typeof sentimentWeights, name: string) => {
@@ -119,7 +122,7 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
   if (atr === undefined) missing.push('ATR(14)')
   else riskNotes.push(`ATR(14) ${format(atr)} pts · stop distance must cover at least 1 ATR; reward/risk must remain ≥ 1.5`)
 
-  const oiLayer = layer('oi', 'OI / PCR'), pcrLayer = layer('pcr', 'PCR reference'), oi = market?.inputs?.openInterest
+  const oiLayer = layer('oi', 'OI / PCR'), pcrLayer = layer('pcr', 'PCR reference'), oi = commodity ? undefined : market?.inputs?.openInterest
   const expiryText = oi?.data?.expiry
   const expiry = expiryText ? Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(expiryText) ? `${expiryText}T15:30:00+05:30` : `${expiryText} 15:30:00 GMT+0530`) : NaN
   if (fresh(oi, now, 30 * 60_000) && oi!.data!.unit === 'CONTRACTS' && finite(expiry) && expiry >= now && oi!.data!.symbol === (instrument === 'Bank Nifty' ? 'BANKNIFTY' : instrument === 'Nifty 50' ? 'NIFTY' : 'SENSEX')) {
@@ -129,9 +132,10 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
     const callChange = data.callOiChange, putChange = data.putOiChange
     add(oiLayer, .4, finite(callChange) && finite(putChange) ? (putChange - callChange) / (Math.abs(putChange) + Math.abs(callChange) || 1) : undefined, `Call OI ${format(data.callOi)} · Put OI ${format(data.putOi)} · change ${callChange == null ? '—' : format(callChange)} / ${putChange == null ? '—' : format(putChange)} contracts; writing is unverified`)
     oiLayer.details.push(`Call wall ${format(data.callWall)} · Put wall ${format(data.putWall)} · Max pain ${format(data.maxPain)}; reference levels, not price targets`)
-  } else { missing.push('Current, unexpired option-chain data'); sentimentMissing.push('Current PCR reference') }
+  } else { missing.push(commodity ? 'Commodity option-chain OI/PCR is not connected; its weight remains unavailable' : 'Current, unexpired option-chain data'); sentimentMissing.push('Current PCR reference') }
+  if (commodity) oiLayer.details.push('Commodity option-chain OI/PCR is not connected. Index positioning is not used for MCX futures.')
 
-  const flows = layer('flows', 'FII / DII'), institutional = market?.inputs?.institutional, positions = market?.inputs?.participantPositions
+  const flows = layer('flows', 'FII / DII'), institutional = commodity ? undefined : market?.inputs?.institutional, positions = commodity ? undefined : market?.inputs?.participantPositions
   if (fresh(institutional, now, 7 * 86_400_000) && institutional!.data!.unit === 'INR_CRORE') {
     const data = institutional!.data!, total = Math.abs(data.fiiCash) + Math.abs(data.diiCash) || 1
     add(flows, .5, data.netFlow / total, `Net cash flow ₹${format(data.netFlow)} cr · report ${data.asOf.slice(0, 10)}`)
@@ -142,7 +146,7 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
     const data = positions!.data!
     add(flows, .1, (data.longPercent - data.shortPercent) / 50, `FII index futures long / short ${format(data.longPercent)}% / ${format(data.shortPercent)}%`)
   } else sentimentMissing.push('FII index futures positions')
-  const observedFlowReports = observedFlows(flowHistory).filter(flow => {
+  const observedFlowReports = observedFlows(commodity ? [] : flowHistory).filter(flow => {
     const age = now - Date.parse(flow.asOf)
     return age >= 0 && age <= 14 * 86_400_000
   }).slice(-5)
@@ -156,10 +160,10 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
     add(newsLayer, 1 / Math.max(1, news.articles.length), headline.score === undefined ? undefined : headline.score / 2, `${headline.article.title}${headline.score === undefined ? ' · awaiting / unclear assessment' : ` · impact ${headline.score}`}`)
   }
   if (!news.assessed) sentimentMissing.push('Current, assessed news headlines')
-  const globalLayer = layer('global', 'Global'), global = globalMarketRows(market, now)
+  const globalLayer = layer('global', 'Global'), global = globalMarketRows(market, now, instrument)
   for (const [label, value] of global.rows) {
     const detail = global.details[label]
-    add(globalLayer, 1 / global.count, detail.vote, `${label}: ${value.replace(/\n/g, ' ')}; India context cue`)
+    add(globalLayer, 1 / global.count, detail.vote, `${label}: ${value.replace(/\n/g, ' ')}; ${commodity ? 'commodity reference' : 'India context cue'}`)
   }
   if (!global.votes.length) sentimentMissing.push('Current global market quotes')
 
@@ -167,14 +171,15 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
   const sessionIntact = Boolean(previous && chartTime - Date.parse(previous[0]) === candleIntervalMs(interval) && candleSession(previous[0]) === candleSession(new Date(now).toISOString()) && candleSession(previous[0]) === candleSession(analysis.latestCandleTime!))
   let requiredGap = tradingEvidenceRules.minimumGap
   let currentVix: TradingEvidence['indiaVix'], requiredScore = tradingEvidenceRules.minimumScore
-  if (fresh(indiaVix, now, 30 * 60_000) && indiaVix!.data!.symbol === '^INDIAVIX' && finite(indiaVix!.data!.price) && indiaVix!.data!.price > 0 && finite(indiaVix!.data!.changePercent)) {
+  if (!commodity && fresh(indiaVix, now, 30 * 60_000) && indiaVix!.data!.symbol === '^INDIAVIX' && finite(indiaVix!.data!.price) && indiaVix!.data!.price > 0 && finite(indiaVix!.data!.changePercent)) {
     const data = indiaVix!.data!
     currentVix = { price: data.price, changePercent: data.changePercent, asOf: data.asOf }
     const elevated = data.price >= tradingEvidenceRules.highVixLevel || data.changePercent >= tradingEvidenceRules.vixJumpPercent
     requiredGap = elevated ? tradingEvidenceRules.elevatedVixGap : requiredGap
     requiredScore = elevated ? tradingEvidenceRules.elevatedVixScore : requiredScore
     riskNotes.push(`India VIX ${format(data.price)} · ${format(data.changePercent)}% change; volatility context, not a directional vote${elevated ? ' · elevated-risk score threshold applies' : ''}`)
-  } else missing.push('Current India VIX quote (volatility risk unavailable)')
+  } else if (!commodity) missing.push('Current India VIX quote (volatility risk unavailable)')
+  if (commodity) riskNotes.push('MCX futures use their own ATR and traded-volume VWAP. India VIX, equity cash flows and India-oriented global cues are not commodity risk signals. Commodity-specific news and global benchmarks provide sentiment reference only.')
 
   const bullishScore = round(layers.reduce((sum, item) => sum + item.bullish, 0)), bearishScore = round(layers.reduce((sum, item) => sum + item.bearish, 0))
   const coverage = round(layers.reduce((sum, item) => sum + item.weight * item.coverage, 0))
@@ -204,7 +209,7 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
   let reason = `${side} completed chart setup and technical evidence align.`
   if (!chartCurrent) reason = 'Waiting for recent completed candles; historical or forming candles cannot confirm a trade.'
   else if (!sessionIntact) reason = 'Waiting for consecutive completed candles from the current market session.'
-  else if (!withinEntryWindow(now)) reason = 'Outside the Mon–Fri entry window (09:15–15:15 IST). Open trades are due for automatic square-off at 15:15.'
+  else if (!withinEntryWindow(now, instrument)) reason = `Outside the entry window (${marketHours(instrument, now)}). Open trades are due for automatic square-off at ${squareOffLabel(instrument, now)}.`
   else if (side === 'WAIT' || analysis.pattern === 'NO_CONFIRMED_PATTERN') reason = 'Waiting for a confirmed chart pattern at a valid structure / location.'
   else if (!atr) reason = 'Waiting for a valid ATR(14) risk estimate.'
   else if (!coreIndicators) reason = 'Waiting for EMA(20/50), RSI(14), momentum and Supertrend to warm up on at least 50 completed candles.'
@@ -222,7 +227,7 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
     { label: 'Reward/risk on confirmed setup', passed: finite(stopLoss) && stopLoss > 0 && finite(rewardRisk) && rewardRisk >= tradingEvidenceRules.minimumRewardRisk, detail: finite(rewardRisk) ? `${rewardRisk.toFixed(2)} : 1 after ATR stop adjustment / ${tradingEvidenceRules.minimumRewardRisk} : 1 required.` : 'A confirmed price setup and its validated entry, stop and target are required.' },
   ]
   const canConfirm = reason === `${side} completed chart setup and technical evidence align.`
-  const riskySetup = canConfirm ? undefined : findRiskyLevelSetup({ analysis, candles: closed, checks, bullishScore, bearishScore, interval, now })
+  const riskySetup = canConfirm ? undefined : findRiskyLevelSetup({ analysis, candles: closed, checks, bullishScore, bearishScore, interval, now, instrument })
   return { version: 'technical-v2', instrument, interval, asOf: analysis.latestCandleTime, bullishScore, bearishScore, coverage, bias, canConfirm, reason, checks, riskySetup, historicalOutcomes, layers, sentiment, turns: chartCurrent ? trajectory.turns : [],
     bullishEvidence: [...new Set(bullishEvidence)], bearishEvidence: [...new Set(bearishEvidence)], missing, riskNotes, atr14: atr, vwap, indiaVix: currentVix, requiredScore, requiredGap, quality: canConfirm ? dominant >= tradingEvidenceRules.strongScore && directionalLead >= tradingEvidenceRules.strongGap ? 'STRONG' : 'STANDARD' : undefined, stopLoss, observedFlowReports }
 }

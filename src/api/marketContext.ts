@@ -26,6 +26,7 @@ export type MarketInputs = {
   giftNifty: PublicSnapshot<GlobalQuote>
 }
 export type MarketContext = {
+  marketType?: 'INDEX' | 'COMMODITY'
   instrument: string
   revision: string
   retrievedAt: string

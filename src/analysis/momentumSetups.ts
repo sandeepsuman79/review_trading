@@ -6,6 +6,7 @@ import type { PriceActionInterval } from './priceAction'
 import { candleIntervalMs } from './candleData'
 import { candleSession } from './vwap'
 import { inTradingEntryWindow } from './tradingSession'
+import { isCommodity } from './commodities'
 
 export type MomentumCandidate = {
   side: 'CALL' | 'PUT'; pattern: 'TREND_MOMENTUM_BREAK' | 'EMA_PULLBACK_RECLAIM' | 'OPENING_RANGE_BREAKOUT' | 'LEVEL_BREAK_REVERSAL' | 'THREE_CANDLE_REVERSAL'
@@ -14,13 +15,13 @@ export type MomentumCandidate = {
 }
 
 /** New opportunities require a completed price event and at least one directional route. */
-export function findMomentumSetups(candles: AngelOneCandle[], averages: MovingAveragePoint[], indicators: TechnicalIndicatorPoint[], interval: PriceActionInterval, support?: number, resistance?: number, suppliedAlignment?: DirectionalAlignment): MomentumCandidate[] {
+export function findMomentumSetups(candles: AngelOneCandle[], averages: MovingAveragePoint[], indicators: TechnicalIndicatorPoint[], interval: PriceActionInterval, support?: number, resistance?: number, suppliedAlignment?: DirectionalAlignment, instrument?: string): MomentumCandidate[] {
   const end = candles.length - 1, latest = candles[end], previous = candles[end - 1]
   const current = indicators[end], avg = averages[end], oldAvg = averages[end - 1]
   if (!latest || !previous || !current || !avg || !oldAvg || candles.length < 50) return []
   const atr = current.atr14, adx = current.adx14, rsi = current.rsi14
   if (!atr || adx === undefined || rsi === undefined || current.plusDi14 === undefined || current.minusDi14 === undefined || avg.ema20 === undefined || avg.ema50 === undefined || oldAvg.ema20 === undefined) return []
-  if (!inTradingEntryWindow(Date.parse(latest[0]) + candleIntervalMs(interval))) return []
+  if (!inTradingEntryWindow(Date.parse(latest[0]) + candleIntervalMs(interval), instrument)) return []
   const session = candleSession(latest[0]), recent = candles.slice(-7)
   if (recent.some((bar, i) => candleSession(bar[0]) !== session || i > 0 && Date.parse(bar[0]) - Date.parse(recent[i - 1][0]) !== candleIntervalMs(interval))) return []
   const candleRange = latest[2] - latest[3], body = Math.abs(latest[4] - latest[1])
@@ -30,12 +31,13 @@ export function findMomentumSetups(candles: AngelOneCandle[], averages: MovingAv
   const alignment = suppliedAlignment ?? analyzeDirectionalAlignment(candles, averages, indicators, interval, { support, resistance })
   if (Date.parse(alignment.at ?? '') !== Date.parse(latest[0])) return []
   const sameSession = candles.filter(bar => candleSession(bar[0]) === session)
+  const openMinute = isCommodity(instrument) ? 540 : 555
   const opening = sameSession.filter(bar => {
     const time = new Date(Date.parse(bar[0]) + 330 * 60_000), minute = time.getUTCHours() * 60 + time.getUTCMinutes()
-    return minute >= 555 && minute < 570
+    return minute >= openMinute && minute < openMinute + 15
   })
   const openingReady = interval !== 'ONE_HOUR' && opening.length === 900_000 / candleIntervalMs(interval)
-    && new Date(Date.parse(opening[0][0]) + 330 * 60_000).toISOString().slice(11, 16) === '09:15'
+    && new Date(Date.parse(opening[0][0]) + 330 * 60_000).toISOString().slice(11, 16) === (isCommodity(instrument) ? '09:00' : '09:15')
     && opening.every((bar, i) => Date.parse(bar[0]) === Date.parse(opening[0][0]) + i * candleIntervalMs(interval))
     && Date.parse(latest[0]) >= Date.parse(opening[0][0]) + 900_000
   for (const d of [1, -1] as const) {

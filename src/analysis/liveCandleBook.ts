@@ -2,6 +2,7 @@ import type { AngelOneCandle, AngelOneStreamTick } from '../api/angelOne'
 import type { PriceActionInterval } from './priceAction'
 import { applyLiveTick, candleBucketTime, normalizeCandles, tickTimestamp } from './candleData'
 import { candleIntervals } from './timeframes'
+import { candleSession } from './vwap'
 
 const intervals = candleIntervals
 type Snapshot = { token: string; interval: PriceActionInterval; candles: AngelOneCandle[] }
@@ -13,7 +14,7 @@ export class LiveCandleBook {
   private observedAt = new Map<string, Map<number, number>>()
   private dirty = new Set<string>()
 
-  constructor(private load: (token: string, interval: PriceActionInterval) => AngelOneCandle[]) {}
+  constructor(private load: (token: string, interval: PriceActionInterval) => AngelOneCandle[], private sessionOpenMinute: (token: string) => number = () => 555, private liveVolume: (tick: AngelOneStreamTick) => boolean = () => false) {}
 
   get(token: string, interval: PriceActionInterval) {
     const key = `${token}:${interval}`
@@ -30,9 +31,14 @@ export class LiveCandleBook {
     for (const interval of intervals) {
       const key = `${tick.token}:${interval}`
       const candles = this.get(tick.token, interval)
-      const updated = applyLiveTick(candles, tick, interval)
+      const openMinute = this.sessionOpenMinute(tick.token), bucket = candleBucketTime(time, interval, openMinute)
+      // Count only observed within-bar deltas; the first quote/reconnect cannot invent earlier volume.
+      const volumeDelta = this.liveVolume(tick) && previous && Number.isFinite(tick.volume) && Number.isFinite(previous.volume) && tick.volume! >= previous.volume!
+        && time - tickTimestamp(previous) <= 30_000 && candleSession(new Date(time).toISOString()) === candleSession(new Date(tickTimestamp(previous)).toISOString())
+        && bucket === candleBucketTime(tickTimestamp(previous), interval, openMinute) ? tick.volume! - previous.volume! : 0
+      const updated = applyLiveTick(candles, tick, interval, openMinute, volumeDelta)
       const times = this.observedAt.get(key) || new Map<number, number>()
-      times.set(candleBucketTime(time, interval), time)
+      times.set(bucket, time)
       this.observedAt.set(key, times)
       if (updated === candles) continue
       this.snapshots.set(key, { token: tick.token, interval, candles: updated })
@@ -48,7 +54,7 @@ export class LiveCandleBook {
     for (const candle of normalizeCandles(incoming)) {
       const time = Date.parse(candle[0])
       const observed = byTime.get(time)
-      const receivedAt = this.observedAt.get(key)?.get(candleBucketTime(time, interval))
+      const receivedAt = this.observedAt.get(key)?.get(candleBucketTime(time, interval, this.sessionOpenMinute(token)))
       // A response requested before these ticks cannot replace their high, low or latest close.
       byTime.set(time, observed && receivedAt !== undefined && receivedAt >= requestedAt
         ? [candle[0], candle[1], Math.max(candle[2], observed[2]), Math.min(candle[3], observed[3]), observed[4], candle[5]]

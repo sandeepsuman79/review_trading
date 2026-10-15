@@ -58,6 +58,73 @@ same recovery as profile/premium requests; failed recovery stops the remaining p
 Successful empty responses preserve cached candles instead of reporting a
 rejected request. A cold empty response is reported as missing data.
 
+## Commodity charts in the existing instrument dropdown
+
+Natural Gas, Crude Oil, Silver and Gold use standard MCX `FUTCOM` contracts from
+Angel One's instrument master. `/api/instruments?scope=commodities` retains only
+those four roots; options and mini/micro variants are excluded. The browser selects
+the nearest unexpired future and shows its symbol, expiry and broker lot size.
+Contract selection rolls over after its expiry session, and candle caches remain
+separate by token so different expiries are never stitched together. Missing
+contracts appear unavailable rather than using fabricated tokens or index prices.
+
+The existing socket subscribes to MCX exchange type 5 in quote mode alongside the
+index LTP subscriptions. MCX REST quotes use `exchange: MCX`; their receipt time is
+labelled and cannot create a fabricated live candle. Every actual exchange tick
+updates the candle book before rendering is throttled. Historical requests use
+MCX and the resolved contract token, share the serial queue/auth recovery, and
+backfill from 09:00 IST. Commodity selection prioritizes its 1-minute agent history, then its displayed timeframe.
+All four supported timeframes are saved locally and switching reads that cache.
+
+MCX hourly buckets align to 09:00 IST; index hourly buckets retain 09:15. The
+regular metals/energy schedule is Mon–Fri 09:00–23:30 IST during US daylight saving,
+or 09:00–23:55 otherwise, following [MCX's published trading hours](https://www.mcxindia.com/market-operations/trading-surveillance).
+The header labels regular hours and explicitly allows exchange holidays/special
+sessions; it does not claim that a weekday clock alone verifies an open exchange.
+Fresh broker data continues to be consumed in the evening. The index agent's
+15:15 strategy cutoff is not applied to commodity data.
+
+All seven instruments use the same Trading Prediction Agent, evidence disclosures,
+CALL/PUT diagnostics (displayed as LONG/SHORT for MCX), horizontal analysis cards,
+optional Gemini second opinion, and confirmed-trades ledger. Commodities use the
+same completed 1-minute setup/trajectory analysis, 55/15 score thresholds, ≥70%
+coverage, ATR stops and ≥1.5:1 reward/risk as indices. Missing commodity option-chain
+OI/PCR keeps its 15% technical budget unavailable. Equity India VIX, index OI/PCR,
+FII/DII cash flows and equity participant positions do not vote on commodity trades.
+The corresponding cards explicitly retain unavailable data, without reweighting it.
+
+Commodity LONG/SHORT plans store the exact futures token, symbol, expiry, and tick
+size. Planned prices snap conservatively to that tick grid and reward/risk is checked
+again. Entry requires a matching fresh quote and unexpired contract. Only one open
+position per commodity is permitted; an opposite confirmed setup settles it before
+another entry. An open old-expiry contract remains subscribed and stored separately
+through rollover. It never receives the new expiry's prices or reversal signals.
+MCX positions use their own 23:30/23:55 regular session cutoff and require an actual
+observed exit quote; missing observations remain unverified. This is browser-local
+trade tracking, not a broker order or a rupee P/L calculation. A closed browser cannot
+execute square-off orders. Exchange holidays/special sessions are not calendar-backed;
+fresh quotes and completed bars remain required. Index 15:00 gap outlook stays index-only.
+
+Genuine historical traded volume supports VWAP. Live volume counts only observed
+cumulative-volume deltas inside the same candle, excluding first quotes, reconnect
+gaps, counter resets and unknown cross-boundary volume; it is labelled partial until
+history sync. Commodity charts show support/resistance and trade levels, with India
+VIX and the index CE/PE strike ladder excluded.
+
+Commodity news searches target each underlying's supply/demand and India/MCX
+headlines. The Global card uses the corresponding US futures benchmark plus USD/INR;
+their direct moves provide indicative context rather than inverse Indian-equity cues.
+US Dollar Index and US yields are displayed as references without directional votes.
+Foreign futures are delayed references with different prices, units and expiries, never
+substitutes for MCX quotes. Headline assessment caches are isolated by commodity, so
+an oil supply shock is not assigned an Indian-equity sentiment rating. News/global
+sentiment and optional Gemini never confirm, delay, veto or reverse technical trades.
+
+`npm run test:commodities` covers contract selection/expiry rollover, exchange routing,
+DST hours, candle/volume handling, all four commodities' symmetric 1-minute trade
+confirmation, contract-bound entries/reversals, observed square-off, dashboard
+references and scoped news/caching. Existing index suites remain applicable.
+
 The historical proxy also serializes requests across clients on one server
 instance, uses a 20-second upstream timeout, coalesces duplicates, and holds a
 bounded 30-second memory cache keyed by hashed session and the exact request

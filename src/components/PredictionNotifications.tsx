@@ -1,3 +1,4 @@
+import { tradeDirection } from '../analysis/commodities'
 import { useEffect } from 'react'
 import type { PredictionEvent } from '../analysis/predictionEvents'
 
@@ -7,7 +8,7 @@ function EventToast({ event, onDismiss }: { event: PredictionEvent; onDismiss: (
     return () => window.clearTimeout(timer)
   }, [event.id, onDismiss])
   return <div className="prediction-event-toast" role="status">
-    <div><strong>{event.instrument} · {event.side} · {event.reason}</strong><p>{event.detail}</p></div>
+    <div><strong>{event.instrument} · {tradeDirection(event.instrument, event.side)} · {event.reason}</strong><p>{event.detail}</p></div>
     <button type="button" aria-label={`Dismiss ${event.instrument} ${event.reason} notification`} onClick={() => onDismiss(event.id)}>×</button>
   </div>
 }

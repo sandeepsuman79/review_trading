@@ -1,3 +1,4 @@
+import { isCommodity } from '../analysis/commodities'
 import type { CSSProperties, ReactNode } from 'react'
 import type { AngelOneCandle } from '../api/angelOne'
 import type { InstitutionalFlow, MarketContext, MarketOutlook } from '../api/marketContext'
@@ -44,7 +45,8 @@ function FlowTrend({ history }: { history: InstitutionalFlow[] }) {
   )
 }
 
-export default function MarketContextPanel({ context, loading, refresh, outlook, chartCurrent, analysis, candles, openingCandles, now, children }: {
+export default function MarketContextPanel({ context, loading, refresh, outlook, chartCurrent, analysis, candles, openingCandles, now, children, instrument = context?.instrument }: {
+  instrument?: string
   context: MarketContext | null
   loading: boolean
   refresh: () => void
@@ -56,8 +58,9 @@ export default function MarketContextPanel({ context, loading, refresh, outlook,
   now: number
   children?: ReactNode
 }) {
+  const commodity = isCommodity(instrument)
   const { history: flowHistory, storageError: flowStorageError } = useInstitutionalFlows(context?.inputs?.institutional)
-  const dashboard = buildMarketDashboard({ analysis, candles, openingCandles, context, outlook, chartCurrent, now })
+  const dashboard = buildMarketDashboard({ analysis, candles, openingCandles, context, outlook, chartCurrent, now, instrument })
   const evidence = new Set(dashboard.currentOutlook?.evidenceIds || [])
 
   return (
@@ -67,13 +70,13 @@ export default function MarketContextPanel({ context, loading, refresh, outlook,
       {!chartCurrent && <p className="market-context-note">Historical chart snapshot: waiting for recent completed candles.</p>}
       <p className="market-context-note">Swipe or scroll horizontally to view all cards.</p>
       <div className="agent-analysis-grid" tabIndex={0} role="region" aria-label="Scroll agent analysis cards horizontally">{children}{dashboard.tiles.map(tile => tile.key === 'news' ? <MarketNews key={tile.key} context={context} outlook={outlook} now={now} loading={loading} embedded weight={tile.weight} /> : <AnalysisCard key={tile.key} tile={tile}>
-        {tile.key === 'flows' && <><FlowTrend history={flowHistory} />{flowStorageError && <p className="market-context-note">Daily flow history could not be saved in this browser.</p>}{context?.inputs?.participantPositions.data && <p className="market-context-note"><a href={context.inputs.participantPositions.sourceUrl} target="_blank" rel="noopener noreferrer">Index futures positions ↗</a> · {reportDate(context.inputs.participantPositions.data.asOf)}</p>}</>}
-        {tile.key === 'global' && <details className="agent-global-sources"><summary>Quote timestamps & sources</summary>{context?.inputs?.giftNifty && <p><a href={context.inputs.giftNifty.sourceUrl} target="_blank" rel="noopener noreferrer">GIFT Nifty futures ↗</a> · {context.inputs.giftNifty.status.toLowerCase()} · {time(context.inputs.giftNifty.data?.asOf)}{context.inputs.giftNifty.data?.expiry ? ` · Expiry ${context.inputs.giftNifty.data.expiry}` : ''}</p>}{context?.inputs?.global.map(quote => <p key={quote.name}><a href={quote.sourceUrl} target="_blank" rel="noopener noreferrer">{quote.name} ↗</a> · {quote.status.toLowerCase()} · {time(quote.data?.asOf)}</p>)}</details>}
+        {tile.key === 'flows' && !commodity && <><FlowTrend history={flowHistory} />{flowStorageError && <p className="market-context-note">Daily flow history could not be saved in this browser.</p>}{context?.inputs?.participantPositions.data && <p className="market-context-note"><a href={context.inputs.participantPositions.sourceUrl} target="_blank" rel="noopener noreferrer">Index futures positions ↗</a> · {reportDate(context.inputs.participantPositions.data.asOf)}</p>}</>}
+        {tile.key === 'global' && <details className="agent-global-sources"><summary>Quote timestamps & sources</summary>{!commodity && context?.inputs?.giftNifty && <p><a href={context.inputs.giftNifty.sourceUrl} target="_blank" rel="noopener noreferrer">GIFT Nifty futures ↗</a> · {context.inputs.giftNifty.status.toLowerCase()} · {time(context.inputs.giftNifty.data?.asOf)}{context.inputs.giftNifty.data?.expiry ? ` · Expiry ${context.inputs.giftNifty.data.expiry}` : ''}</p>}{context?.inputs?.global.map(quote => <p key={quote.name}><a href={quote.sourceUrl} target="_blank" rel="noopener noreferrer">{quote.name} ↗</a> · {quote.status.toLowerCase()} · {time(quote.data?.asOf)}</p>)}</details>}
       </AnalysisCard>)}</div>
       <p className="market-context-note">Weights: Chart 22% · Indicators 22% · OI 18% · FII/DII 13% · News 12% · Global 13%. Scores are evidence ratings, not probabilities. Missing inputs remain unavailable. The trade agent retains its completed-candle confirmation and automatic-exit rules.</p>
       {context && <details className="agent-analysis-sources"><summary>Headlines & company sources</summary><div className="market-context-feeds">
         {context.feeds.map(feed => <details key={feed.category} className="market-context-feed"><summary>{feed.name} <span>{feed.status === 'AVAILABLE' ? `${feed.items.length} headlines` : feed.status.toLowerCase()}</span></summary><p className="market-context-note">Feed checked {time(feed.fetchedAt)}{feed.message ? ` · ${feed.message}` : ''}</p>{feed.items.length ? <ul>{feed.items.map(article => <li key={article.id} className={evidence.has(article.id) ? 'market-context-cited' : undefined}><a href={article.url} target="_blank" rel="noopener noreferrer">{article.title}</a><div className="market-context-note">{article.publisher} · {time(article.publishedAt)}{article.matchedCompanies.length ? ` · ${article.matchedCompanies.join(', ')}` : ''}{evidence.has(article.id) ? ' · Cited by outlook' : ''}</div></li>)}</ul> : <p className="market-context-note">{feed.status === 'AVAILABLE' ? 'No matching headlines in the last 48 hours.' : 'Current evidence unavailable.'}</p>}</details>)}
-      </div><details className="market-context-companies"><summary>{context.instrument} companies · {context.constituents.companies.length} loaded · {context.constituents.status.toLowerCase()}</summary><p className="market-context-note"><a href={context.constituents.sourceUrl} target="_blank" rel="noopener noreferrer">{context.constituents.publisher}</a> · {time(context.constituents.fetchedAt)} · Current company weights and price breadth unavailable</p><div className="market-context-company-list">{context.constituents.companies.map(company => <span key={company.symbol}>{company.name}</span>)}</div></details><details className="market-context-companies"><summary>Global company watchlist</summary><p className="market-context-note">Potential sector exposure to investigate.</p><div className="market-context-company-list">{context.globalWatchlist.map(company => <span key={company.name}>{company.name} · {company.channel}</span>)}</div></details></details>}
+      </div>{!commodity && <><details className="market-context-companies"><summary>{context.instrument} companies · {context.constituents.companies.length} loaded · {context.constituents.status.toLowerCase()}</summary><p className="market-context-note"><a href={context.constituents.sourceUrl} target="_blank" rel="noopener noreferrer">{context.constituents.publisher}</a> · {time(context.constituents.fetchedAt)} · Current company weights and price breadth unavailable</p><div className="market-context-company-list">{context.constituents.companies.map(company => <span key={company.symbol}>{company.name}</span>)}</div></details><details className="market-context-companies"><summary>Global company watchlist</summary><p className="market-context-note">Potential sector exposure to investigate.</p><div className="market-context-company-list">{context.globalWatchlist.map(company => <span key={company.name}>{company.name} · {company.channel}</span>)}</div></details></>}</details>}
     </div>
   )
 }

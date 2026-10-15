@@ -4,6 +4,7 @@ const ttl = 5 * 60_000
 const nse = 'https://www.nseindia.com'
 const flowUrl = `${nse}/api/fiidiiTradeReact`
 const symbols = { 'Nifty 50': 'NIFTY', 'Bank Nifty': 'BANKNIFTY' }
+const commodityMarkets = JSON.parse(readFileSync(new URL('../src/data/commodityMarkets.json', import.meta.url), 'utf8'))
 const globalSpecs = JSON.parse(readFileSync(new URL('../src/data/globalMarkets.json', import.meta.url), 'utf8')).filter(spec => spec.provider === 'yahoo')
 
 function number(value) {
@@ -169,11 +170,18 @@ export function createMarketInputsService({ fetchFn = fetch, now = Date.now } = 
     ])
     return { openInterest: oi, institutional: flows.flows, participantPositions: flows.positions, global, giftNifty }
   }
+  async function getCommodityInputs(instrument) {
+    const config = commodityMarkets[instrument]
+    if (!config) throw new Error('Unsupported commodity.')
+    const unavailable = message => ({ status: 'UNAVAILABLE', fetchedAt: null, sourceUrl: 'https://www.mcxindia.com/', data: null, message })
+    const global = await Promise.all(config.benchmarks.map(async spec => ({ name: spec.name, ...await source(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(spec.symbol)}?interval=1d&range=5d`, `https://finance.yahoo.com/quote/${encodeURIComponent(spec.symbol)}/`, raw => parseGlobalQuote(raw, spec.symbol, now())) })))
+    return { openInterest: unavailable('Commodity option-chain OI/PCR is not connected. Index OI is excluded.'), institutional: unavailable('Equity FII/DII cash flows are not applicable to this MCX contract.'), participantPositions: unavailable('Equity index futures positions are not applicable.'), giftNifty: unavailable('GIFT Nifty is not a commodity reference.'), global }
+  }
   async function getIndiaVix() {
     const primary = await source(`${nse}/api/allIndices`, 'https://www.nseindia.com/static/products-services/indices-indiavix-index', raw => parseIndiaVix(raw, now()))
     if (primary.status === 'AVAILABLE') return primary
     const fallback = await source('https://query1.finance.yahoo.com/v8/finance/chart/%5EINDIAVIX?interval=1d&range=5d', 'https://finance.yahoo.com/quote/%5EINDIAVIX/', raw => parseGlobalQuote(raw, '^INDIAVIX', now()))
     return fallback.status === 'AVAILABLE' ? fallback : primary.data ? primary : fallback
   }
-  return { getInputs, getIndiaVix }
+  return { getInputs, getCommodityInputs, getIndiaVix }
 }

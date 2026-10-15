@@ -2,10 +2,13 @@ import type { PriceActionAnalysis, PriceActionInterval } from './priceAction'
 import { candleIntervalMs } from './candleData'
 import type { MarketArticle, MarketContext, MarketOutlook } from '../api/marketContext'
 import type { TradingEvidence } from './tradingEvidence'
+import { isCommodity, validCommodityContract, type CommodityContract } from './commodities'
+import { squareOffTime, inTradingEntryWindow, marketHours } from './tradingSession'
 
 export type PredictionPlan = {
   id: string
   instrument: string
+  contract?: CommodityContract
   interval: PriceActionInterval
   side: 'CALL' | 'PUT'
   stage: 'EARLY' | 'CONFIRMED' | 'RISKY'
@@ -35,9 +38,12 @@ export type EarlyPrediction = { side: 'WAIT'; reason: string } | { side: 'CALL' 
 const round = (price: number) => Math.round(price * 100) / 100
 
 /** Technical evidence confirms a setup. News is recorded as reference and never vetoes entry. */
-export function buildEarlyPrediction(analysis: PriceActionAnalysis, instrument: string, interval: PriceActionInterval, now: number, context?: MarketContext | null, outlook?: MarketOutlook, evidence?: TradingEvidence): EarlyPrediction {
+export function buildEarlyPrediction(analysis: PriceActionAnalysis, instrument: string, interval: PriceActionInterval, now: number, context?: MarketContext | null, outlook?: MarketOutlook, evidence?: TradingEvidence, contract?: CommodityContract): EarlyPrediction {
   analysis = evidence?.selectedAnalysis ?? analysis
   const wait = (reason: string): EarlyPrediction => ({ side: 'WAIT', reason })
+  if (isCommodity(instrument) && !evidence) return wait('Commodity entries require the current full technical assessment.')
+  if (isCommodity(instrument) && (!validCommodityContract(contract, instrument) || contract.expiresAt <= now)) return wait('Waiting for a matching, unexpired MCX futures contract before issuing a trade setup.')
+  if (isCommodity(instrument) && !inTradingEntryWindow(now, instrument)) return wait(`Outside the MCX entry window (${marketHours(instrument, now)}).`)
   const candleTime = Date.parse(analysis.latestCandleTime || '')
   if (analysis.analyzedCandles < 25 || !Number.isFinite(candleTime)) return wait('At least 25 completed candles are required.')
   if (now < candleTime + candleIntervalMs(interval) || now - candleTime > 2 * candleIntervalMs(interval)) return wait('Waiting for recent completed candles; historical charts do not create new calls.')
@@ -75,16 +81,19 @@ export function buildEarlyPrediction(analysis: PriceActionAnalysis, instrument: 
     targetBasis = '2R projection from chart invalidation (not an observed level)'
   }
   if (target === undefined || !Number.isFinite(target) || target <= 0) return wait('No valid target is available.')
-  const roundedEntry = round(entry), roundedStop = round(stopLoss), roundedTarget = round(target)
+  const tick = contract?.tickSize
+  const snap = (value: number, up: boolean) => tick ? round((up ? Math.ceil(value / tick - 1e-8) : Math.floor(value / tick + 1e-8)) * tick) : round(value)
+  const roundedEntry = snap(entry, direction === 1), roundedStop = snap(stopLoss, direction === -1), roundedTarget = snap(target, direction === -1)
   const riskReward = ((roundedTarget - roundedEntry) * direction) / ((roundedEntry - roundedStop) * direction)
   if (!Number.isFinite(riskReward) || riskReward < 1.5) return wait('The chart target offers less than 1.5:1 reward to risk. Waiting for a better setup.')
   const reason = risky ? `Risky conditional ${side} setup: ${risky.passedChecks}/7 checks passed; ${risky.levelType.toLowerCase()} ${risky.level.toFixed(2)} with ${risky.alignedIndicators.join(' or ')}. Missing: ${risky.unmetChecks.join(', ')}. A trigger touch alone is not full confirmation.` : `${confirmed ? 'Confirmed chart setup' : 'Early conditional breakout'}; ${evidence ? `technical evidence ${side === 'CALL' ? evidence.bullishScore : evidence.bearishScore}/100 with ${evidence.coverage}% coverage` : 'technical confirmation; sentiment is reference only'}. Entry must be reached before the call becomes active.`
   return { side, reason, plan: {
-    id: `${evidence?.version ?? 'early-v1'}:${risky ? 'risky:' : ''}${instrument}:${interval}:${analysis.latestCandleTime}:${side}`,
+    id: `${evidence?.version ?? 'early-v1'}:${risky ? 'risky:' : ''}${instrument}:${contract ? `${contract.token}:` : ''}${interval}:${analysis.latestCandleTime}:${side}`,
+    ...(contract ? { contract: { ...contract } } : {}),
     ...(confirmed && evidence?.quality ? { confirmationQuality: evidence.quality } : {}),
     strategyVersion: evidence?.version ?? 'early-v1', instrument, interval, side, stage: risky ? 'RISKY' : confirmed ? 'CONFIRMED' : 'EARLY', signalCandleTime: analysis.latestCandleTime!,
     ...(risky ? { risk: { level: risky.level, levelType: risky.levelType, passedChecks: risky.passedChecks, unmetChecks: risky.unmetChecks, alignedIndicators: risky.alignedIndicators, opposedIndicators: risky.opposedIndicators } } : {}),
-    generatedAt: now, expiresAt: now + 3 * candleIntervalMs(interval), entry: roundedEntry, stopLoss: roundedStop, target: roundedTarget, riskReward: round(riskReward), targetBasis, reason,
+    generatedAt: now, expiresAt: contract ? Math.min(now + 3 * candleIntervalMs(interval), contract.expiresAt, squareOffTime(now, instrument)) : now + 3 * candleIntervalMs(interval), entry: roundedEntry, stopLoss: roundedStop, target: roundedTarget, riskReward: round(riskReward), targetBasis, reason,
     contextMode: !evidence && newsAligned ? 'NEWS_ALIGNED' : 'TECHNICAL_ONLY', bullishScore: evidence?.bullishScore ?? analysis.bullishScore, bearishScore: evidence?.bearishScore ?? analysis.bearishScore,
     technicalEvidence: [...(evidence ? side === 'CALL' ? evidence.bullishEvidence : evidence.bearishEvidence : side === 'CALL' ? analysis.bullishEvidence : analysis.bearishEvidence)],
     ...(evidence ? { evidenceSummary: { version: evidence.version, coverage: evidence.coverage, atr14: evidence.atr14, indiaVix: evidence.indiaVix?.price, layers: evidence.layers.map(({ name, weight, coverage, bullish, bearish }) => ({ name, weight, coverage, bullish, bearish })), sentiment: { bullishScore: evidence.sentiment.bullishScore, bearishScore: evidence.sentiment.bearishScore, coverage: evidence.sentiment.coverage, bias: evidence.sentiment.bias, alignment: evidence.sentiment.alignment, reason: evidence.sentiment.reason } } } : {}),
