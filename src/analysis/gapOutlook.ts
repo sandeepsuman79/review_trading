@@ -2,6 +2,7 @@ import type { AngelOneCandle } from '../api/angelOne'
 import type { PriceActionAnalysis } from './priceAction'
 import type { TradingEvidence } from './tradingEvidence'
 import { gapOutlookMinute, tradingSession } from './tradingSession'
+import { agentInterval, timeframeInfo } from './timeframes'
 
 export type GapOutlook = {
   version: 1; instrument: string; session: string; generatedAt: number; asOf: string
@@ -16,13 +17,14 @@ const instruments = ['Nifty 50', 'Sensex', 'Bank Nifty']
 /** One pre-close heuristic snapshot; never a confirmed trade or an overnight probability. */
 export function buildGapOutlook(instrument: string, candles: AngelOneCandle[], analysis: PriceActionAnalysis, evidence: TradingEvidence, now: number): GapOutlook | undefined {
   const session = tradingSession(now), cutoff = session.start + gapOutlookMinute * 60_000
+  const duration = timeframeInfo[agentInterval].milliseconds
   // Only the live 15:00 minute may create a snapshot. Later data cannot rewrite history.
-  if (!session.weekday || now < cutoff || now >= cutoff + 60_000 || !instruments.includes(instrument) || evidence.instrument !== instrument || evidence.interval !== 'ONE_MINUTE' || evidence.coverage < 70 || candles.length < 50) return undefined
+  if (!session.weekday || now < cutoff || now >= cutoff + 60_000 || !instruments.includes(instrument) || evidence.instrument !== instrument || evidence.interval !== agentInterval || evidence.coverage < 70 || candles.length < 50) return undefined
   if (![evidence.bullishScore, evidence.bearishScore, evidence.coverage, evidence.sentiment.bullishScore, evidence.sentiment.bearishScore, evidence.sentiment.coverage].every(value => Number.isFinite(value) && value >= 0 && value <= 100)) return undefined
-  const latest = candles[candles.length - 1], tail = candles.slice(-30)
-  if (!latest || Date.parse(latest[0]) !== cutoff - 60_000 || Date.parse(analysis.latestCandleTime ?? '') !== cutoff - 60_000 || Date.parse(evidence.asOf ?? '') !== cutoff - 60_000
+  const latest = candles[candles.length - 1], tail = candles.slice(-30 * 60_000 / duration)
+  if (!latest || Date.parse(latest[0]) !== cutoff - duration || Date.parse(analysis.latestCandleTime ?? '') !== cutoff - duration || Date.parse(evidence.asOf ?? '') !== cutoff - duration
     || !evidence.checks?.some(check => check.label === 'Indicator warmup' && check.passed)
-    || !tail.every((bar, i) => tradingSession(Date.parse(bar[0])).date === session.date && (i === 0 || Date.parse(bar[0]) - Date.parse(tail[i - 1][0]) === 60_000))) return undefined
+    || !tail.every((bar, i) => tradingSession(Date.parse(bar[0])).date === session.date && (i === 0 || Date.parse(bar[0]) - Date.parse(tail[i - 1][0]) === duration))) return undefined
   const technicalLead = evidence.bullishScore - evidence.bearishScore
   const sentiment = evidence.sentiment
   const sentimentLead = sentiment.bias === 'UNAVAILABLE' ? undefined : sentiment.bullishScore - sentiment.bearishScore
@@ -54,6 +56,7 @@ export function readGapOutlook(storage: Pick<Storage, 'getItem'>, instrument: st
     || data.sentimentLead !== undefined && (!Number.isFinite(data.sentimentLead) || Math.abs(data.sentimentLead) > 100) || !Number.isFinite(Date.parse(data.asOf))
     || !Array.isArray(data.reasons) || !data.reasons.every(item => typeof item === 'string') || !Array.isArray(data.missing) || !data.missing.every(item => typeof item === 'string')) throw new Error('Saved gap outlook is invalid. Existing data was preserved.')
   const session = tradingSession(data.generatedAt), cutoff = session.start + gapOutlookMinute * 60_000
-  if (!session.weekday || session.date !== data.session || data.generatedAt < cutoff || data.generatedAt >= cutoff + 60_000 || Date.parse(data.asOf) !== cutoff - 60_000) throw new Error('Saved gap outlook timestamp is invalid. Existing data was preserved.')
+  // Existing one-minute snapshots remain readable; new outlooks use the agent timeframe.
+  if (!session.weekday || session.date !== data.session || data.generatedAt < cutoff || data.generatedAt >= cutoff + 60_000 || ![timeframeInfo[agentInterval].milliseconds, 60_000].some(duration => Date.parse(data.asOf) === cutoff - duration)) throw new Error('Saved gap outlook timestamp is invalid. Existing data was preserved.')
   return data
 }

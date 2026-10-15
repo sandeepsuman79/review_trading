@@ -6,13 +6,13 @@ delays, vetoes, reverses or closes a trade. Both scores are reproducible evidenc
 ratings, not calibrated probabilities. Profitability has not been established by
 an out-of-sample backtest. The tracker records index points and does not submit orders.
 
-The agent always analyses completed **1-minute candles** for every index, independent
-of the displayed chart's 1/5/15-minute or hourly timeframe. Each newly closed minute
+The agent always analyses completed **5-minute candles** for every index and commodity, independent
+of the displayed chart's 5/15-minute or hourly timeframe. Each newly closed 5-minute candle
 updates candle patterns, EMA/SMA, RSI, ATR, ADX, Supertrend and genuine VWAP where
 volume exists. Latest available OI/PCR, India VIX, flows, news and global observations
 retain their existing source freshness checks; changing cadence does not manufacture
-new external data or require a Gemini request every minute. Forming candles are
-excluded, and the card identifies its analysis as 1-minute. Chart timeframe changes
+new external data or require a Gemini request per candle. Forming candles are
+excluded, and the card identifies its analysis as 5-minute. Chart timeframe changes
 neither restart the agent nor change its analysis timeframe.
 
 A new red candle alone does not confirm a PUT. Both directions still require a
@@ -93,13 +93,13 @@ One active trade is allowed per index. Recorded risk levels remain fixed, with
 continued target, stop and completed-chart reversal monitoring. Profit/loss is
 booked before another trade can enter for that index.
 
-Position management also consumes the current fully confirmed 1-minute opposite
+Position management also consumes the current fully confirmed 5-minute opposite
 plan, including for positions opened on older chart timeframes. Reversal exits
 require a full post-entry candle and a fresh live quote after its close. Developing,
 stale, missing or wrong-index plans cannot exit a position. Observed stops/targets
 take precedence; booked P/L and the existing one-active-trade guard precede any
 replacement entry. Older records retain their original timeframe for persistence
-and gap replay; they are not relabelled as new one-minute entries.
+and gap replay; they are not relabelled as new five-minute entries.
 
 The user's strategy automatically squares off at **15:15 IST** for all three
 indices and expires unentered candidates. This is an application cutoff, separate
@@ -177,7 +177,7 @@ New setup stops cover both chart invalidation and at least one ATR from the outs
 An observed support/resistance target remains a cap. When no observed target exists,
 a projected 2R target is labelled explicitly. Candidate ranking prefers setups
 that satisfy the final ATR reward/risk check. Rejected chart candidates remain
-visible in diagnostics. The live dashboard uses the fully confirmed one-minute
+visible in diagnostics. The live dashboard uses the fully confirmed five-minute
 opposite plan for reversal exits, independently of the displayed timeframe.
 
 The agent displays seven confirmation checks and separately reports a disconnected

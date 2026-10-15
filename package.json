@@ -10,7 +10,7 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "test:options": "node --test tests/optionPremiums.test.js tests/indexPriceScale.test.cjs tests/optionSession.test.cjs",
-    "test:agent": "node --test tests/tradeDecision.test.cjs tests/directionalAlignment.test.cjs tests/momentumAgent.test.cjs tests/historicalOutcomes.test.cjs tests/riskyLevelSetup.test.cjs tests/oneMinuteAgent.test.cjs tests/tradingSchedule.test.cjs",
+    "test:agent": "node --test tests/tradeDecision.test.cjs tests/directionalAlignment.test.cjs tests/momentumAgent.test.cjs tests/historicalOutcomes.test.cjs tests/riskyLevelSetup.test.cjs tests/agentTimeframe.test.cjs tests/tradingSchedule.test.cjs",
     "test:analysis": "node --test tests/priceAction.test.cjs tests/tradingEvidence.test.cjs",
     "test:indicators": "node --test tests/chartIndicators.test.cjs tests/indiaVix.test.cjs",
     "test:stream": "node --test tests/liveCandles.test.cjs",

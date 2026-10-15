@@ -2,7 +2,7 @@ import type { AngelOneCandle, AngelOneStreamTick } from '../api/angelOne'
 import type { PredictionPlan } from './earlyPrediction'
 import { candleIntervalMs, completedCandles, tickTimestamp } from './candleData'
 import { withinEntryWindow } from './tradeDecision'
-import { agentInterval, candleIntervals } from './timeframes'
+import { agentInterval, candleIntervals, timeframeInfo } from './timeframes'
 import { analyzePriceAction } from './priceAction'
 import { squareOffTime, tradingSession, squareOffLabel, marketHours } from './tradingSession'
 import { commoditySpecs, isCommodity, validCommodityContract, tradeDirection } from './commodities'
@@ -257,13 +257,13 @@ export function observePredictionReversal(record: PredictionRecord, candles: Ang
   return exitPredictionEarly(next, now, 'AGENT_REVERSAL', `Agent confirmed an opposite ${opposite} setup on the completed ${latest[0]} candle; exited at the observed live instrument quote.`)
 }
 
-/** A fresh confirmed one-minute reversal also manages positions opened on older chart timeframes. */
+/** A fresh confirmed agent reversal also manages positions opened on older chart timeframes. */
 export function observeConfirmedAgentReversal(record: PredictionRecord, plan: PredictionPlan | undefined, now: number): PredictionRecord {
   if (!plan || !canExitPredictionEarly(record, now) || record.entryAt === undefined || plan.stage !== 'CONFIRMED' || plan.strategyVersion !== 'technical-v2' || plan.interval !== agentInterval || plan.instrument !== record.instrument || plan.side === record.side) return record
   if (record.contract?.token !== plan.contract?.token || record.contract?.symbol !== plan.contract?.symbol) return record
   const start = Date.parse(plan.signalCandleTime), duration = candleIntervalMs(plan.interval)
   if (!Number.isFinite(start) || start < record.entryAt || now < start + duration || now >= start + 2 * duration || record.latestPriceAt! < start + duration || !Number.isFinite(plan.generatedAt) || now < plan.generatedAt || now - plan.generatedAt > 30_000 || !Number.isFinite(plan.expiresAt) || now >= plan.expiresAt) return record
-  return exitPredictionEarly({ ...record, reversalCheckedCandle: plan.signalCandleTime }, now, 'AGENT_REVERSAL', `Agent confirmed an opposite ${tradeDirection(plan.instrument, plan.side)} setup on the completed 1-minute candle ${plan.signalCandleTime}; exited at the observed matching instrument quote before any replacement trade.`)
+  return exitPredictionEarly({ ...record, reversalCheckedCandle: plan.signalCandleTime }, now, 'AGENT_REVERSAL', `Agent confirmed an opposite ${tradeDirection(plan.instrument, plan.side)} setup on the completed ${timeframeInfo[agentInterval].label} candle ${plan.signalCandleTime}; exited at the observed matching instrument quote before any replacement trade.`)
 }
 
 export function predictionHistoryStats(records: PredictionRecord[]) {

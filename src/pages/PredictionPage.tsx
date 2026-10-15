@@ -10,7 +10,7 @@ import { candleBucketTime, isFreshTick, normalizeCandles, tickTimestamp } from '
 import { abortableWait, formatHistoricalDate, historyRetryDelay, historySyncRange, prioritizeHistoryJobs } from '../analysis/historySync'
 import { useCompletedCandles } from '../hooks/useCompletedCandles'
 import { LiveCandleBook } from '../analysis/liveCandleBook'
-import { agentInterval, candleIntervals, timeframeInfo } from '../analysis/timeframes'
+import { agentInterval, chartIntervals, timeframeInfo } from '../analysis/timeframes'
 import { resolveIndiaVixInstrument, type IndiaVixInstrument } from '../analysis/indiaVix'
 import MarketContextPanel from '../components/MarketContextPanel'
 import { useNewsAssessment } from '../hooks/useNewsAssessment'
@@ -77,7 +77,6 @@ function formatProfileList(value: AngelOneProfile['exchanges']) {
 }
 
 type ChartInterval = PriceActionInterval
-const chartIntervals = candleIntervals
 const chartCacheVersion = 1
 
 function chartCacheKey(token: string, interval: ChartInterval) {
@@ -702,7 +701,6 @@ export default function PredictionPage() {
               <span className="prediction-live-label">{commodities.some(item => item.token === selectedIndexToken) ? 'Live market' : 'Live prediction'}</span>
               <label className="prediction-timeframe-selector">
                 <select aria-label="Timeframe" value={chartInterval} onChange={(event) => selectChartInterval(event.target.value as ChartInterval)} aria-controls="live-index-candle-chart">
-                  <option value="ONE_MINUTE">1 minute</option>
                   <option value="FIVE_MINUTE">5 minutes</option>
                   <option value="FIFTEEN_MINUTE">15 minutes</option>
                   <option value="ONE_HOUR">1 hour</option>

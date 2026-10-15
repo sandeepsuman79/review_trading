@@ -60,9 +60,9 @@ test('cutoff replay preserves pre-cutoff stops and excludes later candle profits
 })
 
 function outlookFixture(d = 1, instrument = 'Nifty 50', date = '2026-10-15') {
-  const now = at('15:00:00', date), candles = Array.from({ length: 60 }, (_, i) => [new Date(now - (60-i)*60000).toISOString(), 22000 + d*i, 22100 + i, 21900 - i, 22000 + d*(i+1), 0])
+  const now = at('15:00:00', date), candles = Array.from({ length: 60 }, (_, i) => [new Date(now - (60-i)*300000).toISOString(), 22000 + d*i, 22100 + i, 21900 - i, 22000 + d*(i+1), 0])
   const analysis = { latestCandleTime: candles.at(-1)[0], structure: 'Fixture structure', setup: 'Fixture setup' }
-  const evidence = { instrument, interval: 'ONE_MINUTE', asOf: analysis.latestCandleTime, bullishScore: d === 1 ? 70 : 10, bearishScore: d === -1 ? 70 : 10, coverage: 85,
+  const evidence = { instrument, interval: 'FIVE_MINUTE', asOf: analysis.latestCandleTime, bullishScore: d === 1 ? 70 : 10, bearishScore: d === -1 ? 70 : 10, coverage: 85,
     checks: [{ label: 'Indicator warmup', passed: true }], missing: ['Spot-index VWAP unavailable'], sentiment: { bias: d === 1 ? 'BULLISH' : 'BEARISH', bullishScore: d === 1 ? 65 : 10, bearishScore: d === -1 ? 65 : 10, coverage: 80, missing: [] } }
   return { now, candles, analysis, evidence, instrument }
 }
@@ -80,11 +80,16 @@ test('15:00 gap outlook supports all indices, mirrors direction and never claims
 test('gap snapshots cannot use future, forming, gapped, unwarmed or late data or run on weekends', () => {
   for (const time of ['14:59:59','15:01:00','16:00:00']) { const input = outlookFixture();input.now = at(time);assert.equal(build(input), undefined) }
   for (const date of ['2026-10-17','2026-10-18']) assert.equal(build(outlookFixture(1,'Nifty 50',date)), undefined)
-  for (const mutate of [x => x.candles.pop(), x => x.candles.splice(-10,1), x => x.evidence.coverage = 69, x => x.evidence.checks[0].passed = false, x => x.evidence.interval = 'FIVE_MINUTE', x => x.analysis.latestCandleTime = new Date(x.now).toISOString()]) { const input = outlookFixture();mutate(input);assert.equal(build(input), undefined) }
+  for (const mutate of [x => x.candles.pop(), x => x.candles.splice(-3,1), x => x.evidence.coverage = 69, x => x.evidence.checks[0].passed = false, x => x.evidence.interval = 'ONE_MINUTE', x => x.analysis.latestCandleTime = new Date(x.now).toISOString()]) { const input = outlookFixture();mutate(input);assert.equal(build(input), undefined) }
 })
 
 test('missing sentiment produces a mixed outlook with missing coverage retained; malformed storage is preserved', () => {
   const input = outlookFixture();input.evidence.sentiment = { ...input.evidence.sentiment, bias: 'UNAVAILABLE', coverage: 0, bullishScore: 0, bearishScore: 0, missing: ['Unavailable news and global inputs'] }
   const result = build(input);assert.equal(result.bias,'MIXED');assert.equal(result.coverage,51);assert(result.missing.includes('Unavailable news and global inputs'))
   for (const raw of ['bad json', JSON.stringify({ ...result, generatedAt: result.generatedAt + 60000 }), JSON.stringify({ ...result, referencePrice: -1 })]) assert.throws(() => readGapOutlook({ getItem: () => raw },input.instrument))
+})
+
+test('previous one-minute outlook snapshots remain readable after switching agent analysis',()=>{
+ const input=outlookFixture(),result=build(input),legacy={...result,asOf:new Date(input.now-60000).toISOString()}
+ assert.deepEqual(readGapOutlook({getItem:()=>JSON.stringify(legacy)},input.instrument),legacy)
 })

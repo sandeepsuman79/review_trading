@@ -11,7 +11,7 @@ const now = Date.parse('2026-10-14T11:00:00Z')
 test('active index/timeframe has priority and changing selection reorders only pending jobs', () => {
   const jobs = ['FIVE_MINUTE', 'FIFTEEN_MINUTE', 'ONE_HOUR'].flatMap(interval => ['nifty', 'sensex', 'bank'].map(token => ({ token, interval, cursor: 123 })))
   const ordered = prioritizeHistoryJobs(jobs, 'bank', 'ONE_HOUR')
-  assert.equal(ordered[0].token, 'bank'); assert.equal(ordered[0].interval, 'ONE_HOUR'); assert.equal(ordered[0].cursor, 123)
+  assert.equal(ordered[0].token, 'bank'); assert.equal(ordered[0].interval, 'FIVE_MINUTE'); assert.equal(ordered[1].interval, 'ONE_HOUR'); assert.equal(ordered[0].cursor, 123)
   assert.deepEqual(ordered.slice(0, 3).map(job => job.token), ['bank', 'bank', 'bank'])
   assert.equal(prioritizeHistoryJobs(ordered.slice(1), 'sensex', 'FIVE_MINUTE')[0].token, 'sensex')
   assert.equal(jobs[0].token, 'nifty')
@@ -45,7 +45,7 @@ function previousSessions(duration) {
 }
 
 test('11:35 login with older cached history and a new live candle backfills from 09:15 in every timeframe', () => {
-  for (const [interval, duration] of [['ONE_MINUTE', 60000], ['FIVE_MINUTE', 300000], ['FIFTEEN_MINUTE', 900000], ['ONE_HOUR', 3600000]]) {
+  for (const [interval, duration] of [['FIVE_MINUTE', 300000], ['FIFTEEN_MINUTE', 900000], ['ONE_HOUR', 3600000]]) {
     const book = new LiveCandleBook(() => previousSessions(duration))
     book.accept({ token: 'nifty', timestamp: loginAt, ltp: 105, mode: 1, exchangeType: 1 }, loginAt)
     const range = historySyncRange(book.get('nifty', interval), interval, loginAt)
@@ -123,10 +123,10 @@ test('idle persistence saves one dirty timeframe without dropping unsaved data',
   const book = new LiveCandleBook(() => [])
   book.accept({ token: 'nifty', timestamp: now, ltp: 100, mode: 1, exchangeType: 1 }, now)
   let saved = 0
-  assert.equal(book.flush(() => { saved++ }, 1), 3)
+  assert.equal(book.flush(() => { saved++ }, 1), 2)
   assert.equal(saved, 1)
   assert.equal(book.flush(() => { saved++ }), 0)
-  assert.equal(saved, 4)
+  assert.equal(saved, 3)
 })
 
 test('memory indicator cache reuses immutable snapshots and invalidates on corrections or candle completion', () => {

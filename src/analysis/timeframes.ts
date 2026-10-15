@@ -1,6 +1,8 @@
-export const candleIntervals = ['ONE_MINUTE', 'FIVE_MINUTE', 'FIFTEEN_MINUTE', 'ONE_HOUR'] as const
+export const chartIntervals = ['FIVE_MINUTE', 'FIFTEEN_MINUTE', 'ONE_HOUR'] as const
+// Retain the legacy interval for reading existing trade history and candle caches.
+export const candleIntervals = ['ONE_MINUTE', ...chartIntervals] as const
 export type CandleInterval = typeof candleIntervals[number]
-export const agentInterval: CandleInterval = 'ONE_MINUTE'
+export const agentInterval = 'FIVE_MINUTE' as const
 export const timeframeInfo = {
   ONE_MINUTE: { milliseconds: 60_000, label: '1-minute', coldDays: 7, requestDays: 29 },
   FIVE_MINUTE: { milliseconds: 300_000, label: '5-minute', coldDays: 14, requestDays: 99 },
