@@ -44,7 +44,7 @@ export function useIndiaVix(instrument?: IndiaVixInstrument) {
     void refresh()
     const onAuth = () => { void refresh() }
     window.addEventListener('angelone-auth-changed', onAuth)
-    const timer = window.setInterval(() => void refresh(), 5 * 60_000)
+    const timer = window.setInterval(() => void refresh(), 60_000)
     return () => { window.clearInterval(timer); window.removeEventListener('angelone-auth-changed', onAuth); controllerRef.current?.abort(); controllerRef.current = null }
   }, [refresh])
   return { snapshot, loading, refresh }

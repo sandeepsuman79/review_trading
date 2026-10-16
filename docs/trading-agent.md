@@ -15,6 +15,32 @@ new external data or require a Gemini request per candle. Forming candles are
 excluded, and the card identifies its analysis as 5-minute. Chart timeframe changes
 neither restart the agent nor change its analysis timeframe.
 
+A background monitor also evaluates completed **1-minute candles** for all seven
+instruments, even while another chart/index is selected. It keeps up to five
+observed minute reviews, with EMA/RSI/ATR/Supertrend/VWAP evidence and a separate
+sentiment reference. Missing minutes, stale inputs and warming indicators stay
+visible. The chart selector remains 5/15/60 minutes and new trades still require
+5-minute confirmation. Minute plans cannot be registered as new trades.
+
+A fully confirmed opposite minute setup may protect an existing position before
+the next 5-minute close. It uses the same score, coverage, price-pattern, ATR and
+reward/risk gates. It must be a completed candle formed wholly after entry, with
+a matching contract and a fresh observed quote after its close. Separately, a
+confirmed adverse minute price break with supporting indicators can trigger the
+protective exit described below, without waiting for a new opposite entry plan.
+Developing pressure alone remains a warning. Stops and targets settle first. Exit
+records include the reversal timeframe, observed price and booked points. A fresh
+confirmed minute setup or protective price break also pauses entry into an opposing
+5-minute candidate. Replacement entries still need
+a separate 5-minute confirmation and the one-position guard.
+
+Context and India VIX are requested every minute; OI/global quote caches allow
+minute refreshes while news/flow publication caches remain slower. Latest available
+sentiment is re-evaluated with each minute review. Source timestamps and missing
+coverage remain explicit. Gemini/headline assessment caching and quota cooldowns
+remain in place; no model call is required for a technical review or exit.
+Background monitoring is browser-local and requires the dashboard to remain running.
+
 A new red candle alone does not confirm a PUT. Both directions still require a
 completed setup, matching directional route, technical score/lead, coverage and
 ATR/reward-risk checks. The separate CALL/PUT diagnostics explain unmet conditions.
@@ -341,3 +367,45 @@ continues requiring a fresh matching assessment and now explicitly refuses a
 stale live quote when a current technical confirmation is supplied. Data
 freshness, ATR, source-session integrity and quote/entry checks are not relaxed
 by the new score thresholds.
+
+## Protective exits independent of entry confirmation
+
+A 5-minute WAIT does not disable monitoring of an already active trade. Completed
+minute data can display bullish/bearish WATCH and reversal-risk evidence without
+issuing a new trade. A protective minute exit needs an opposite directional candle
+with body at least 35% of its range, a close beyond the preceding candle extreme
+by at least 0.05 ATR, and at least three supporting checks among EMA20 position/slope,
+RSI momentum, Supertrend direction, actual-volume VWAP position, persistent candle
+pressure, the price break itself, and eligible paired ATM option VWAP context.
+This exit route does not need a new opposite entry pattern or the entry score/RR
+thresholds. It still requires a completed post-entry candle, a current matching
+assessment and a fresh observed quote. Developing or stale evidence cannot close a trade.
+
+Actual live quotes also maintain a per-position favourable-price extreme and an
+ATR trailing stop. Protection arms after **0.75R** of observed favourable movement;
+its distance is the greater of **1.5 × current minute ATR**, **0.35R**, and two broker
+ticks. If minute ATR is unavailable, the last known protective ATR, entry ATR or
+initial risk is used. At **1R**, the stop cannot remain behind entry. Stops only
+tighten and original planned levels stay recorded separately. A live breach exits
+at the observed quote, which can be worse than the stop during a gap. Stops/targets
+and scheduled square-off take precedence. Saved trails survive reload; unobserved
+stop/target ordering remains ambiguous. No unobserved candle high is invented as
+a live peak. These thresholds are experimental, not a backtested optimum.
+
+For Nifty 50, Sensex and Bank Nifty, the nearest-expiry ATM CE and PE each have a
+separate **candle-based session VWAP estimate**: sum(HLC3 × actual candle volume) /
+sum(volume). The service resolves actual broker tokens, shares the historical
+request queue, caches per authenticated session/contract/day, and overlaps the
+last saved minute after initial session sync. Partial sessions, missing volume,
+stale data and options no longer near ATM cannot support a reversal check. Paired
+CE-above/PE-below supports upward context; the reverse supports downward context.
+This is one supplementary check alongside an underlying price break and other
+indicators, never a standalone trigger or a spot-index VWAP line. Commodity
+futures use their own traded-volume VWAP instead of equity option context.
+
+ATR describes volatility, and trailing stops are risk controls rather than market
+forecasts; see [TradingView ATR](https://www.tradingview.com/support/solutions/43000501823-average-true-range-atr/)
+and [trailing-stop mechanics](https://www.tradingview.com/support/solutions/43000754965-introduction-to-trailing-stops/).
+ATM volume comes from [Angel One historical candles](https://smartapi.angelone.in/docs).
+Trade exits remain local tracking; the dashboard must be running and no broker
+order is submitted. Profitability requires separate out-of-sample validation.

@@ -66,7 +66,7 @@ export default function MarketContextPanel({ context, loading, refresh, outlook,
   return (
     <div className="market-context-panel" aria-label="Agent analysis dashboard">
       <div className="market-context-heading"><strong>What the agent analysed</strong><div className="agent-analysis-heading-actions"><span>Score: −2 bearish to +2 bullish</span><button type="button" onClick={refresh} disabled={loading} aria-label="Refresh market context" title="Refresh market context">{loading ? '…' : '↻'}</button></div></div>
-      <p className="market-context-note">Free public feeds · May be delayed · Refresh every 5 minutes{loading ? ' · Updating…' : ''}</p>
+      <p className="market-context-note">Free public feeds · May be delayed · Reviewed every minute · Headlines may refresh less often{loading ? ' · Updating…' : ''}</p>
       {!chartCurrent && <p className="market-context-note">Historical chart snapshot: waiting for recent completed candles.</p>}
       <p className="market-context-note">Swipe or scroll horizontally to view all cards.</p>
       <div className="agent-analysis-grid" tabIndex={0} role="region" aria-label="Scroll agent analysis cards horizontally">{children}{dashboard.tiles.map(tile => tile.key === 'news' ? <MarketNews key={tile.key} context={context} outlook={outlook} now={now} loading={loading} embedded weight={tile.weight} /> : <AnalysisCard key={tile.key} tile={tile}>

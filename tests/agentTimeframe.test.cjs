@@ -19,16 +19,16 @@ function assess(candles) {
   return { now, analysis, evidence, prediction: buildEarlyPrediction(analysis, 'Nifty 50', 'FIVE_MINUTE', now, undefined, undefined, evidence) }
 }
 
-test('only supported chart timeframes are built; five-minute analysis waits for the completed candle without losing tick extremes', () => {
-  const { chartIntervals, agentInterval } = require('../src/analysis/timeframes.ts')
+test('private minute monitoring preserves tick extremes while five-minute entry analysis waits for the completed candle without losing tick extremes', () => {
+  const { chartIntervals, historyIntervals, agentInterval } = require('../src/analysis/timeframes.ts')
   assert.deepEqual(chartIntervals, ['FIVE_MINUTE', 'FIFTEEN_MINUTE', 'ONE_HOUR']); assert.equal(agentInterval, 'FIVE_MINUTE')
   const book = new LiveCandleBook(() => [])
   for (const [offset, price] of [[1000,100],[2000,110],[3000,90],[61000,105],[65000,108]]) book.accept(tick(start + offset, price), start + offset)
   const five = book.get('99926000', agentInterval)
   assert.deepEqual(five[0].slice(1, 5), [100,110,90,108]); assert.equal(completedCandles(five, agentInterval, start + 299999).length, 0)
   assert.equal(completedCandles(five, agentInterval, start + 300000).length, 1)
-  const writes=[];book.flush((_token, interval)=>writes.push(interval));assert.deepEqual(writes, chartIntervals)
-  assert.deepEqual(book.get('99926000', 'ONE_MINUTE'), [])
+  const writes=[];book.flush((_token, interval)=>writes.push(interval));assert.deepEqual(writes, historyIntervals)
+  assert.equal(book.get('99926000', 'ONE_MINUTE').length, 2)
 })
 
 test('real five-minute CALL and PUT candidates independently reach full confirmation', () => {

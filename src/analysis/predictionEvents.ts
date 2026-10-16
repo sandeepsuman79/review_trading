@@ -32,7 +32,7 @@ export function predictionEvents(previous: PredictionRecord[], next: PredictionR
     if ((!old || old.status !== record.status) && record.status !== 'PENDING' && record.status !== 'ACTIVE') {
       const reason = record.status === 'TARGET_HIT' ? 'Target achieved · Exit'
         : record.status === 'STOP_LOSS_HIT' ? 'Stop loss · Exit'
-        : record.status === 'EARLY_EXIT' ? record.earlyExitSource === 'SESSION_SQUARE_OFF' ? `${squareOffLabel(record.instrument, record.entryAt ?? record.generatedAt)} square-off · Exit` : record.earlyExitSource === 'AGENT_REVERSAL' ? 'Agent reversal · Exit' : 'Exit'
+        : record.status === 'EARLY_EXIT' ? record.earlyExitSource === 'SESSION_SQUARE_OFF' ? `${squareOffLabel(record.instrument, record.entryAt ?? record.generatedAt)} square-off · Exit` : record.earlyExitSource === 'AGENT_PROTECTION' ? 'Protective exit' : record.earlyExitSource === 'AGENT_REVERSAL' ? record.reversalInterval === 'ONE_MINUTE' ? '1-minute reversal · Exit' : 'Agent reversal · Exit' : 'Exit'
         : record.status === 'EXPIRED' ? 'Exit · Setup expired'
         : record.status === 'AMBIGUOUS' ? 'Exit · Outcome ambiguous' : 'Exit · Outcome unverified'
       const result = record.points === undefined ? '' : `Booked ${record.points > 0 ? 'profit' : record.points < 0 ? 'loss' : 'break-even'}: ${record.points > 0 ? '+' : ''}${record.points.toFixed(2)} price points. `

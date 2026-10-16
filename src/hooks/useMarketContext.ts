@@ -34,7 +34,7 @@ export function useMarketContext(instrument: string, enabled = true) {
     setError('')
     if (!enabled) { setLoading(false); return }
     void refresh()
-    const timer = window.setInterval(() => void refresh(), 5 * 60_000)
+    const timer = window.setInterval(() => void refresh(), 60_000)
     return () => { window.clearInterval(timer); controllerRef.current?.abort(); controllerRef.current = null }
   }, [refresh, enabled])
   return { context, loading, loaded, error, refresh }

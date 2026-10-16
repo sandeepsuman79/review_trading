@@ -1,3 +1,4 @@
+import type { MinuteReview } from '../analysis/minuteMonitor'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PredictionPlan } from '../analysis/earlyPrediction'
 import { isOpenPrediction, reconcilePredictionRecords, registerConfirmedPrediction, syncPredictionRecord, predictionHistoryKey, readPredictionHistory, writePredictionHistory, type PredictionRecord } from '../analysis/predictionHistory'
@@ -49,21 +50,21 @@ export function usePredictionHistory(onError: (message: string) => void, onEvent
     mutate(current => registerConfirmedPrediction(current, plan, Date.now()))
   }, [mutate])
 
-  const sync = useCallback((observe: (record: PredictionRecord) => Observation, now: number, confirmEntry?: (record: PredictionRecord) => PredictionPlan | undefined, confirmReversal?: (record: PredictionRecord) => PredictionPlan | undefined) => {
+  const sync = useCallback((observe: (record: PredictionRecord) => Observation, now: number, confirmEntry?: (record: PredictionRecord) => PredictionPlan | undefined, confirmReversal?: (record: PredictionRecord) => PredictionPlan | undefined, reviewMinute?: (record: PredictionRecord) => MinuteReview | undefined) => {
     mutate(current => reconcilePredictionRecords(current).map(record => {
       if (!isOpenPrediction(record)) return record
       const { candles, tick } = observe(record)
       const plan = confirmEntry?.(record)
-      return syncPredictionRecord(record, candles, tick, now, confirmEntry ? Boolean(plan) : true, plan, confirmReversal ? confirmReversal(record) ?? null : undefined)
+      return syncPredictionRecord(record, candles, tick, now, confirmEntry ? Boolean(plan) : true, plan, confirmReversal ? confirmReversal(record) ?? null : undefined, reviewMinute?.(record))
     }))
   }, [mutate])
 
-  const syncTick = useCallback((instrument: string, tick: AngelOneStreamTick, candlesFor: (record: PredictionRecord) => AngelOneCandle[], now: number, confirmEntry?: (record: PredictionRecord) => PredictionPlan | undefined, confirmReversal?: (record: PredictionRecord) => PredictionPlan | undefined) => {
+  const syncTick = useCallback((instrument: string, tick: AngelOneStreamTick, candlesFor: (record: PredictionRecord) => AngelOneCandle[], now: number, confirmEntry?: (record: PredictionRecord) => PredictionPlan | undefined, confirmReversal?: (record: PredictionRecord) => PredictionPlan | undefined, reviewMinute?: (record: PredictionRecord) => MinuteReview | undefined) => {
     mutate(current => reconcilePredictionRecords(current).map(record => {
       if (record.instrument !== instrument || !isOpenPrediction(record)) return record
       if (record.contract && (record.contract.token !== tick.token || tick.exchangeType !== 5)) return record
       const plan = confirmEntry?.(record)
-      return syncPredictionRecord(record, candlesFor(record), tick, now, confirmEntry ? Boolean(plan) : true, plan, confirmReversal ? confirmReversal(record) ?? null : undefined)
+      return syncPredictionRecord(record, candlesFor(record), tick, now, confirmEntry ? Boolean(plan) : true, plan, confirmReversal ? confirmReversal(record) ?? null : undefined, reviewMinute?.(record))
     }))
   }, [mutate])
   return { records, storageError, recordPrediction, sync, syncTick }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { getNewsAssessment, newsAssessmentKey, type AiProviderStatus, type NewsAssessment } from '../api/ai'
 import type { MarketContext, MarketOutlook } from '../api/marketContext'
 
@@ -32,7 +32,7 @@ export function useNewsAssessment(context: MarketContext | null, now: number) {
     return () => window.clearTimeout(timer)
   }, [current?.providerStatus.retryAt, current?.marketOutlook.assessmentStatus?.retryAt, key, context?.instrument, failure, attempt])
   // Rebind unchanged headline ratings after an OI/global revision without another model call.
-  const outlook: MarketOutlook | undefined = current && context ? { ...current.marketOutlook, contextRevision: context.revision, contextRetrievedAt: context.retrievedAt } : undefined
+  const outlook: MarketOutlook | undefined = useMemo(() => current && context ? { ...current.marketOutlook, contextRevision: context.revision, contextRetrievedAt: context.retrievedAt } : undefined, [current, context])
   const providerStatus: AiProviderStatus | undefined = failure ? undefined : current?.providerStatus
   return { outlook, providerStatus, loading, message: failure || outlook?.assessmentStatus?.message || '', refresh: () => setAttempt(value => value + 1) }
 }

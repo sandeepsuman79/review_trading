@@ -34,18 +34,19 @@ instrument endpoint continues to fetch and return the full master.
 
 Login, page reload and the refresh button start one cancellable sync pass. Index
 or timeframe changes reprioritize pending work; they do not start another pass.
-The current index's 5-minute agent feed comes first, then its displayed chart
-timeframe and other intervals, then remaining indices with their agent feed first.
-Cached charts remain interactive throughout the pass. All nine index/timeframe
+The current index's 5-minute agent feed comes first, then its background 1-minute
+monitor, displayed chart timeframe and other intervals, then remaining indices
+with their agent and minute-monitor feeds first.
+Cached charts remain interactive throughout the pass. All twelve index/background-timeframe
 combinations are maintained locally; chart selection never changes the fixed
 5-minute agent analysis or starts another sync pass.
 
-Cold starts request 14 days of 5-minute, 45 days of 15-minute and 120 days of hourly
+Cold starts request 7 days of background 1-minute, 14 days of 5-minute, 45 days of 15-minute and 120 days of hourly
 candles. Warm starts overlap the most recent saved candle and fetch the missing
 tail, starting no later than the current IST session's 09:15 opening. A new live
 candle after a late login cannot hide a missing morning block or a hole inside
 today's cached session. Candles dated after the current clock cannot advance the
-sync cursor. Old gaps are split into requests below SmartAPI's 100/200/400-day caps.
+sync cursor. Old gaps are split into requests below SmartAPI's 30/100/200/400-day caps.
 All dates use IST `yyyy-MM-dd HH:mm`. Cached history is retained, and merging
 protects live ticks newer than the request's minute-precision cutoff.
 
@@ -151,8 +152,17 @@ agent decisions. See [option-price-scale.md](option-price-scale.md).
 
 The selectable chart intervals are 5 minutes, 15 minutes and 1 hour for every index
 and commodity. The agent always uses completed 5-minute candles regardless of the
-viewed chart. Background history jobs and live candle persistence use those three
-intervals only. Legacy 1-minute trade records/caches remain readable without being
-selected for new signals or history sync. Stops and targets still observe every
+viewed chart. Background history jobs and live candle persistence also maintain a private
+1-minute feed for early reversal monitoring; the chart selector stays at three options. Legacy 1-minute trade records/caches remain readable without being
+selected for new trade entries. Stops and targets still observe every
 live quote. The 15:00 index gap outlook uses six completed 5-minute bars for its
 existing 30-minute reference window; archived 1-minute outlooks remain readable.
+
+Minute monitoring uses completed-candle references and memoized reviews, so forming
+ticks do not rerun the minute analysis. Rolling review memory is bounded to five
+observations per instrument and is not written on every tick. The selected market's
+5-minute history is synced first, then its minute-monitor history and displayed
+chart. All seven markets maintain 28 serialized history jobs. Login/reload/refresh
+sync history; minute reviews use the live candle book rather than polling history
+every minute. Old active futures retain their own token, monitor and quote stream
+through rollover. New expiry signals cannot close an older contract's position.

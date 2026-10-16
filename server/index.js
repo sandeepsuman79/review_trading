@@ -1,3 +1,4 @@
+import { createAtmVwapService } from './atmVwap.js'
 import { createOptionPremiumService, nearestIndexOptions } from './optionPremiums.js'
 import { createHistoricalProxy } from './historicalProxy.js'
 import { commodityInstruments } from './commodityInstruments.js'
@@ -66,6 +67,7 @@ const angelOneHistoricalUrls = {
   oi: 'https://apiconnect.angelone.in/rest/secure/angelbroking/historical/v1/getOIData',
 }
 const historicalRequest = createHistoricalProxy()
+const atmVwap = createAtmVwapService({ loadOptions: async () => { if (!instrumentMasterCache || instrumentMasterCache.expiresAt <= Date.now()) await loadInstrumentMaster(); return instrumentMasterCache.options }, history: (headers, input) => historicalRequest(angelOneHistoricalUrls.candles, headers.Authorization, headers, input) })
 const marketContextService = createMarketContextService()
 const aiCache = createAiCache(resolve('.cache/ai-news.json'))
 const gemini = createGeminiClient({ apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite', savedState: aiCache.providerState, saveState: state => { aiCache.providerState = state; aiCache.save() } })
@@ -402,13 +404,13 @@ const server = createServer(async (request, response) => {
     }
   }
 
-  if (request.method === 'POST' && request.url === '/api/angelone/option-premiums') {
+  if (request.method === 'POST' && ['/api/angelone/option-premiums', '/api/angelone/atm-vwap'].includes(request.url)) {
     const authorization = request.headers.authorization, privateKey = process.env.ANGELONE_PRIVATE_KEY
     if (!authorization?.startsWith('Bearer ')) return sendJson(response, 401, { message: 'Angel One authorization token is required.' })
     if (!privateKey) return sendJson(response, 503, { message: 'ANGELONE_PRIVATE_KEY is not configured on the server.' })
     try {
       const input = JSON.parse(await readBody(request))
-      const result = await optionPremiums.get(input, { Authorization: authorization, Accept: 'application/json', 'Content-Type': 'application/json', 'X-ClientLocalIP': process.env.ANGELONE_CLIENT_LOCAL_IP || '', 'X-ClientPublicIP': process.env.ANGELONE_CLIENT_PUBLIC_IP || '', 'X-MACAddress': process.env.ANGELONE_MAC_ADDRESS || '', 'X-PrivateKey': privateKey, 'X-SourceID': 'WEB', 'X-UserType': 'USER' })
+      const result = await (request.url === '/api/angelone/atm-vwap' ? atmVwap : optionPremiums).get(input, { Authorization: authorization, Accept: 'application/json', 'Content-Type': 'application/json', 'X-ClientLocalIP': process.env.ANGELONE_CLIENT_LOCAL_IP || '', 'X-ClientPublicIP': process.env.ANGELONE_CLIENT_PUBLIC_IP || '', 'X-MACAddress': process.env.ANGELONE_MAC_ADDRESS || '', 'X-PrivateKey': privateKey, 'X-SourceID': 'WEB', 'X-UserType': 'USER' })
       return sendJson(response, 200, result)
     } catch (error) {
       return sendJson(response, error instanceof SyntaxError ? 400 : error.status || 502, { message: error instanceof SyntaxError ? 'Request body must be valid JSON.' : error.message || 'Option premiums are unavailable.', ...(error.errorcode ? { errorcode: error.errorcode } : {}) })
