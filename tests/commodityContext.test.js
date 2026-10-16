@@ -36,3 +36,18 @@ test('optional AI news request scopes commodity impact and retains technical ind
  assert.equal(JSON.parse(request.contents[0].parts[0].text).articles[0].scope,'MCX_FUTURES:Crude Oil')
  assert.equal(result.marketOutlook.bias,'UNAVAILABLE');assert.equal(result.marketOutlook.assessmentStatus.assessed,0)
 })
+
+test('minute context refresh updates volatile quotes while sharing cached news publications',async()=>{
+ let clock=now;const calls=[]
+ const service=createMarketContextService({now:()=>clock,fetchFn:async url=>{
+  calls.push(url)
+  if(url.includes('finance.yahoo.com')){const symbol=decodeURIComponent(new URL(url).pathname.split('/').at(-1));return new Response(JSON.stringify({chart:{result:[{meta:{symbol,regularMarketPrice:100+(clock-now)/60000,regularMarketChangePercent:1,regularMarketTime:clock/1000}}]}}))}
+  return new Response(rss(new URL(url).searchParams.get('q')))
+ }})
+ const first=await service.getContext('Gold'),newsCalls=calls.filter(url=>url.includes('news.google.com')).length
+ const count=calls.length;clock+=59000;await service.getContext('Gold');assert.equal(calls.length,count)
+ clock+=2000;const updated=await service.getContext('Gold')
+ assert.equal(calls.filter(url=>url.includes('news.google.com')).length,newsCalls)
+ assert.equal(calls.length,count+4);assert(updated.inputs.global[0].data.price>first.inputs.global[0].data.price)
+ assert.notEqual(updated.revision,first.revision);assert.equal(updated.inputs.global[0].fetchedAt,new Date(clock).toISOString())
+})

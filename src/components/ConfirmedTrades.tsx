@@ -14,7 +14,7 @@ const reason = (record: PredictionRecord) => {
     case 'ACTIVE': return 'Agent managing trade'
     case 'TARGET_HIT': return 'Target hit'
     case 'STOP_LOSS_HIT': return 'Stop-loss hit'
-    case 'EARLY_EXIT': return record.earlyExitSource === 'SESSION_SQUARE_OFF' ? `Square-off · ${squareOffLabel(record.instrument, record.entryAt ?? record.generatedAt)} IST` : record.earlyExitSource === 'AGENT_REVERSAL' ? 'Agent-confirmed reversal' : 'Early exit'
+    case 'EARLY_EXIT': return record.earlyExitSource === 'SESSION_SQUARE_OFF' ? `Square-off · ${squareOffLabel(record.instrument, record.entryAt ?? record.generatedAt)} IST` : record.earlyExitSource === 'AGENT_PROTECTION' ? record.reversalInterval === 'ONE_MINUTE' ? '1-minute trend protection' : 'Trailing profit protection' : record.earlyExitSource === 'AGENT_REVERSAL' ? record.reversalInterval === 'ONE_MINUTE' ? '1-minute reversal' : 'Agent-confirmed reversal' : 'Early exit'
     case 'AMBIGUOUS': return 'Unclear price ordering'
     default: return 'Outcome unverified'
   }

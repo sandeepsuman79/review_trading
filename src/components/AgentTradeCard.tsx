@@ -1,3 +1,5 @@
+import MinuteMonitor from './MinuteMonitor'
+import type { MinuteReview } from '../analysis/minuteMonitor'
 import { isCommodity, tradeDirection } from '../analysis/commodities'
 import { timeframeInfo } from '../analysis/timeframes'
 import { squareOffTime, squareOffLabel } from '../analysis/tradingSession'
@@ -22,7 +24,10 @@ function timeframe(interval: PriceActionInterval) {
   return timeframeInfo[interval].label
 }
 
-export default function AgentTradeCard({ analysis, evidence, prediction, activeTrade, pendingTrade, instrument, interval, now, tick, streamConnected }: {
+export default function AgentTradeCard({ analysis, evidence, prediction, activeTrade, pendingTrade, minuteReview, minuteHistory = [], minuteEntryPaused = false, instrument, interval, now, tick, streamConnected }: {
+  minuteReview?: MinuteReview
+  minuteHistory?: MinuteReview[]
+  minuteEntryPaused?: boolean
   analysis: PriceActionAnalysis
   evidence?: TradingEvidence
   prediction: EarlyPrediction
@@ -40,10 +45,12 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
   const plan = activeTrade ?? ('plan' in prediction ? prediction.plan : undefined)
   const early = evidence?.decisions?.find(decision => decision.state === 'EARLY')
   const side = activeTrade?.side ?? (prediction.side === 'WAIT' && early ? early.side : prediction.side)
-  const tone = side === 'CALL' ? 'bullish' : side === 'PUT' ? 'bearish' : 'neutral'
+  const minuteSide = minuteReview?.current ? minuteReview.pressure?.side ?? minuteReview.plan?.side : undefined
+  const waitingPressure = !activeTrade && prediction.side === 'WAIT' && minuteSide !== undefined
+  const tone = side === 'CALL' || side === 'WAIT' && waitingPressure && minuteSide === 'CALL' ? 'bullish' : side === 'PUT' || side === 'WAIT' && waitingPressure && minuteSide === 'PUT' ? 'bearish' : 'neutral'
   const risky = plan?.stage === 'RISKY'
-  const status = activeTrade ? 'CONFIRMED · OPEN' : plan?.stage === 'CONFIRMED' ? `CONFIRMED SETUP · AWAITING ENTRY${evidence?.quality ? ` · ${evidence.quality}` : ''}` : risky ? 'RISKY · CONDITIONAL SETUP' : plan ? 'EARLY ANALYSIS · NO TRADE' : early ? `EARLY ${directionLabel(early.side)} CANDIDATE · NOT CONFIRMED` : 'WAIT · NO TRADE'
-  const reason = activeTrade
+  const status = waitingPressure ? `1-MIN ${minuteSide === 'CALL' ? 'BULLISH' : 'BEARISH'} WATCH · 5-MIN ENTRY WAIT` : activeTrade ? 'CONFIRMED · OPEN' : plan?.stage === 'CONFIRMED' ? `CONFIRMED SETUP · AWAITING ENTRY${evidence?.quality ? ` · ${evidence.quality}` : ''}` : risky ? 'RISKY · CONDITIONAL SETUP' : plan ? 'EARLY ANALYSIS · NO TRADE' : early ? `EARLY ${directionLabel(early.side)} CANDIDATE · NOT CONFIRMED` : 'WAIT · NO TRADE'
+  const reason = waitingPressure ? `Completed minute data shows ${minuteSide === 'CALL' ? 'bullish' : 'bearish'} pressure. A new 5-minute trade is not yet confirmed. Protective exit checks operate independently of new-entry confirmation.` : activeTrade
     ? `Monitoring the live ${directionLabel(activeTrade.side)} trade. The agent records its profit or loss before another ${instrument} trade can start.`
     : early && !plan ? `Developing ${directionLabel(early.side)} candidate. Full confirmation is incomplete: ${early.checks.filter(check => check.status === 'FAIL').map(check => check.label).join(' · ')}.` : prediction.reason
   const entry = activeTrade?.entryPrice ?? plan?.entry
@@ -77,7 +84,7 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
         <span className={`agent-trade-status ${activeTrade ? 'is-open' : risky ? 'is-risky' : ''}`} role="status">{status}</span>
       </div>
       <div className="agent-trade-direction-row">
-        <strong className="agent-trade-direction">{side === 'WAIT' ? 'WAIT' : `${directionLabel(side)} · ${side === 'CALL' ? 'BULLISH' : 'BEARISH'}`}</strong>
+        <strong className="agent-trade-direction">{side === 'WAIT' ? waitingPressure ? `${minuteSide === 'CALL' ? 'BULLISH' : 'BEARISH'} WATCH` : 'WAIT' : `${directionLabel(side)} · ${side === 'CALL' ? 'BULLISH' : 'BEARISH'}`}</strong>
         <div className="agent-trade-instrument"><strong>{instrument}</strong>{plan?.contract && <span>{plan.contract.symbol} · Expiry {plan.contract.expiry}</span>}<span>Analysis: {timeframe(interval)} · {commodity ? 'MCX futures levels' : 'Index levels'}{activeTrade && activeTrade.interval !== interval ? ` · Open trade: ${timeframe(activeTrade.interval)}` : ''}</span></div>
       </div>
       {!streamConnected && <p className="agent-entry-status" role="status">Live stream disconnected · New entries paused; saved trade monitoring continues.</p>}
@@ -105,6 +112,7 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
       {plan && <p className="agent-trade-note">{activeTrade ? 'Agent-managed exit · One live trade per instrument' : plan.stage === 'CONFIRMED' ? 'Conditional entry · Current setup must remain confirmed · Trade tracking starts when entry is observed' : risky ? 'Risky conditional setup · Full confirmation incomplete' : 'Early analysis only · Not recorded as a trade'} · {plan.strategyVersion === 'technical-v2' ? 'Technical confirmation · Sentiment is reference only' : 'Recorded under the previous strategy'}<br />{plan.targetBasis}</p>}
 
       <div className="agent-market-view">
+        {minuteReview && <MinuteMonitor review={minuteReview} history={minuteHistory} activeTrade={activeTrade} entryPaused={minuteEntryPaused} connected={streamConnected} now={now} />}
         <div className="agent-market-view-heading"><strong className={`agent-text-${marketTone}`}>Technical analysis: {marketView}</strong><span>· {strength}</span></div>
         <p className="agent-analysis-time">{timeframe(interval)} analysis · {analysis.analyzedCandles} completed candles · Forming candle excluded{analysis.latestCandleTime && <> · Last closed <time dateTime={analysis.latestCandleTime}>{time(Date.parse(analysis.latestCandleTime))}</time></>}{historical ? ' · Historical snapshot' : ''}</p>
         <div className="agent-evidence-scores"><span className="agent-text-bullish">Bullish score: <strong>{bullishScore}/100</strong></span><span className="agent-text-bearish">Bearish score: <strong>{bearishScore}/100</strong></span></div>

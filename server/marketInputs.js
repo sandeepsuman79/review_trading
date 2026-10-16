@@ -110,7 +110,7 @@ export function parseIndiaVix(raw, now) {
 
 export function createMarketInputsService({ fetchFn = fetch, now = Date.now } = {}) {
   const cache = new Map(), pending = new Map()
-  async function source(url, sourceUrl, parse) {
+  async function source(url, sourceUrl, parse, duration = ttl) {
     const cached = cache.get(url)
     if (cached && now() < cached.retryAt) return cached.snapshot
     if (pending.has(url)) return pending.get(url)
@@ -131,7 +131,7 @@ export function createMarketInputsService({ fetchFn = fetch, now = Date.now } = 
       } catch {
         snapshot = { status: cached?.snapshot.data ? 'STALE' : 'UNAVAILABLE', sourceUrl, fetchedAt: cached?.snapshot.fetchedAt || null, message: 'Public source unavailable. Retrying on the next refresh.', data: cached?.snapshot.data || null }
       }
-      cache.set(url, { snapshot, retryAt: now() + (snapshot.status === 'AVAILABLE' ? ttl : 60_000) })
+      cache.set(url, { snapshot, retryAt: now() + (snapshot.status === 'AVAILABLE' ? duration : 60_000) })
       while (cache.size > 128) cache.delete(cache.keys().next().value)
       return snapshot
     })()
@@ -149,7 +149,7 @@ export function createMarketInputsService({ fetchFn = fetch, now = Date.now } = 
     })
     if (contracts.status !== 'AVAILABLE') return { ...contracts, data: null }
     const expiry = contracts.data.expiry
-    return source(`${nse}/api/option-chain-v3?type=Indices&symbol=${symbol}&expiry=${encodeURIComponent(expiry)}`, sourceUrl, raw => parseOptionChain(raw, expiry, symbol, now()))
+    return source(`${nse}/api/option-chain-v3?type=Indices&symbol=${symbol}&expiry=${encodeURIComponent(expiry)}`, sourceUrl, raw => parseOptionChain(raw, expiry, symbol, now()), 60_000)
   }
 
   async function institutional() {
@@ -165,8 +165,8 @@ export function createMarketInputsService({ fetchFn = fetch, now = Date.now } = 
   async function getInputs(instrument) {
     const [oi, flows, global, giftNifty] = await Promise.all([
       openInterest(instrument), institutional(),
-      Promise.all(globalSpecs.map(async spec => ({ name: spec.name, ...await source(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(spec.symbol)}?interval=1d&range=5d`, `https://finance.yahoo.com/quote/${encodeURIComponent(spec.symbol)}/`, raw => parseGlobalQuote(raw, spec.symbol, now())) }))),
-      source(`${nse}/api/marketStatus`, 'https://www.nseix.com/', raw => parseGiftNifty(raw, now())),
+      Promise.all(globalSpecs.map(async spec => ({ name: spec.name, ...await source(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(spec.symbol)}?interval=1d&range=5d`, `https://finance.yahoo.com/quote/${encodeURIComponent(spec.symbol)}/`, raw => parseGlobalQuote(raw, spec.symbol, now()), 60_000) }))),
+      source(`${nse}/api/marketStatus`, 'https://www.nseix.com/', raw => parseGiftNifty(raw, now()), 60_000),
     ])
     return { openInterest: oi, institutional: flows.flows, participantPositions: flows.positions, global, giftNifty }
   }
@@ -174,13 +174,13 @@ export function createMarketInputsService({ fetchFn = fetch, now = Date.now } = 
     const config = commodityMarkets[instrument]
     if (!config) throw new Error('Unsupported commodity.')
     const unavailable = message => ({ status: 'UNAVAILABLE', fetchedAt: null, sourceUrl: 'https://www.mcxindia.com/', data: null, message })
-    const global = await Promise.all(config.benchmarks.map(async spec => ({ name: spec.name, ...await source(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(spec.symbol)}?interval=1d&range=5d`, `https://finance.yahoo.com/quote/${encodeURIComponent(spec.symbol)}/`, raw => parseGlobalQuote(raw, spec.symbol, now())) })))
+    const global = await Promise.all(config.benchmarks.map(async spec => ({ name: spec.name, ...await source(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(spec.symbol)}?interval=1d&range=5d`, `https://finance.yahoo.com/quote/${encodeURIComponent(spec.symbol)}/`, raw => parseGlobalQuote(raw, spec.symbol, now()), 60_000) })))
     return { openInterest: unavailable('Commodity option-chain OI/PCR is not connected. Index OI is excluded.'), institutional: unavailable('Equity FII/DII cash flows are not applicable to this MCX contract.'), participantPositions: unavailable('Equity index futures positions are not applicable.'), giftNifty: unavailable('GIFT Nifty is not a commodity reference.'), global }
   }
   async function getIndiaVix() {
-    const primary = await source(`${nse}/api/allIndices`, 'https://www.nseindia.com/static/products-services/indices-indiavix-index', raw => parseIndiaVix(raw, now()))
+    const primary = await source(`${nse}/api/allIndices`, 'https://www.nseindia.com/static/products-services/indices-indiavix-index', raw => parseIndiaVix(raw, now()), 60_000)
     if (primary.status === 'AVAILABLE') return primary
-    const fallback = await source('https://query1.finance.yahoo.com/v8/finance/chart/%5EINDIAVIX?interval=1d&range=5d', 'https://finance.yahoo.com/quote/%5EINDIAVIX/', raw => parseGlobalQuote(raw, '^INDIAVIX', now()))
+    const fallback = await source('https://query1.finance.yahoo.com/v8/finance/chart/%5EINDIAVIX?interval=1d&range=5d', 'https://finance.yahoo.com/quote/%5EINDIAVIX/', raw => parseGlobalQuote(raw, '^INDIAVIX', now()), 60_000)
     return fallback.status === 'AVAILABLE' ? fallback : primary.data ? primary : fallback
   }
   return { getInputs, getCommodityInputs, getIndiaVix }

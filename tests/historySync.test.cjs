@@ -123,10 +123,10 @@ test('idle persistence saves one dirty timeframe without dropping unsaved data',
   const book = new LiveCandleBook(() => [])
   book.accept({ token: 'nifty', timestamp: now, ltp: 100, mode: 1, exchangeType: 1 }, now)
   let saved = 0
-  assert.equal(book.flush(() => { saved++ }, 1), 2)
+  assert.equal(book.flush(() => { saved++ }, 1), 3)
   assert.equal(saved, 1)
   assert.equal(book.flush(() => { saved++ }), 0)
-  assert.equal(saved, 3)
+  assert.equal(saved, 4)
 })
 
 test('memory indicator cache reuses immutable snapshots and invalidates on corrections or candle completion', () => {

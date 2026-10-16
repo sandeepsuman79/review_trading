@@ -1,3 +1,5 @@
+import { useAtmVwap } from '../hooks/useAtmVwap'
+import { analyzeMinuteMonitor, rollingMinuteReviews, minutePlanOpposes, minuteReviewOpposes, type MinuteReview } from '../analysis/minuteMonitor'
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { connectAngelOneOrderStream, connectAngelOneStream, getAngelOneLtp, getAngelOneProfile, getHistoricalCandles, getInstrumentMaster } from '../api/angelOne'
 import { isAngelOneAuthError, recoverAngelOneSession } from '../api/angelOneSession'
@@ -10,7 +12,7 @@ import { candleBucketTime, isFreshTick, normalizeCandles, tickTimestamp } from '
 import { abortableWait, formatHistoricalDate, historyRetryDelay, historySyncRange, prioritizeHistoryJobs } from '../analysis/historySync'
 import { useCompletedCandles } from '../hooks/useCompletedCandles'
 import { LiveCandleBook } from '../analysis/liveCandleBook'
-import { agentInterval, chartIntervals, timeframeInfo } from '../analysis/timeframes'
+import { agentInterval, monitorInterval, historyIntervals, timeframeInfo } from '../analysis/timeframes'
 import { resolveIndiaVixInstrument, type IndiaVixInstrument } from '../analysis/indiaVix'
 import MarketContextPanel from '../components/MarketContextPanel'
 import { useNewsAssessment } from '../hooks/useNewsAssessment'
@@ -30,7 +32,7 @@ import type { IndiaVixSnapshot } from '../api/marketContext'
 import { useInstitutionalFlows } from '../hooks/useInstitutionalFlows'
 import { useGapOutlook } from '../hooks/useGapOutlook'
 import GapOutlookCard from '../components/GapOutlookCard'
-import { commoditySpecs, mcxSession, resolveCommodityContracts, isCommodity, type CommodityContract } from '../analysis/commodities'
+import { commoditySpecs, mcxSession, resolveCommodityContracts, validCommodityContract, isCommodity, type CommodityContract } from '../analysis/commodities'
 
 const CandleChart = lazy(() => import('../components/CandleChart'))
 
@@ -126,15 +128,16 @@ function CommodityContractInfo({ instrument, tick, lastQuote, connected, now }: 
   </div>
 }
 
-function PriceActionAgent({ candles, openingCandles, interval, now, instrument, contract, activeTrade, pendingTrade, tick, activeTick, streamConnected, indiaVix, visible, onLevels, onError, onPrediction, onConfirmation }: { candles: AngelOneCandle[]; openingCandles: AngelOneCandle[]; interval: ChartInterval; now: number; instrument: string; contract?: CommodityContract; activeTrade?: PredictionRecord; pendingTrade?: PredictionRecord; tick?: AngelOneStreamTick; activeTick?: AngelOneStreamTick; streamConnected: boolean; indiaVix?: IndiaVixSnapshot; visible: boolean; onLevels: (instrument: string, support?: number, resistance?: number) => void; onError: (message: string) => void; onPrediction: (plan: PredictionPlan) => void; onConfirmation: (instrument: string, plan: PredictionPlan | undefined, now: number) => void }) {
+function PriceActionAgent({ candles, minuteCandles, trackLevels, onMinuteConfirmation, openingCandles, interval, now, instrument, contract, activeTrade, pendingTrade, tick, activeTick, streamConnected, indiaVix, visible, onLevels, onError, onPrediction, onConfirmation }: { candles: AngelOneCandle[]; minuteCandles: AngelOneCandle[]; trackLevels: boolean; onMinuteConfirmation: (key: string, plan: PredictionPlan | undefined, checkedAt: number, review?: MinuteReview) => void; openingCandles: AngelOneCandle[]; interval: ChartInterval; now: number; instrument: string; contract?: CommodityContract; activeTrade?: PredictionRecord; pendingTrade?: PredictionRecord; tick?: AngelOneStreamTick; activeTick?: AngelOneStreamTick; streamConnected: boolean; indiaVix?: IndiaVixSnapshot; visible: boolean; onLevels: (instrument: string, support?: number, resistance?: number) => void; onError: (message: string) => void; onPrediction: (plan: PredictionPlan) => void; onConfirmation: (instrument: string, plan: PredictionPlan | undefined, now: number) => void }) {
   const commodity = isCommodity(instrument)
+  const instrumentKey = contract?.token ?? instrument
   const market = useMarketContext(instrument)
   useEffect(() => { if (market.error) onError(market.error) }, [market.error, onError])
   const news = useNewsAssessment(market.context, now)
   const { history: flowHistory } = useInstitutionalFlows(market.context?.inputs?.institutional)
   const snapshot = useCompletedCandles(candles, interval, now)
   const analysis: PriceActionAnalysis = useMemo(() => analyzePriceAction(snapshot, interval, Date.now(), instrument), [snapshot, interval, instrument])
-  useEffect(() => onLevels(instrument, analysis.support, analysis.resistance), [instrument, analysis.support, analysis.resistance, onLevels])
+  useEffect(() => { if (trackLevels) onLevels(instrument, analysis.support, analysis.resistance) }, [instrument, analysis.support, analysis.resistance, onLevels, trackLevels])
   const snapshotKey = useMemo(() => JSON.stringify(snapshot), [snapshot])
   const chartCurrent = Boolean(analysis.latestCandleTime && now - Date.parse(analysis.latestCandleTime) <= 2 * intervalMilliseconds(interval))
   const [aiAnalysis, setAiAnalysis] = useState<AiPriceAction | null>(null)
@@ -184,13 +187,24 @@ function PriceActionAgent({ candles, openingCandles, interval, now, instrument, 
   const aiCoolingDown = Boolean(aiStatus?.retryAt && Date.parse(aiStatus.retryAt) > now)
   const aiMessage = aiError || aiStatus?.message || news.message
   const evidence = analyzeTradingEvidence({ analysis, candles: snapshot, interval, instrument, context: displayContext, outlook: news.outlook, indiaVix, flowHistory, now, historicalReference: visible })
+  const atm = useAtmVwap(instrument, tick?.ltp ?? analysis.currentPrice, now, !commodity)
+  const minuteSnapshot = useCompletedCandles(minuteCandles, monitorInterval, now)
+  const minuteBoundary = Math.floor(now / 60_000) * 60_000
+  const minuteReview = useMemo(() => analyzeMinuteMonitor({ candles: minuteSnapshot, instrument, now: Math.max(minuteBoundary, Date.now()), contract, context: displayContext, outlook: news.outlook, indiaVix, flowHistory, optionVwap: atm.data, optionVwapError: atm.error }), [minuteSnapshot, minuteBoundary, instrument, contract, displayContext, news.outlook, indiaVix, flowHistory, atm.data, atm.error])
+  const minuteHistory = useRef<MinuteReview[]>([])
+  minuteHistory.current = rollingMinuteReviews(minuteHistory.current, minuteReview, now)
+  useLayoutEffect(() => {
+    onMinuteConfirmation(instrumentKey, streamConnected && minuteReview.current ? minuteReview.plan : undefined, minuteReview.reviewedAt, streamConnected ? minuteReview : undefined)
+    return () => onMinuteConfirmation(instrumentKey, undefined, minuteReview.reviewedAt)
+  }, [instrumentKey, minuteReview, streamConnected, onMinuteConfirmation])
   const gapOutlook = useGapOutlook(instrument, snapshot, analysis, evidence, now)
   const prediction: EarlyPrediction = buildEarlyPrediction(analysis, instrument, interval, now, displayContext, news.outlook, evidence, contract)
   const signalPlan = 'plan' in prediction ? prediction.plan : undefined
   useLayoutEffect(() => {
-    onConfirmation(instrument, streamConnected && signalPlan?.stage === 'CONFIRMED' ? signalPlan : undefined, now)
-    return () => onConfirmation(instrument, undefined, now)
-  }, [instrument, signalPlan, streamConnected, now, onConfirmation])
+    onConfirmation(instrumentKey, streamConnected && signalPlan?.stage === 'CONFIRMED' ? signalPlan : undefined, now)
+    return () => onConfirmation(instrumentKey, undefined, now)
+  }, [instrumentKey, signalPlan, streamConnected, now, onConfirmation])
+  const minuteEntryPaused = minuteReviewOpposes(signalPlan, minuteReview, now)
   const planRef = useRef(signalPlan)
   planRef.current = signalPlan
   useEffect(() => {
@@ -201,7 +215,7 @@ function PriceActionAgent({ candles, openingCandles, interval, now, instrument, 
   if (!visible) return null
   return (
     <section aria-label="Candle price-action agent" className="price-action-agent">
-      <AgentTradeCard analysis={evidence.selectedAnalysis ?? analysis} evidence={evidence} prediction={prediction} activeTrade={activeTrade} pendingTrade={pendingTrade} instrument={instrument} interval={interval} now={now} tick={activeTrade?.contract ? activeTick : tick} streamConnected={streamConnected} />
+      <AgentTradeCard minuteReview={minuteReview} minuteHistory={minuteHistory.current} minuteEntryPaused={minuteEntryPaused} analysis={evidence.selectedAnalysis ?? analysis} evidence={evidence} prediction={prediction} activeTrade={activeTrade} pendingTrade={pendingTrade} instrument={instrument} interval={interval} now={now} tick={activeTrade?.contract ? activeTick : tick} streamConnected={streamConnected} />
       {!commodity && <GapOutlookCard instrument={instrument} outlook={gapOutlook.outlook} error={gapOutlook.error} now={now} />}
       <MarketContextPanel instrument={instrument} context={displayContext} loading={market.loading} refresh={() => void market.refresh()} outlook={news.outlook} chartCurrent={chartCurrent} analysis={evidence.selectedAnalysis ?? analysis} candles={snapshot} openingCandles={openingCandles} now={now}>
         <section className="agent-analysis-tile agent-ai-tile" aria-label="Gemini AI second opinion">
@@ -251,7 +265,8 @@ export default function PredictionPage() {
   const [commodityMaster, setCommodityMaster] = useState<AngelOneInstrument[]>(readCommodityMaster)
   const [commodityError, setCommodityError] = useState('')
   const [restQuotes, setRestQuotes] = useState<Record<string, { price: number; receivedAt: number }>>({})
-  const commodities = useMemo(() => resolveCommodityContracts(commodityMaster, heartbeat), [commodityMaster, heartbeat])
+  const contractMinute = Math.floor(heartbeat / 60_000) * 60_000
+  const commodities = useMemo(() => resolveCommodityContracts(commodityMaster, contractMinute), [commodityMaster, contractMinute])
   const marketInstruments = useMemo<MarketInstrument[]>(() => [...trackedInstruments, ...commodities], [commodities])
   const instrumentsRef = useRef(marketInstruments)
   instrumentsRef.current = marketInstruments
@@ -294,18 +309,25 @@ export default function PredictionPage() {
   }, [marketInstruments, predictionRecords])
   instrumentsRef.current = monitoredInstruments
   const commodityStreamKey = monitoredInstruments.filter(item => item.exchange === 'MCX').map(item => item.token).sort().join(',')
+  const minuteConfirmations = useRef<Record<string, { plan?: PredictionPlan; checkedAt: number; review?: MinuteReview }>>({})
+  const updateMinuteConfirmation = useCallback((key: string, plan: PredictionPlan | undefined, checkedAt: number, review?: MinuteReview) => { minuteConfirmations.current[key] = { plan, checkedAt, review } }, [])
   const confirmations = useRef<Record<string, { plan?: PredictionPlan; checkedAt: number }>>({})
   const updateConfirmation = useCallback((instrument: string, plan: PredictionPlan | undefined, checkedAt: number) => {
     confirmations.current[instrument] = { plan, checkedAt }
   }, [])
   const getEntryConfirmation = useCallback((record: PredictionRecord) => {
-    const confirmation = confirmations.current[record.instrument]
+    const key = record.contract?.token ?? record.instrument
+    const confirmation = confirmations.current[key], minute = minuteConfirmations.current[key]
+    if (minute && minuteReviewOpposes(confirmation?.plan, minute.review, Date.now())) return undefined
     return confirmation && canEnterConfirmedPrediction(record, confirmation.plan, confirmation.checkedAt, Date.now()) ? confirmation.plan : undefined
   }, [])
   const getReversalConfirmation = useCallback((record: PredictionRecord) => {
-    const confirmation = confirmations.current[record.instrument], now = Date.now()
+    const key = record.contract?.token ?? record.instrument, now = Date.now(), minute = minuteConfirmations.current[key]
+    if (minute && minutePlanOpposes(record, minute.plan, minute.checkedAt, now)) return minute.plan
+    const confirmation = confirmations.current[key]
     return confirmation && now >= confirmation.checkedAt && now - confirmation.checkedAt <= 30_000 ? confirmation.plan : undefined
   }, [])
+  const getMinuteReview = useCallback((record: PredictionRecord) => minuteConfirmations.current[record.contract?.token ?? record.instrument]?.review, [])
   const chartTradeLevels = useMemo(() => Object.fromEntries(predictionRecords.filter(record => record.status === 'ACTIVE' && (!record.contract || marketInstruments.some(item => item.token === record.contract!.token)))
     .map(record => [record.instrument, { entry: record.entryPrice!, target: record.target, stopLoss: record.stopLoss }])), [predictionRecords, marketInstruments])
   const [indiaVixInstrument, setIndiaVixInstrument] = useState<IndiaVixInstrument>()
@@ -323,7 +345,7 @@ export default function PredictionPage() {
     if (!historyStarted.current) return // The initial pass will include cached contracts.
     const queue = historyQueue.current
     if (!queue) { void synchronizeChartHistory(instruments); return }
-    for (const instrument of instruments) for (const interval of chartIntervals) {
+    for (const instrument of instruments) for (const interval of historyIntervals) {
       const key = `${instrument.token}:${interval}`
       if (!queue.scheduled.has(key)) { queue.jobs.push({ token: instrument.token, interval }); queue.scheduled.add(key) }
     }
@@ -349,7 +371,7 @@ export default function PredictionPage() {
     if (!instrument || !Number.isFinite(tickTimestamp(tick))) return
     syncTick(instrument.name, tick, record => {
       return candleBook.get(instrument.token, record.interval)
-    }, Date.now(), getEntryConfirmation, getReversalConfirmation)
+    }, Date.now(), getEntryConfirmation, getReversalConfirmation, getMinuteReview)
   }
   const saveChartCandles = useCallback((limit = Infinity) => {
     try {
@@ -389,8 +411,8 @@ export default function PredictionPage() {
         catch { cache.set(key, []) }
       }
       return { candles: cache.get(key)!, tick: streamTicks[instrument.token] }
-    }, heartbeat, getEntryConfirmation, getReversalConfirmation)
-  }, [heartbeat, streamTicks, chartCandles, agentCandles, chartInterval, candleBook, syncPredictions, getEntryConfirmation, getReversalConfirmation])
+    }, heartbeat, getEntryConfirmation, getReversalConfirmation, getMinuteReview)
+  }, [heartbeat, streamTicks, chartCandles, agentCandles, chartInterval, candleBook, syncPredictions, getEntryConfirmation, getReversalConfirmation, getMinuteReview])
 
   const previousErrors = useRef<string[]>([])
   useEffect(() => {
@@ -494,7 +516,7 @@ export default function PredictionPage() {
     const controller = new AbortController()
     historyController.current = controller
     const request = ++chartRequestRef.current
-    const queue: HistoryQueue = { jobs: chartIntervals.flatMap(interval => requestedInstruments.map(instrument => ({ interval, token: instrument.token }))), scheduled: new Set() }
+    const queue: HistoryQueue = { jobs: historyIntervals.flatMap(interval => requestedInstruments.map(instrument => ({ interval, token: instrument.token }))), scheduled: new Set() }
     for (const job of queue.jobs) queue.scheduled.add(`${job.token}:${job.interval}`)
     historyQueue.current = queue
     historyStarted.current = true
@@ -780,7 +802,7 @@ export default function PredictionPage() {
                 </Suspense>
               </div>
             ))}
-            {marketInstruments.map(instrument => (
+            {monitoredInstruments.map(instrument => (
               <div key={`monitor-${instrument.token}`} hidden={instrument.token !== selectedIndexToken}>
                 <PriceActionAgent
                   key={`agent-${instrument.name}-${instrument.token}`}
@@ -789,8 +811,11 @@ export default function PredictionPage() {
                   onError={showErrorToast}
                   onPrediction={recordPrediction}
                   onConfirmation={updateConfirmation}
+                  onMinuteConfirmation={updateMinuteConfirmation}
+                  trackLevels={marketInstruments.some(item => item.token === instrument.token)}
+                  minuteCandles={candleBook.get(instrument.token, monitorInterval)}
                   instrument={instrument.name}
-                  contract={commodities.find(item => item.token === instrument.token)}
+                  contract={validCommodityContract(instrument, instrument.name) ? instrument : undefined}
                   pendingTrade={predictionRecords.find(record => record.instrument === instrument.name && record.status === 'PENDING')}
                   activeTrade={predictionRecords.find(record => record.instrument === instrument.name && record.status === 'ACTIVE')}
                   tick={streamTicks[instrument.token]}

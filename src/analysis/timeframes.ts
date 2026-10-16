@@ -1,5 +1,7 @@
 export const chartIntervals = ['FIVE_MINUTE', 'FIFTEEN_MINUTE', 'ONE_HOUR'] as const
-// Retain the legacy interval for reading existing trade history and candle caches.
+export const monitorInterval = 'ONE_MINUTE' as const
+export const historyIntervals = ['FIVE_MINUTE', monitorInterval, 'FIFTEEN_MINUTE', 'ONE_HOUR'] as const
+// Includes the background monitor interval; chart selection remains separate.
 export const candleIntervals = ['ONE_MINUTE', ...chartIntervals] as const
 export type CandleInterval = typeof candleIntervals[number]
 export const agentInterval = 'FIVE_MINUTE' as const

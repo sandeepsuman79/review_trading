@@ -761,3 +761,5 @@ button.chart-scale-badge { cursor: pointer; }
 .commodity-contract-info strong { color: var(--text-primary); font-size: 13px; }
 .commodity-contract-info p { margin: 3px 0; }
 .commodity-contract-info small { font-size: 10px; }
+
+.agent-minute-monitor { border: 1px solid var(--border, #e0e2ec); border-radius: 10px; padding: 12px; margin-bottom: 14px; background: var(--bg); }
