@@ -1,17 +1,14 @@
 import { useEffect, useState } from 'react'
-import type { AngelOneCandle } from '../api/angelOne'
-import type { PriceActionAnalysis } from '../analysis/priceAction'
 import type { TradingEvidence } from '../analysis/tradingEvidence'
 import { buildGapOutlook, gapOutlookKey, readGapOutlook, type GapOutlook } from '../analysis/gapOutlook'
-import { gapOutlookMinute, tradingSession } from '../analysis/tradingSession'
 
-export function useGapOutlook(instrument: string, candles: AngelOneCandle[], analysis: PriceActionAnalysis, evidence: TradingEvidence, now: number) {
-  const [outlook, setOutlook] = useState<GapOutlook>()
-  const [error, setError] = useState('')
+export function useGapOutlook(instrument: string, evidence: TradingEvidence, now: number) {
+  const [state, setState] = useState<{ instrument: string; outlook?: GapOutlook; error: string }>({ instrument, error: '' })
+  const minute = Math.floor(now / 60000)
   useEffect(() => {
     const load = () => {
-      try { setOutlook(readGapOutlook(localStorage, instrument)); setError('') }
-      catch { setError('Saved outlook could not be read. Existing data was preserved.') }
+      try { setState({ instrument, outlook: readGapOutlook(localStorage, instrument), error: '' }) }
+      catch { setState({ instrument, error: 'Saved outlook could not be read. Existing data was preserved.' }) }
     }
     load()
     const receive = (event: StorageEvent) => { if (event.storageArea === localStorage && (event.key === gapOutlookKey(instrument) || event.key === null)) load() }
@@ -19,16 +16,14 @@ export function useGapOutlook(instrument: string, candles: AngelOneCandle[], ana
     return () => window.removeEventListener('storage', receive)
   }, [instrument])
   useEffect(() => {
-    const session = tradingSession(now)
-    if (!session.weekday || session.minute !== gapOutlookMinute || outlook?.session === session.date) return
-    const next = buildGapOutlook(instrument, candles, analysis, evidence, now)
+    const next = buildGapOutlook(instrument, evidence, minute * 60000)
     if (!next) return
     try {
       const saved = readGapOutlook(localStorage, instrument)
-      if (saved?.session === next.session) { setOutlook(saved); return }
+      if (saved && saved.generatedAt > next.generatedAt) return
       localStorage.setItem(gapOutlookKey(instrument), JSON.stringify(next))
-      setOutlook(next); setError('')
-    } catch { setError('The 15:00 outlook could not be saved. Existing data was preserved.') }
-  }, [instrument, candles, analysis, evidence, now, outlook?.session])
-  return { outlook, error }
+      setState({ instrument, outlook: next, error: '' })
+    } catch { setState(previous => ({ ...previous, error: 'The updated gap outlook could not be saved. Existing data was preserved.' })) }
+  }, [instrument, evidence, minute])
+  return state.instrument === instrument ? state : { outlook: undefined, error: '' }
 }

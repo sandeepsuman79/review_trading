@@ -1,3 +1,4 @@
+import { indicatorSwingEvidence } from './indicatorSwingStructure'
 import type { AngelOneCandle } from '../api/angelOne'
 import type { MovingAveragePoint } from './movingAverages'
 import type { TechnicalIndicatorPoint } from './technicalIndicators'
@@ -20,6 +21,7 @@ export function analyzeDirectionalAlignment(candles: AngelOneCandle[], averages:
   const atr = point.atr14!, noise = .03 * atr, buffer = Math.max(.05 * atr, current[4] * .00003)
   const add = (family: AlignmentRoute['family'], side: AlignmentRoute['side'], name: string, level?: number) => result.routes.push({ family, side, name, ...(level === undefined ? {} : { level }) })
   const finite = (value: number | undefined): value is number => value !== undefined && Number.isFinite(value)
+  const swings = indicatorSwingEvidence(candles, averages, indicators, candleIntervalMs(interval))
   for (const d of [1, -1] as const) {
     const side = d === 1 ? 'CALL' : 'PUT', direction = d === 1 ? 'up' : 'down'
     if ([avg.ema20, avg.ema50, old.ema20, old.ema50].every(finite)) {
@@ -39,6 +41,16 @@ export function analyzeDirectionalAlignment(candles: AngelOneCandle[], averages:
       if (d * before < -noise && d * after > noise && d * (current[4] - avg.ema20) > buffer && d * (current[4] - current[1]) > buffer && d * (current[4] - priceBreak) > buffer && d * (point.rsi14 - prior.rsi14) > 0) {
         add('EMA', side, `EMA20 turned ${direction} with price break and RSI momentum`)
       }
+    }
+    const reversalDirection = d === 1 ? 'UP' : 'DOWN'
+    const matchingSwings = swings.filter(item => item.structure.breakDirection === reversalDirection && item.change !== undefined && item.change * d > 0)
+    const emaBreak = matchingSwings.some(item => item.name === 'EMA20' || item.name === 'EMA50')
+    const momentumBreak = matchingSwings.some(item => item.name === 'RSI' || item.name === 'Supertrend cushion')
+    const freshBreak = matchingSwings.some(item => item.structure.newBreak)
+    const priceBreak = d === 1 ? previous[2] : previous[3]
+    if (sameBars(6) && emaBreak && momentumBreak && freshBreak && finite(avg.ema20) && finite(point.rsi14) && finite(prior.rsi14)
+      && d * (current[4] - priceBreak) > buffer && d * (current[4] - current[1]) > buffer && d * (current[4] - avg.ema20) > buffer && d * (point.rsi14 - prior.rsi14) > 0) {
+      add('EMA', side, `Indicator swing reversal ${direction}: ${matchingSwings.map(item => item.name).join(' + ')} with completed price break`)
     }
     const trendDirection = d === 1 ? 'UP' : 'DOWN'
     if (point.supertrendDirection === trendDirection && finite(point.supertrend10) && d * (current[4] - point.supertrend10) > 0) {

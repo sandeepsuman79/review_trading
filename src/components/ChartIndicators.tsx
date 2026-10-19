@@ -1,3 +1,4 @@
+import { atmVwapBias, type AtmVwapSnapshot } from '../api/atmVwap'
 import type { MovingAveragePoint } from '../analysis/movingAverages'
 import type { TechnicalIndicatorPoint } from '../analysis/technicalIndicators'
 import type { IndiaVixSnapshot } from '../api/marketContext'
@@ -15,9 +16,10 @@ const controls: Array<{ key: ChartIndicator; label: string; color: string }> = [
 ]
 const number = (value?: number) => value === undefined ? '—' : value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-export default function ChartIndicators({ visibility, onToggle, average, technical, vwap, hasVwap, spotIndex, showIndexContext = true, showTradeContext = showIndexContext, close, context, trade, indiaVix, indiaVixLoading, now }: {
+export default function ChartIndicators({ visibility, onToggle, average, technical, atmVwap, atmVwapError, vwap, hasVwap, spotIndex, showIndexContext = true, showTradeContext = showIndexContext, close, context, trade, indiaVix, indiaVixLoading, now }: {
   visibility: ChartIndicatorVisibility; onToggle: (key: ChartIndicator) => void;
   average: MovingAveragePoint; technical: TechnicalIndicatorPoint; vwap?: number;
+  atmVwap?: AtmVwapSnapshot; atmVwapError?: string;
   hasVwap: boolean; spotIndex: boolean; showIndexContext?: boolean; showTradeContext?: boolean; close: number; context: string; trade?: ChartTradeLevels;
   indiaVix?: IndiaVixSnapshot; indiaVixLoading?: boolean; now: number
 }) {
@@ -35,8 +37,8 @@ export default function ChartIndicators({ visibility, onToggle, average, technic
     <div className="chart-indicator-controls" role="group" aria-label="Chart indicator visibility">
       <span className="chart-indicator-controls-label">Indicators <small>(tap to show/hide)</small></span>
       {controls.map(control => <button key={control.key} type="button" aria-pressed={visibility[control.key] && (control.key !== 'vwap' || hasVwap)} disabled={control.key === 'vwap' && !hasVwap}
-        onClick={() => onToggle(control.key)} title={control.key === 'vwap' && !hasVwap ? spotIndex ? 'VWAP needs traded candle volume. These spot-index candles have zero volume, so a genuine VWAP cannot be calculated.' : 'VWAP needs traded candle volume. Waiting for historical or observed volume.' : `${visibility[control.key] ? 'Hide' : 'Show'} ${control.label}`}>
-        <i aria-hidden="true" style={{ background: control.color }} />{control.label}{control.key === 'vwap' && !hasVwap && <small>N/A</small>}
+        onClick={() => onToggle(control.key)} title={control.key === 'vwap' && !hasVwap ? spotIndex ? 'ATM CE/PE VWAP is shown below in option premium units.' : 'VWAP needs traded candle volume. Waiting for historical or observed volume.' : `${visibility[control.key] ? 'Hide' : 'Show'} ${control.label}`}>
+        <i aria-hidden="true" style={{ background: control.color }} />{control.label}{control.key === 'vwap' && !hasVwap && <small>{spotIndex ? 'ATM' : 'N/A'}</small>}
       </button>)}
     </div>
     {showTradeContext && <div className="chart-trade-legend" aria-label="Trade level legend">
@@ -45,10 +47,14 @@ export default function ChartIndicators({ visibility, onToggle, average, technic
     </div>}
     <div className="chart-indicator-context">{context}</div>
     <div className="chart-indicator-metrics" role="region" aria-label="Chart indicator values" tabIndex={0}>
-      <div className="chart-indicator-metric" aria-label="VWAP indicator">
+      {spotIndex ? <div className="chart-indicator-metric" aria-label="VWAP indicator">
+        <span className="chart-indicator-metric-title">ATM VWAP · CE / PE</span>
+        <strong>{atmVwap ? `${number(atmVwap.ce.vwap ?? undefined)} / ${number(atmVwap.pe.vwap ?? undefined)}` : atmVwapError ? 'Unavailable' : 'Loading…'}</strong>
+        <small>{atmVwap ? `Strike ${atmVwap.strike.toLocaleString('en-IN')} · ${atmVwap.expiry} · ${atmVwapBias(atmVwap, atmVwap.index, close, now)?.toLowerCase() ?? 'Data not current or incomplete'}` : atmVwapError || 'Waiting for ATM option candles'}</small>
+      </div> : <div className="chart-indicator-metric" aria-label="VWAP indicator">
         <span className="chart-indicator-metric-title">VWAP</span><strong>{vwap === undefined ? 'Unavailable' : number(vwap)}</strong>
-        <small className={`indicator-${vwapPosition}`}>{vwap === undefined ? spotIndex ? 'Spot index has no traded volume' : 'Waiting for candle volume' : close > vwap ? 'Price above' : close < vwap ? 'Price below' : 'Price at VWAP'}</small>
-      </div>
+        <small className={`indicator-${vwapPosition}`}>{vwap === undefined ? 'Waiting for candle volume' : close > vwap ? 'Price above' : close < vwap ? 'Price below' : 'Price at VWAP'}</small>
+      </div>}
       <div className="chart-indicator-metric" aria-label="EMA 20 and 50 indicators">
         <span className="chart-indicator-metric-title">EMA 20 / 50</span>
         <strong className="indicator-ema-values"><span><small>20</small>{number(average.ema20)}</span><span><small>50</small>{number(average.ema50)}</span></strong>

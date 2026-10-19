@@ -40,3 +40,38 @@ test('network failures do not break later queued requests', async () => {
   assert.equal((await request('url', 'Bearer a', {}, {})).status, 502)
   assert.equal((await request('url', 'Bearer a', {}, {})).body.status, true)
 })
+
+
+test('plain-text broker rate limits pause the queue and retry without losing the throttle message', async () => {
+  let clock = 0, calls = 0
+  const request = createHistoricalProxy({ now: () => clock, wait: async ms => { clock += ms }, fetchImpl: async () => {
+    calls++
+    return calls === 1 ? new Response('Access denied because of exceeding access rate', { status: 429 }) : Response.json({ status: true, data: [[1]] })
+  } })
+  const result = await request('url', 'Bearer a', {}, {})
+  assert.equal(result.body.status, true)
+  assert.equal(calls, 2)
+  assert.equal(clock, 15000)
+})
+
+test('temporary HTML responses retry once and persistent invalid JSON returns a gateway error', async () => {
+  for (const recover of [true, false]) {
+    let clock = 0, calls = 0
+    const request = createHistoricalProxy({ now: () => clock, wait: async ms => { clock += ms }, fetchImpl: async () => {
+      calls++
+      return recover && calls === 2 ? Response.json({ status: true, data: [[1]] }) : new Response('<html>Service unavailable</html>')
+    } })
+    const result = await request('url', 'Bearer a', {}, {})
+    assert.equal(calls, 2)
+    assert.equal(result.status, recover ? 200 : 502)
+    assert.equal(result.body.status, recover)
+  }
+})
+
+test('non-JSON authentication failures are not retried or relabelled as temporary failures', async () => {
+  let calls = 0
+  const request = createHistoricalProxy({ fetchImpl: async () => { calls++; return new Response('Unauthorized', { status: 401 }) } })
+  const result = await request('url', 'Bearer a', {}, {})
+  assert.equal(result.status, 401)
+  assert.equal(calls, 1)
+})

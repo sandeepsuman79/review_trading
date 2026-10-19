@@ -56,7 +56,7 @@ test('cutoff replay preserves pre-cutoff stops and excludes later candle profits
   const delayed = syncPredictionRecord(record,[bar(-120000),bar(-60000),bar(0,99,130)],tick(cutoff+60000,105),cutoff+60000,false)
   assert.equal(delayed.status,'EARLY_EXIT');assert.equal(delayed.earlyExitSource,'SESSION_SQUARE_OFF');assert.equal(delayed.exitAt,cutoff+60000);assert.equal(delayed.points,5)
   const gap = syncPredictionRecord(record,[],tick(cutoff+60000,105),cutoff+60000,false)
-  assert.equal(gap.status,'UNVERIFIED');assert.equal(gap.points,undefined)
+  assert.equal(gap.status,'ACTIVE');assert.equal(gap.points,undefined);assert.match(gap.outcomeNote,/Recovering/)
 })
 
 function outlookFixture(d = 1, instrument = 'Nifty 50', date = '2026-10-15') {
@@ -66,30 +66,70 @@ function outlookFixture(d = 1, instrument = 'Nifty 50', date = '2026-10-15') {
     checks: [{ label: 'Indicator warmup', passed: true }], missing: ['Spot-index VWAP unavailable'], sentiment: { bias: d === 1 ? 'BULLISH' : 'BEARISH', bullishScore: d === 1 ? 65 : 10, bearishScore: d === -1 ? 65 : 10, coverage: 80, missing: [] } }
   return { now, candles, analysis, evidence, instrument }
 }
-const build = x => buildGapOutlook(x.instrument, x.candles, x.analysis, x.evidence, x.now)
-test('15:00 gap outlook supports all indices, mirrors direction and never claims a probability', () => {
-  for (const instrument of ['Nifty 50', 'Sensex', 'Bank Nifty']) for (const d of [1,-1]) {
-    const input = outlookFixture(d, instrument), result = build(input)
-    assert.equal(result.bias, d === 1 ? 'GAP_UP_BIAS' : 'GAP_DOWN_BIAS');assert.equal(result.evidenceScore, 58*d);assert.equal(result.referencePrice, input.candles.at(-1)[4]);assert.equal(result.generatedAt, input.now)
-    assert.equal(result.probability, undefined)
-    const memory = new Map([[gapOutlookKey(instrument), JSON.stringify(result)]]), storage = { getItem: key => memory.get(key) ?? null }
-    assert.deepEqual(readGapOutlook(storage,instrument),result)
-  }
+const build = x => buildGapOutlook(x.instrument, x.evidence, x.now)
+test('external gap outlook supports all indices without a completed index chart', () => {
+ for (const instrument of ['Nifty 50','Sensex','Bank Nifty']) for (const d of [1,-1]) {
+  const input=outlookFixture(d,instrument)
+  const result=build({...input,candles:[],analysis:{},evidence:{...input.evidence,interval:'ONE_HOUR',coverage:0,asOf:undefined,checks:[]}})
+  assert.equal(result.bias,d===1?'GAP_UP_BIAS':'GAP_DOWN_BIAS');assert.equal(result.evidenceScore,55*d)
+  assert.equal(result.referencePrice,undefined);assert.equal(result.technicalLead,0);assert.equal(result.probability,undefined)
+  assert.deepEqual(readGapOutlook({getItem:()=>JSON.stringify(result)},instrument),result)
+ }
+})
+test('late login, evening and overnight updates use current external evidence', () => {
+ const input=outlookFixture()
+ for (const clock of ['15:00:00','15:01:00','16:00:00','22:00:00']) {
+  const result=build({...input,candles:[],analysis:{},now:at(clock)})
+  assert(result);assert.equal(result.generatedAt,at(clock));assert.equal(Date.parse(result.asOf),at(clock))
+ }
+ const down=build({...input,now:at('22:00:00'),evidence:{...input.evidence,sentiment:{...input.evidence.sentiment,bias:'BEARISH',bullishScore:10,bearishScore:65}}})
+ assert.equal(down.bias,'GAP_DOWN_BIAS');assert.equal(down.evidenceScore,-55)
+ const overnight=build({...input,now:at('08:00:00','2026-10-16')})
+ assert(overnight);assert.equal(overnight.session,'2026-10-15');assert.equal(overnight.expiresAt,at('09:15:00','2026-10-16'))
+ assert.equal(build({...input,now:at('14:59:59')}),undefined)
+ assert.equal(build({...input,now:at('09:15:00','2026-10-16')}),undefined)
+ assert.equal(build({...input,now:at('10:00:00','2026-10-16')}),undefined)
+})
+test('Friday outlook updates through the weekend and exposes global, GIFT, flow and news evidence', () => {
+ const input=outlookFixture(1,'Nifty 50','2026-10-16')
+ input.evidence.sentiment.layers=[{name:'Global / GIFT Nifty',bullish:20,bearish:0,coverage:.8,details:['GIFT Nifty observed now']},{name:'FII / DII',bullish:10,bearish:0,coverage:1,details:['Latest published flows']},{name:'News',bullish:20,bearish:0,coverage:1,details:['New event assessed']}]
+ const result=build({...input,now:at('20:00:00','2026-10-18')})
+ assert(result);assert.equal(result.expiresAt,at('09:15:00','2026-10-19'))
+ for (const text of ['GIFT Nifty observed now','Latest published flows','New event assessed']) assert(result.reasons.some(r=>r.includes(text)))
+ assert.equal(build({...input,now:at('09:15:00','2026-10-19')}),undefined)
+ assert.throws(()=>readGapOutlook({getItem:()=>JSON.stringify({...result,expiresAt:result.expiresAt+60000})},input.instrument))
+})
+test('missing external evidence cannot be replaced by bullish index technicals', () => {
+ const input=outlookFixture()
+ const result=build({...input,evidence:{...input.evidence,bullishScore:100,bearishScore:0,sentiment:{...input.evidence.sentiment,bias:'UNAVAILABLE',coverage:0,bullishScore:0,bearishScore:0,missing:['Unavailable news and global inputs']}}})
+ assert.equal(result.bias,'MIXED');assert.equal(result.coverage,0);assert.equal(result.evidenceScore,0);assert(result.missing.includes('Unavailable news and global inputs'))
+ assert.equal(build({...input,evidence:{...input.evidence,sentiment:{...input.evidence.sentiment,bullishScore:NaN}}}),undefined)
+ for (const raw of ['bad json',JSON.stringify({...result,referencePrice:-1}),JSON.stringify({...result,generatedAt:result.generatedAt-60000})]) assert.throws(()=>readGapOutlook({getItem:()=>raw},input.instrument))
+})
+test('legacy one- and five-minute pre-close snapshots remain readable', () => {
+ const input=outlookFixture()
+ for (const duration of [60000,300000]) {
+  const legacy={version:1,instrument:input.instrument,session:'2026-10-15',generatedAt:input.now,asOf:new Date(input.now-duration).toISOString(),bias:'GAP_UP_BIAS',evidenceScore:58,coverage:83,referencePrice:22000,technicalLead:60,sentimentLead:55,reasons:[],missing:[]}
+  assert.deepEqual(readGapOutlook({getItem:()=>JSON.stringify(legacy)},input.instrument),legacy)
+ }
 })
 
-test('gap snapshots cannot use future, forming, gapped, unwarmed or late data or run on weekends', () => {
-  for (const time of ['14:59:59','15:01:00','16:00:00']) { const input = outlookFixture();input.now = at(time);assert.equal(build(input), undefined) }
-  for (const date of ['2026-10-17','2026-10-18']) assert.equal(build(outlookFixture(1,'Nifty 50',date)), undefined)
-  for (const mutate of [x => x.candles.pop(), x => x.candles.splice(-3,1), x => x.evidence.coverage = 69, x => x.evidence.checks[0].passed = false, x => x.evidence.interval = 'ONE_MINUTE', x => x.analysis.latestCandleTime = new Date(x.now).toISOString()]) { const input = outlookFixture();mutate(input);assert.equal(build(input), undefined) }
-})
-
-test('missing sentiment produces a mixed outlook with missing coverage retained; malformed storage is preserved', () => {
-  const input = outlookFixture();input.evidence.sentiment = { ...input.evidence.sentiment, bias: 'UNAVAILABLE', coverage: 0, bullishScore: 0, bearishScore: 0, missing: ['Unavailable news and global inputs'] }
-  const result = build(input);assert.equal(result.bias,'MIXED');assert.equal(result.coverage,51);assert(result.missing.includes('Unavailable news and global inputs'))
-  for (const raw of ['bad json', JSON.stringify({ ...result, generatedAt: result.generatedAt + 60000 }), JSON.stringify({ ...result, referencePrice: -1 })]) assert.throws(() => readGapOutlook({ getItem: () => raw },input.instrument))
-})
-
-test('previous one-minute outlook snapshots remain readable after switching agent analysis',()=>{
- const input=outlookFixture(),result=build(input),legacy={...result,asOf:new Date(input.now-60000).toISOString()}
- assert.deepEqual(readGapOutlook({getItem:()=>JSON.stringify(legacy)},input.instrument),legacy)
+test('after-close sentiment pipeline assesses fresh flows, news and global/GIFT quotes with no chart bars', () => {
+ const { analyzeTradingEvidence } = require('../src/analysis/tradingEvidence.ts')
+ const markets = require('../src/data/globalMarkets.json')
+ const now=at('22:00:00'), stamp=new Date(now).toISOString()
+ const snap=data=>({status:'AVAILABLE',fetchedAt:stamp,data})
+ const articles=[{id:'event',title:'New overnight market event',publishedAt:stamp,publisher:'Fixture',url:'https://example.com/event',category:'india',matchedCompanies:[]}]
+ function assess(d) {
+  const context={instrument:'Nifty 50',revision:'late-event',retrievedAt:stamp,articles,feeds:[{category:'india',status:'AVAILABLE'}],constituents:{status:'AVAILABLE'},inputs:{
+   institutional:snap({asOf:stamp,unit:'INR_CRORE',fiiCash:d*2000,diiCash:d*1000,netFlow:d*3000}),
+   global:markets.filter(m=>m.provider!=='nse').map(m=>({...snap({symbol:m.symbol,price:100,changePercent:d*m.indiaSign,asOf:stamp}),name:m.name})),
+   giftNifty:snap({symbol:'GIFT_NIFTY',price:22000,changePercent:d,asOf:stamp})}}
+  const outlook={contextRevision:context.revision,articleSentiments:[{articleId:'event',sentiment:d===1?'POSITIVE':'NEGATIVE',impactScore:d*2}],evidenceIds:['event']}
+  const analysis={side:'WAIT',pattern:'NO_CONFIRMED_PATTERN',bullishEvidence:[],bearishEvidence:[],analyzedCandles:0}
+  const evidence=analyzeTradingEvidence({analysis,candles:[],interval:'FIVE_MINUTE',instrument:'Nifty 50',now,context,outlook})
+  return buildGapOutlook('Nifty 50',evidence,now)
+ }
+ assert.equal(assess(1).bias,'GAP_UP_BIAS');assert.equal(assess(-1).bias,'GAP_DOWN_BIAS')
+ assert(assess(1).reasons.some(r=>r.includes('GIFT Nifty')))
 })

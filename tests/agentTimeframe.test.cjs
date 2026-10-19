@@ -19,16 +19,16 @@ function assess(candles) {
   return { now, analysis, evidence, prediction: buildEarlyPrediction(analysis, 'Nifty 50', 'FIVE_MINUTE', now, undefined, undefined, evidence) }
 }
 
-test('private minute monitoring preserves tick extremes while five-minute entry analysis waits for the completed candle without losing tick extremes', () => {
+test('only 5/15/60 candles are maintained with a 5-minute default while tick extremes remain intact', () => {
   const { chartIntervals, historyIntervals, agentInterval } = require('../src/analysis/timeframes.ts')
   assert.deepEqual(chartIntervals, ['FIVE_MINUTE', 'FIFTEEN_MINUTE', 'ONE_HOUR']); assert.equal(agentInterval, 'FIVE_MINUTE')
   const book = new LiveCandleBook(() => [])
   for (const [offset, price] of [[1000,100],[2000,110],[3000,90],[61000,105],[65000,108]]) book.accept(tick(start + offset, price), start + offset)
-  const five = book.get('99926000', agentInterval)
-  assert.deepEqual(five[0].slice(1, 5), [100,110,90,108]); assert.equal(completedCandles(five, agentInterval, start + 299999).length, 0)
-  assert.equal(completedCandles(five, agentInterval, start + 300000).length, 1)
+  const five = book.get('99926000', 'FIVE_MINUTE')
+  assert.deepEqual(five[0].slice(1, 5), [100,110,90,108]); assert.equal(completedCandles(five, 'FIVE_MINUTE', start + 299999).length, 0)
+  assert.equal(completedCandles(five, 'FIVE_MINUTE', start + 300000).length, 1)
   const writes=[];book.flush((_token, interval)=>writes.push(interval));assert.deepEqual(writes, historyIntervals)
-  assert.equal(book.get('99926000', 'ONE_MINUTE').length, 2)
+  assert.equal(book.get('99926000', 'ONE_MINUTE').length, 0)
 })
 
 test('real five-minute CALL and PUT candidates independently reach full confirmation', () => {
@@ -41,6 +41,13 @@ test('real five-minute CALL and PUT candidates independently reach full confirma
   }
 })
 
+test('a direct one-minute request cannot produce a new setup from otherwise qualifying evidence', () => {
+  const { analysis, evidence, now } = assess(fixture(1))
+  const prediction = buildEarlyPrediction(analysis, 'Nifty 50', 'ONE_MINUTE', now, undefined, undefined, { ...evidence, interval: 'ONE_MINUTE' })
+  assert.equal(prediction.side, 'WAIT'); assert.equal(prediction.plan, undefined)
+  assert.match(prediction.reason, /One-minute strategy analysis is disabled/)
+})
+
 test('rising-then-falling and falling-then-rising OHLC produce opposite five-minute confirmations with explicit rejection reasons beforehand', () => {
   for (const d of [1,-1]) {
     const candles=[]; let price=22000, confirmed=false, waiting=false
@@ -50,7 +57,7 @@ test('rising-then-falling and falling-then-rising OHLC produce opposite five-min
       if(i<80)continue
       const { evidence }=assess(candles), side=d===1?'PUT':'CALL', decision=evidence.decisions.find(item=>item.side===side)
       if(decision.state!=='CONFIRMED'){waiting=true;assert(decision.reasons.length>0)}
-      if(evidence.canConfirm && evidence.selectedAnalysis.side===side){confirmed=true;assert(decision.supportScore>=55);assert(decision.lead>=15);break}
+      if(evidence.canConfirm && evidence.selectedAnalysis.side===side){confirmed=true;assert(decision.supportScore>0&&decision.supportScore>=1.5*decision.opposingScore);break}
     }
     assert(waiting,'a first reverse candle does not manufacture confirmation');assert(confirmed,'opposite direction must be eligible after technical confirmation')
   }
@@ -67,7 +74,7 @@ test('intraday tops at different prices and times can independently develop conf
       if(i<topBar)continue
       const now=scenarioTime(i)+300000,analysis=analyzePriceAction(candles,'FIVE_MINUTE',now)
       const evidence=analyzeTradingEvidence({analysis,candles,instrument,interval:'FIVE_MINUTE',now})
-      if(evidence.canConfirm && evidence.selectedAnalysis.side==='PUT'){confirmed=true;assert(evidence.bearishScore>=55);assert(evidence.checks.every(check=>check.passed));break}
+      if(evidence.canConfirm && evidence.selectedAnalysis.side==='PUT'){confirmed=true;assert(evidence.bearishScore>0&&evidence.bearishScore>=1.5*evidence.bullishScore);assert(evidence.checks.every(check=>check.passed));break}
     }
     assert(confirmed,instrument+' must support PUT confirmation after a qualified completed reversal')
   }
@@ -92,7 +99,7 @@ test('five-minute opening range requires all three opening bars and mirrors CALL
   }
 })
 
-test('five-minute history is prioritized independently of the viewed chart and respects request limits', () => {
+test('default 5-minute history is prioritized independently of the viewed chart and respects request limits', () => {
   const { chartIntervals } = require('../src/analysis/timeframes.ts')
   const jobs=chartIntervals.flatMap(interval=>['nifty','sensex','bank'].map(token=>({token,interval})))
   const sorted=prioritizeHistoryJobs(jobs,'sensex','FIFTEEN_MINUTE')

@@ -1,12 +1,16 @@
 import type { AngelOneCandle } from '../api/angelOne'
 import type { PriceActionInterval } from './priceAction'
 import { candleIntervalMs, normalizeCandles } from './candleData'
-import { agentInterval, monitorInterval, timeframeInfo } from './timeframes'
+import { defaultChartInterval, timeframeInfo } from './timeframes'
 
 export type HistoryJob = { token: string; interval: PriceActionInterval }
 export function prioritizeHistoryJobs<T extends HistoryJob>(jobs: T[], token: string, interval: PriceActionInterval, agentFirst = true) {
   return [...jobs].sort((a, b) => {
-    const priority = (job: HistoryJob) => job.token === token ? job.interval === (agentFirst ? agentInterval : interval) ? 0 : job.interval === monitorInterval ? 1 : job.interval === (agentFirst ? interval : agentInterval) ? 2 : 3 : job.interval === agentInterval ? 4 : job.interval === monitorInterval ? 5 : job.interval === interval ? 6 : 7
+    const priority = (job: HistoryJob) => {
+      const order = [...new Set([agentFirst ? defaultChartInterval : interval, interval, 'FIVE_MINUTE', 'ONE_HOUR'])]
+      const rank = order.indexOf(job.interval)
+      return (job.token === token ? 0 : 10) + (rank < 0 ? order.length : rank)
+    }
     return priority(a) - priority(b)
   })
 }

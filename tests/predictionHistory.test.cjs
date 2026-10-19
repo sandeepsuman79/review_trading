@@ -163,20 +163,20 @@ test('known opening gap resolves before later ambiguous high/low', () => {
   assert.equal(loss.status, 'STOP_LOSS_HIT'); assert.equal(loss.points, -13)
 })
 
-test('missing or partial periods become unverified instead of retroactive wins', () => {
+test('missing history waits for recovery without fabricating fills', () => {
   for (const item of [record(), { ...record(), observedThrough: now + 1000 }]) {
     const result = observePredictionCandles(item, [bar(now + duration, 110, 125, 105)], now + 2 * duration)
-    assert.equal(result.status, 'UNVERIFIED'); assert.equal(result.points, undefined)
+    assert.equal(result.status, item.status); assert.equal(result.points, undefined)
   }
   const partial = { ...record(), generatedAt: now + 1000, observedThrough: now + 1000 }
-  assert.equal(observePredictionCandles(partial, [bar(now, 100, 125, 95)], now + duration).status, 'UNVERIFIED')
+  assert.equal(observePredictionCandles(partial, [bar(now, 100, 125, 95)], now + duration).status, partial.status)
 })
 
 test('reconnect quote cannot hide a missing stop even when no candle coverage is available', () => {
   const active = observePredictionTick(record(), 100, now + 1000)
   const late = { timestamp: now + 40000, ltp: 125 }
   const result = syncPredictionRecord(active, [], late, now + 40000)
-  assert.equal(result.status, 'UNVERIFIED'); assert.equal(result.points, undefined)
+  assert.equal(result.status, 'ACTIVE'); assert.equal(result.points, undefined)
   const current = syncPredictionRecord(active, [], { timestamp: now + 2000, ltp: 120 }, now + 2000)
   assert.equal(current.status, 'TARGET_HIT')
 })
@@ -337,11 +337,12 @@ test('target, stop and agent exit events carry index, direction and booked resul
   assert.deepEqual(predictionEvents([pending], [expired]), [])
 })
 
-test('candle replay that enters and exits in one sync announces both events', () => {
+test('candle replay that enters and exits in one sync announces only its recorded outcome', () => {
   const pending = record()
   const terminal = observePredictionCandles(pending, [bar(now, 100, 121, 99)], now + duration)
   assert.equal(terminal.status, 'TARGET_HIT')
-  assert.deepEqual(predictionEvents([pending], [terminal]).map(event => event.reason), ['Confirm call · Entry reached', 'Target achieved · Exit'])
+  assert.equal(terminal.entrySource, 'CANDLE')
+  assert.deepEqual(predictionEvents([pending], [terminal]).map(event => event.reason), ['Recorded outcome · Target achieved · Exit'])
 })
 
 test('Live and Done status include pending calls and all terminal outcomes', () => {

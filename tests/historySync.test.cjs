@@ -9,7 +9,7 @@ const { cachedCandleIndicators } = require('../src/analysis/candleIndicatorCache
 const now = Date.parse('2026-10-14T11:00:00Z')
 
 test('active index/timeframe has priority and changing selection reorders only pending jobs', () => {
-  const jobs = ['FIVE_MINUTE', 'FIFTEEN_MINUTE', 'ONE_HOUR'].flatMap(interval => ['nifty', 'sensex', 'bank'].map(token => ({ token, interval, cursor: 123 })))
+  const jobs = ['FIFTEEN_MINUTE', 'FIVE_MINUTE', 'ONE_HOUR'].flatMap(interval => ['nifty', 'sensex', 'bank'].map(token => ({ token, interval, cursor: 123 })))
   const ordered = prioritizeHistoryJobs(jobs, 'bank', 'ONE_HOUR')
   assert.equal(ordered[0].token, 'bank'); assert.equal(ordered[0].interval, 'FIVE_MINUTE'); assert.equal(ordered[1].interval, 'ONE_HOUR'); assert.equal(ordered[0].cursor, 123)
   assert.deepEqual(ordered.slice(0, 3).map(job => job.token), ['bank', 'bank', 'bank'])
@@ -123,10 +123,10 @@ test('idle persistence saves one dirty timeframe without dropping unsaved data',
   const book = new LiveCandleBook(() => [])
   book.accept({ token: 'nifty', timestamp: now, ltp: 100, mode: 1, exchangeType: 1 }, now)
   let saved = 0
-  assert.equal(book.flush(() => { saved++ }, 1), 3)
+  assert.equal(book.flush(() => { saved++ }, 1), 2)
   assert.equal(saved, 1)
   assert.equal(book.flush(() => { saved++ }), 0)
-  assert.equal(saved, 4)
+  assert.equal(saved, 3)
 })
 
 test('memory indicator cache reuses immutable snapshots and invalidates on corrections or candle completion', () => {

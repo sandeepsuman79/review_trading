@@ -173,8 +173,8 @@ test('previous-session OI and VIX cannot masquerade as current intraday confirma
   assert.equal(result.indiaVix, undefined)
 })
 
-test('a real-volume session enables VWAP while missing volume never creates a substitute', () => {
-  const input = fixture(), absent = analyzeTradingEvidence(input)
+test('a real-volume futures session enables VWAP while missing volume never creates a substitute', () => {
+  const input = fixture(1, 'Gold'), absent = analyzeTradingEvidence(input)
   assert.equal(absent.vwap, undefined)
   const real = analyzeTradingEvidence({ ...input, candles: input.candles.map(candle => [...candle.slice(0, 5), 100]) })
   assert(real.vwap > 0)
@@ -383,3 +383,21 @@ test('full CALL and PUT confirmation accepts one route family despite other indi
     assert.equal(prediction.plan.stage,'CONFIRMED');assert.equal(prediction.plan.side,side)
   }
 })
+
+ test('ATM CE/PE supplies the technical VWAP allocation for every index and rejects stale or partial legs', () => {
+  for (const instrument of ['Nifty 50', 'Sensex', 'Bank Nifty']) for (const direction of [1, -1]) {
+    const input = fixture(direction, instrument)
+    const leg = close => ({ symbol: 'fixture', token: '1', exchange: 'NFO', close, vwap: 100, volume: 100, asOf: new Date(now).toISOString(), coverage: 'FULL_SESSION' })
+    const atmVwap = { index: instrument, strike: 100, expiry: '2026-10-20', fetchedAt: new Date(now).toISOString(), method: 'SESSION_HLC3_VOLUME', referenceIndexPrice: 100, ce: leg(100 + direction * 10), pe: leg(100 - direction * 10) }
+    const baseline = analyzeTradingEvidence(input)
+    const result = analyzeTradingEvidence({ ...input, atmVwap })
+    const key = direction === 1 ? 'bullishScore' : 'bearishScore'
+    assert(Math.abs(result[key] - baseline[key] - 6.75) <= .11)
+    assert(!result.missing.includes('Current ATM CE/PE VWAP'))
+    for (const invalid of [{ ...atmVwap, ce: { ...atmVwap.ce, coverage: 'PARTIAL_SESSION' } }, { ...atmVwap, fetchedAt: new Date(now - 120000).toISOString() }]) {
+      const rejected = analyzeTradingEvidence({ ...input, atmVwap: invalid })
+      assert.equal(rejected[key], baseline[key])
+      assert(rejected.missing.includes('Current ATM CE/PE VWAP'))
+    }
+  }
+ })

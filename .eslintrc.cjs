@@ -24,7 +24,7 @@ module.exports = {
       version: 'detect',
     },
   },
-  ignorePatterns: ['dist'],
+  ignorePatterns: ['dist', 'files'],
   rules: {
     'react/react-in-jsx-scope': 'off',
   },

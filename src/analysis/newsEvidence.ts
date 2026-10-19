@@ -1,4 +1,5 @@
 import type { MarketArticle, MarketContext, MarketOutlook } from '../api/marketContext'
+import { sentimentFreshness } from './sentimentFreshness'
 
 type Sentiment = NonNullable<MarketOutlook['articleSentiments']>[number]
 
@@ -38,12 +39,15 @@ export function buildNewsEvidence(context: MarketContext | null, outlook: Market
     const assessmentAge = saved?.assessedAt ? now - Date.parse(saved.assessedAt) : undefined
     const assessment = assessmentAge === undefined || Number.isFinite(assessmentAge) && assessmentAge >= -60_000 && assessmentAge <= 24 * 3600_000 ? saved : undefined
     const score = impact(assessment)
-    return { article, topic: headlineTopic(article), eligible, score, reason: assessment?.reason, source: assessment?.source, assessedAt: assessment?.assessedAt,
+    const freshness = sentimentFreshness('news', article.publishedAt, now)
+    return { article, topic: headlineTopic(article), eligible, score, freshness, ageAdjustedScore: score === undefined || !freshness ? undefined : score * freshness.factor, reason: assessment?.reason, source: assessment?.source, assessedAt: assessment?.assessedAt,
       status: !eligible ? 'STALE' : assessment?.scope === 'TEXT_ONLY' || assessment?.source === 'LOCAL_FINBERT' ? `TEXT_${assessment.sentiment}` : score !== undefined ? score > 0 ? 'POSITIVE' : score < 0 ? 'NEGATIVE' : 'NEUTRAL' : assessment?.sentiment === 'UNCLEAR' ? 'UNCLEAR' : 'UNRATED' }
   })
   const scored = headlines.filter(headline => headline.score !== undefined)
   return { headlines, articles: headlines.filter(headline => headline.eligible).map(headline => headline.article), currentOutlook,
     score: scored.length ? scored.reduce((sum, headline) => sum + headline.score!, 0) / scored.length : undefined,
+    // Keep raw card impact labels; reduce older evidence without redistributing its lost weight.
+    ageAdjustedScore: scored.length ? scored.reduce((sum, headline) => sum + (headline.ageAdjustedScore ?? 0), 0) / scored.length : undefined,
     assessed: scored.length, positive: scored.filter(headline => headline.score! > 0).length,
     negative: scored.filter(headline => headline.score! < 0).length, neutral: scored.filter(headline => headline.score === 0).length,
   }
