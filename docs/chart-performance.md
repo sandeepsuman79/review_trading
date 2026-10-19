@@ -34,19 +34,19 @@ instrument endpoint continues to fetch and return the full master.
 
 Login, page reload and the refresh button start one cancellable sync pass. Index
 or timeframe changes reprioritize pending work; they do not start another pass.
-The current index's 5-minute agent feed comes first, then its background 1-minute
-monitor, displayed chart timeframe and other intervals, then remaining indices
-with their agent and minute-monitor feeds first.
-Cached charts remain interactive throughout the pass. All twelve index/background-timeframe
-combinations are maintained locally; chart selection never changes the fixed
-5-minute agent analysis or starts another sync pass.
+The current instrument's 5-minute default analysis feed comes first, then its
+displayed interval and remaining 5/15/60-minute feeds, followed by the other instruments.
+Cached charts remain interactive throughout the pass. All three analysis intervals
+are maintained locally for each instrument; chart selection never starts another
+sync pass. There is no one-minute underlying history job or strategy feed.
 
-Cold starts request 7 days of background 1-minute, 14 days of 5-minute, 45 days of 15-minute and 120 days of hourly
+Cold starts request 14 days of 5-minute, 45 days of 15-minute and 120 days of hourly
 candles. Warm starts overlap the most recent saved candle and fetch the missing
 tail, starting no later than the current IST session's 09:15 opening. A new live
 candle after a late login cannot hide a missing morning block or a hole inside
 today's cached session. Candles dated after the current clock cannot advance the
-sync cursor. Old gaps are split into requests below SmartAPI's 30/100/200/400-day caps.
+sync cursor. Old gaps are split into requests below SmartAPI's 100/200/400-day caps
+for these three intervals.
 All dates use IST `yyyy-MM-dd HH:mm`. Cached history is retained, and merging
 protects live ticks newer than the request's minute-precision cutoff.
 
@@ -74,7 +74,8 @@ index LTP subscriptions. MCX REST quotes use `exchange: MCX`; their receipt time
 labelled and cannot create a fabricated live candle. Every actual exchange tick
 updates the candle book before rendering is throttled. Historical requests use
 MCX and the resolved contract token, share the serial queue/auth recovery, and
-backfill from 09:00 IST. Commodity selection prioritizes its 5-minute agent history, then its displayed timeframe.
+backfill from 09:00 IST. Commodity selection prioritizes its 5-minute default
+analysis feed, then its displayed timeframe and other analysis intervals.
 All three supported timeframes are saved locally and switching reads that cache.
 
 MCX hourly buckets align to 09:00 IST; index hourly buckets retain 09:15. The
@@ -88,7 +89,7 @@ Fresh broker data continues to be consumed in the evening. The index agent's
 All seven instruments use the same Trading Prediction Agent, evidence disclosures,
 CALL/PUT diagnostics (displayed as LONG/SHORT for MCX), horizontal analysis cards,
 optional Gemini second opinion, and confirmed-trades ledger. Commodities use the
-same completed 5-minute setup/trajectory analysis, 55/15 score thresholds, ≥70%
+same independent completed 5/15/60-minute setup/trajectory analysis, 55/15 score thresholds, ≥70%
 coverage, ATR stops and ≥1.5:1 reward/risk as indices. Missing commodity option-chain
 OI/PCR keeps its 15% technical budget unavailable. Equity India VIX, index OI/PCR,
 FII/DII cash flows and equity participant positions do not vote on commodity trades.
@@ -122,7 +123,7 @@ an oil supply shock is not assigned an Indian-equity sentiment rating. News/glob
 sentiment and optional Gemini never confirm, delay, veto or reverse technical trades.
 
 `npm run test:commodities` covers contract selection/expiry rollover, exchange routing,
-DST hours, candle/volume handling, all four commodities' symmetric 5-minute trade
+DST hours, candle/volume handling, all four commodities' symmetric trade
 confirmation, contract-bound entries/reversals, observed square-off, dashboard
 references and scoped news/caching. Existing index suites remain applicable.
 
@@ -151,18 +152,29 @@ is revealed; quotes are excluded from the historical candle sync and from live
 agent decisions. See [option-price-scale.md](option-price-scale.md).
 
 The selectable chart intervals are 5 minutes, 15 minutes and 1 hour for every index
-and commodity. The agent always uses completed 5-minute candles regardless of the
-viewed chart. Background history jobs and live candle persistence also maintain a private
-1-minute feed for early reversal monitoring; the chart selector stays at three options. Legacy 1-minute trade records/caches remain readable without being
-selected for new trade entries. Stops and targets still observe every
-live quote. The 15:00 index gap outlook uses six completed 5-minute bars for its
-existing 30-minute reference window; archived 1-minute outlooks remain readable.
+and commodity, with **5 minutes as the default view**. Every instrument's agent
+evaluates all three supported intervals independently from completed-candle
+snapshots. The latest eligible confirmed signal close wins; equal closes prefer
+5 minutes, 15 minutes, then 1 hour. No scores are summed and unanimity is not
+required. Confirmation, warmup, coverage, ATR/RR and quote checks apply separately
+to each interval. One open position per instrument remains the limit across all
+intervals. A current fully confirmed opposite plan on any supported interval can
+exit only with a full post-entry candle and a fresh observed matching quote.
 
-Minute monitoring uses completed-candle references and memoized reviews, so forming
-ticks do not rerun the minute analysis. Rolling review memory is bounded to five
-observations per instrument and is not written on every tick. The selected market's
-5-minute history is synced first, then its minute-monitor history and displayed
-chart. All seven markets maintain 28 serialized history jobs. Login/reload/refresh
-sync history; minute reviews use the live candle book rather than polling history
-every minute. Old active futures retain their own token, monitor and quote stream
-through rollover. New expiry signals cannot close an older contract's position.
+One-minute strategy analysis, private underlying candle updates and historical
+sync jobs are removed. Legacy one-minute trade records/caches remain readable;
+they are never chosen for new signals. The seven front instruments now maintain
+21 serialized history jobs. Login/reload/refresh sync history; timeframe reviews
+use the live candle book instead of polling historical data on each evaluation.
+Completed-candle references and memoized analyses avoid repeating full indicator
+calculations on every forming tick. Stops, targets and ATR trailing protection
+still observe every live quote. Old active futures retain their own token and
+quote stream through rollover. New expiry signals cannot close an older
+contract's position.
+
+Separately labelled ATM CE/PE VWAP context may use raw one-minute option candles
+to calculate genuine volume-weighted option prices. Those option requests share
+the existing serialized server queue and session cache; they are not a one-minute
+underlying analysis feed or independent trade trigger. The 15:00 index gap outlook
+continues to use six completed 5-minute bars for its 30-minute reference window;
+archived 1-minute outlooks remain readable.

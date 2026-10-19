@@ -1,42 +1,48 @@
 # Trading Prediction Agent
 
+For a consolidated checklist of current rules, weights, entry/exit timing and the
+late-entry review, see [Agent rule audit](agent-rule-audit.md).
+The [enhancement review](agent-enhancement-review.md) documents monitoring,
+sentiment-age weighting and offline replay additions and their limits.
+
 The agent has two independent analyses. Technical analysis alone confirms CALL/CE
 or PUT/PE setups. Market sentiment describes support or headwinds; it never creates,
 delays, vetoes, reverses or closes a trade. Both scores are reproducible evidence
 ratings, not calibrated probabilities. Profitability has not been established by
 an out-of-sample backtest. The tracker records index points and does not submit orders.
 
-The agent always analyses completed **5-minute candles** for every index and commodity, independent
-of the displayed chart's 5/15-minute or hourly timeframe. Each newly closed 5-minute candle
-updates candle patterns, EMA/SMA, RSI, ATR, ADX, Supertrend and genuine VWAP where
-volume exists. Latest available OI/PCR, India VIX, flows, news and global observations
-retain their existing source freshness checks; changing cadence does not manufacture
-new external data or require a Gemini request per candle. Forming candles are
-excluded, and the card identifies its analysis as 5-minute. Chart timeframe changes
-neither restart the agent nor change its analysis timeframe.
+The chart defaults to **5 minutes**. For every index and commodity, the agent
+independently analyses completed **5-minute, 15-minute and 1-hour candles**, even
+while another chart is displayed. Each interval evaluates its own candle patterns,
+EMA/SMA, RSI, ATR, ADX, Supertrend and genuine VWAP where volume exists. Every model
+needs its own 50-bar warmup and full confirmation checks. The agent does not add
+scores across intervals or require unanimous direction. Either CALL/CE or PUT/PE
+(LONG/SHORT for MCX) can qualify automatically on any eligible interval.
 
-A background monitor also evaluates completed **1-minute candles** for all seven
-instruments, even while another chart/index is selected. It keeps up to five
-observed minute reviews, with EMA/RSI/ATR/Supertrend/VWAP evidence and a separate
-sentiment reference. Missing minutes, stale inputs and warming indicators stay
-visible. The chart selector remains 5/15/60 minutes and new trades still require
-5-minute confirmation. Minute plans cannot be registered as new trades.
+Among eligible confirmed setups the latest completed signal close has priority;
+equal close times prefer 5 minutes, then 15 minutes, then 1 hour. The selected
+setup retains its actual interval, risk levels and candle-close deadline in the
+card and ledger. Changing the chart interval does not change the analysis set or
+reopen an already traded signal. The one-active-position guard applies across
+all intervals for an instrument.
 
-A fully confirmed opposite minute setup may protect an existing position before
-the next 5-minute close. It uses the same score, coverage, price-pattern, ATR and
-reward/risk gates. It must be a completed candle formed wholly after entry, with
-a matching contract and a fresh observed quote after its close. Separately, a
-confirmed adverse minute price break with supporting indicators can trigger the
-protective exit described below, without waiting for a new opposite entry plan.
-Developing pressure alone remains a warning. Stops and targets settle first. Exit
-records include the reversal timeframe, observed price and booked points. A fresh
-confirmed minute setup or protective price break also pauses entry into an opposing
-5-minute candidate. Replacement entries still need
-a separate 5-minute confirmation and the one-position guard.
+There is no one-minute strategy analysis, one-minute historical sync or independent
+minute-pressure exit. Legacy one-minute trade records remain readable and receive
+ordinary stop/target tracking, but cannot produce new one-minute setups. Raw
+one-minute option volume may still be used to calculate separately labelled ATM
+option VWAP context; it supplies no one-minute entry or exit trigger.
+
+A current fully confirmed opposite setup on any of the three supported intervals
+may close an existing position. It must be a full completed candle formed wholly
+after entry, pass its own score/coverage/pattern/ATR/reward-risk gates, match the
+contract and have a fresh observed quote after its close. Developing or conflicting
+direction alone cannot close a position. Stops and targets settle first. Exit
+records retain the reversal timeframe, observed price and booked points. Any
+replacement needs its own confirmed setup and the same one-position guard.
 
 Context and India VIX are requested every minute; OI/global quote caches allow
 minute refreshes while news/flow publication caches remain slower. Latest available
-sentiment is re-evaluated with each minute review. Source timestamps and missing
+sentiment is shared as a reference by the timeframe assessments. Source timestamps and missing
 coverage remain explicit. Gemini/headline assessment caching and quota cooldowns
 remain in place; no model call is required for a technical review or exit.
 Background monitoring is browser-local and requires the dashboard to remain running.
@@ -75,7 +81,7 @@ Confirmation requires:
 
 - A recent completed price-action pattern with valid entry, target and invalidation.
 - At least 50 completed bars and warmed-up EMA20/50, RSI14/momentum and Supertrend.
-- At least 70% technical coverage, directional support of 55/100, and a 15-point lead for STANDARD confirmation.
+- At least 70% technical coverage, positive directional support ≥1.5× opposition for STANDARD confirmation.
 - STRONG classification requires at least 60/100 support and a 20-point lead.
 - Consecutive completed bars from the current IST session and the Mon–Fri 09:15–15:15 IST new-entry window.
 - A stop outside chart invalidation and at least one ATR14 from entry, rounded outward.
@@ -84,7 +90,7 @@ Confirmation requires:
 ATR and India VIX are risk checks rather than directional votes.
 [NSE describes India VIX](https://www.nseindia.com/static/products-services/indices-indiavix-index)
 as expected volatility. The existing experimental rule raises required technical
-support from 55 to 65 and the directional lead from 15 to 20 when VIX is at least
+a support floor of 65 and a directional lead floor of 20 when VIX is at least
 25 or its daily rise is at least 10%.
 Unavailable VIX is disclosed. Thresholds require strategy validation.
 
@@ -105,6 +111,13 @@ sentiment never adds another PCR vote to the technical score. Missing or stale
 sentiment never blocks technical confirmation. Gemini can run or refresh while
 the technical agent confirms and observes entry locally.
 
+Sentiment-only contributions now decay from publication/observation time, with
+experimental half-lives of news 12h, globals 24h, published flows 3d and PCR
+reference 15m. Existing hard freshness gates remain; fetch time does not reset
+age, coverage is not reweighted, raw headline labels stay visible, and technical
+OI/PCR scores and confirmation thresholds do not decay. Input details show the
+remaining age-weight. Historical flow-trend reports decay individually.
+
 ## Entry, exits and persistence
 
 Confirmation reserves a conditional entry; today's cards show trades only after
@@ -115,17 +128,36 @@ exact levels, be checked within 30 seconds, and remain inside the current comple
 setup window. Paused candidates still observe invalidation and expiry; entry is
 never reconstructed from a candle formed while confirmation paused.
 
+Technical setup entry deadlines are anchored to the next candle close, bounded
+by session/contract cutoff. A target reached before entry also retires the idea,
+even while entry is paused. Post-signal candle extremes invalidate already-spent
+setups after reconnect/late loading; a retracement cannot revive them. The signal
+candle itself is excluded from this invalidation scan. Terminal ledger signals
+are shown as ended rather than displayed again as fresh confirmed setups. Setup
+time retains the pending record's original issue time; candle close labels use
+the actual close timestamp.
+
+Live entry alerts require an actual live entry still open and no more than 30
+seconds old. Replayed entries retain their candle source, even after a later live
+quote. Replay that discovers both entry and exit reports a recorded outcome and
+does not announce a fresh confirmed entry after the trade has already ended.
+
 One active trade is allowed per index. Recorded risk levels remain fixed, with
 continued target, stop and completed-chart reversal monitoring. Profit/loss is
 booked before another trade can enter for that index.
 
-Position management also consumes the current fully confirmed 5-minute opposite
-plan, including for positions opened on older chart timeframes. Reversal exits
+Position management consumes current fully confirmed opposite plans from 5-minute,
+15-minute and hourly assessments, including for positions opened on another
+interval. Reversal exits
 require a full post-entry candle and a fresh live quote after its close. Developing,
 stale, missing or wrong-index plans cannot exit a position. Observed stops/targets
 take precedence; booked P/L and the existing one-active-trade guard precede any
 replacement entry. Older records retain their original timeframe for persistence
-and gap replay; they are not relabelled as new five-minute entries.
+and gap replay; they are not relabelled as new signals on another interval.
+After an agent reversal exit, another interval's old signal cannot immediately
+reopen the side just exited: its candle must close after that exit. Opposite-side
+replacement remains eligible without a fixed cooldown, and a newly completed
+candle can qualify the prior side again. CALL/LONG and PUT/SHORT use the same guard.
 
 The user's strategy automatically squares off at **15:15 IST** for all three
 indices and expires unentered candidates. This is an application cutoff, separate
@@ -136,33 +168,30 @@ shows square-off due; it does not invent a fill. Missing pre-cutoff observations
 still require continuous candle replay, and an unobserved overnight exit remains
 UNVERIFIED. The tracker records index points; it does not submit broker orders.
 
-## Next-session gap outlook at 15:00 IST
+## Dynamic next-session gap outlook after 15:00 IST
 
-Each index independently saves one outlook during the live 15:00 minute on
-weekdays. It uses only completed candles through 14:59, at least fifty bars,
-warmed-up indicators, 70% technical coverage and thirty consecutive current-session
-minute bars. The same existing technical and sentiment evidence supplies a
-heuristic score: 60% technical directional lead plus 40% sentiment directional
-lead. Missing sentiment retains its missing weight. A directional gap bias needs
-sentiment availability, 60% combined coverage and an absolute score of at least
-15; otherwise it remains MIXED. These are explicit experimental thresholds,
-not calibrated overnight probabilities. The card shows source reasoning, missing
-inputs, coverage, the reference index value and its actual generation time.
+Users can log in any time after 15:00 IST to see a newly evaluated outlook for
+Nifty 50, Sensex and Bank Nifty. There is no completed-index-chart requirement.
+The outlook refreshes each minute from currently available external inputs while
+the dashboard is open, including overnight and weekends until the next weekday
+09:15 IST open. A login fetches the feeds again. Weekends are handled; an exchange
+holiday calendar is not connected.
 
-The outlook targets the **next trading session**, so weekends and exchange
-holidays are not labelled as a guaranteed next-day open. No holiday calendar is
-inferred or future holiday date guessed. Overnight news and the remainder of the
-current session are unknown at 15:00. Snapshots are browser-local and generated
-only while the dashboard is running with data available; late opening, missing
-data or a suspended/offline browser is disclosed without backdating an outlook.
-The saved snapshot survives reload and is not revised with later candles. This
-outlook cannot create, veto or close an intraday trade, and requires no additional
-AI/API polling.
+Direction uses the current external sentiment lead, with its existing fixed
+budgets: FII/DII 30%, assessed news 30%, global markets including GIFT Nifty 30%,
+and available PCR reference 10%. Source publication/observation timestamps and age
+weights remain in force; fetching an old report does not make it newly published.
+Missing or unassessed news and stale feeds do not gain points or redistribute
+weights. Coverage must be at least 60% and the absolute directional lead at least
+15 for a directional gap bias; otherwise the outlook is mixed.
 
-New candidates use `technical-v2` and save three technical contribution groups plus
-a separate sentiment summary. Existing `combined-v1` and `early-v1` records remain
-readable and continue exit tracking. Strategy changes cannot reopen an already
-traded signal; corrected pending levels cannot extend the original deadline.
+Late news, global incidents and changed market quotes can change a previous
+outlook. The card shows its actual update time, source contributions and missing
+inputs, and saves the latest revision locally. Previous version-1 snapshots remain
+readable and are labelled as last saved outlooks. A gap bias is not a calibrated
+probability, gap-size forecast or a trade trigger; it cannot enter or close an
+intraday position. Events can only be considered once available feeds publish
+them and the news assessment processes them.
 
 ## Freshness and audit
 
@@ -203,8 +232,9 @@ New setup stops cover both chart invalidation and at least one ATR from the outs
 An observed support/resistance target remains a cap. When no observed target exists,
 a projected 2R target is labelled explicitly. Candidate ranking prefers setups
 that satisfy the final ATR reward/risk check. Rejected chart candidates remain
-visible in diagnostics. The live dashboard uses the fully confirmed five-minute
-opposite plan for reversal exits, independently of the displayed timeframe.
+visible in diagnostics. The live dashboard can use a fully confirmed opposite
+5-minute, 15-minute or hourly plan for reversal exits, independently of the displayed
+timeframe. A full post-entry signal candle and fresh matching quote remain required.
 
 The agent displays seven confirmation checks and separately reports a disconnected
 stream or missing fresh quote. Bullish/bearish scores remain weighted evidence,
@@ -337,9 +367,8 @@ EMA20/RSI/momentum/Supertrend inputs, and fresh same-session data, valid ATR and
 entry hours. High-VIX score/lead requirements also apply to these early
 candidates. They can be displayed as EARLY while EMA50 warmup or a completed
 pattern/risk check is missing. Fifty bars, full indicator readiness, 70% coverage
-and at least 1.5:1 reward/risk remain mandatory for actual confirmation. Standard
-55/15 and strong 60/20 classifications are experimental thresholds chosen by
-the user, not calibrated probabilities. Missing weights remain undistributed.
+and at least 1.5:1 reward/risk remain mandatory for actual confirmation. The standard 1.5× directional ratio and strong 60/20 classification are
+experimental thresholds chosen by the user, not calibrated probabilities. Missing weights remain undistributed.
 
 The CALL / PUT decisions disclosure shows each direction's support/opposing
 scores, lead, coverage, pattern, routes, actual candidate levels and checked
@@ -368,23 +397,19 @@ stale live quote when a current technical confirmation is supplied. Data
 freshness, ATR, source-session integrity and quote/entry checks are not relaxed
 by the new score thresholds.
 
-## Protective exits independent of entry confirmation
+## Multi-timeframe reversals and quote-based protection
 
-A 5-minute WAIT does not disable monitoring of an already active trade. Completed
-minute data can display bullish/bearish WATCH and reversal-risk evidence without
-issuing a new trade. A protective minute exit needs an opposite directional candle
-with body at least 35% of its range, a close beyond the preceding candle extreme
-by at least 0.05 ATR, and at least three supporting checks among EMA20 position/slope,
-RSI momentum, Supertrend direction, actual-volume VWAP position, persistent candle
-pressure, the price break itself, and eligible paired ATM option VWAP context.
-This exit route does not need a new opposite entry pattern or the entry score/RR
-thresholds. It still requires a completed post-entry candle, a current matching
-assessment and a fresh observed quote. Developing or stale evidence cannot close a trade.
+WAIT on one interval does not disable monitoring of an already active trade. The
+other supported intervals remain eligible to confirm an opposite setup. Reversal
+exits use the full technical entry requirements on that opposite interval, a full
+post-entry candle, fresh revalidation and a matching live quote no more than thirty
+seconds old. Independent one-minute price-pressure exits have been removed. An
+opposite direction label or forming candle cannot exit a trade by itself.
 
 Actual live quotes also maintain a per-position favourable-price extreme and an
 ATR trailing stop. Protection arms after **0.75R** of observed favourable movement;
-its distance is the greater of **1.5 × current minute ATR**, **0.35R**, and two broker
-ticks. If minute ATR is unavailable, the last known protective ATR, entry ATR or
+its distance is the greater of **1.5 × eligible completed-frame ATR**, **0.35R**, and two broker
+ticks. If a current matching timeframe ATR is unavailable, the last known protective ATR, entry ATR or
 initial risk is used. At **1R**, the stop cannot remain behind entry. Stops only
 tighten and original planned levels stay recorded separately. A live breach exits
 at the observed quote, which can be worse than the stop during a gap. Stops/targets
@@ -397,10 +422,13 @@ separate **candle-based session VWAP estimate**: sum(HLC3 × actual candle volum
 sum(volume). The service resolves actual broker tokens, shares the historical
 request queue, caches per authenticated session/contract/day, and overlaps the
 last saved minute after initial session sync. Partial sessions, missing volume,
-stale data and options no longer near ATM cannot support a reversal check. Paired
+stale data and options no longer near ATM cannot supply directional context. Paired
 CE-above/PE-below supports upward context; the reverse supports downward context.
-This is one supplementary check alongside an underlying price break and other
-indicators, never a standalone trigger or a spot-index VWAP line. Commodity
+The paired ATM direction supplies the existing 6.75-point technical VWAP
+allocation for indices; mixed legs are neutral and missing data earns no coverage.
+The chart card shows both premium VWAPs and their default ATM strike.
+Option premiums are compared with their own VWAPs, never with spot-index points. Raw one-minute option data does not
+enable one-minute strategy analysis. Commodity
 futures use their own traded-volume VWAP instead of equity option context.
 
 ATR describes volatility, and trailing stops are risk controls rather than market
@@ -409,3 +437,8 @@ and [trailing-stop mechanics](https://www.tradingview.com/support/solutions/4300
 ATM volume comes from [Angel One historical candles](https://smartapi.angelone.in/docs).
 Trade exits remain local tracking; the dashboard must be running and no broker
 order is submitted. Profitability requires separate out-of-sample validation.
+
+
+The October 19 changes, including default five-minute analysis, the 1.5× normal
+score rule, persisted score trajectories, refresh recovery and after-market
+learning reports, are specified in [agent-rule-audit.md](agent-rule-audit.md#13-october-19-enhancements).

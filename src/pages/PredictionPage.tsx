@@ -1,5 +1,12 @@
+import { useTimeframeTrajectories } from '../hooks/useTimeframeTrajectories'
+import SessionReview from '../components/SessionReview'
 import { useAtmVwap } from '../hooks/useAtmVwap'
-import { analyzeMinuteMonitor, rollingMinuteReviews, minutePlanOpposes, minuteReviewOpposes, type MinuteReview } from '../analysis/minuteMonitor'
+import { contractExpiryNotice } from '../analysis/agentMonitoring'
+import { recordIntrabarTick } from '../analysis/intrabarContext'
+import { analyzeMultiTimeframe, revalidateMultiTimeframeAssessment, selectReversalPlan, type MultiTimeframeAssessment, type AgentTimeframe } from '../analysis/multiTimeframe'
+import type { ProtectionAssessment } from '../analysis/tradeProtection'
+import MultiTimeframePanel from '../components/MultiTimeframePanel'
+import { cachedHistoricalOutcomes } from '../analysis/historicalOutcomes'
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { connectAngelOneOrderStream, connectAngelOneStream, getAngelOneLtp, getAngelOneProfile, getHistoricalCandles, getInstrumentMaster } from '../api/angelOne'
 import { isAngelOneAuthError, recoverAngelOneSession } from '../api/angelOneSession'
@@ -7,12 +14,12 @@ import type { AngelOneOrderUpdate } from '../api/angelOne'
 import type { AngelOneStreamTick } from '../api/angelOne'
 import type { AngelOneCandle, AngelOneProfile, AngelOneInstrument } from '../api/angelOne'
 import { getAiPriceAction, type AiPriceAction } from '../api/ai'
-import { analyzePriceAction, type PriceActionAnalysis, type PriceActionInterval } from '../analysis/priceAction'
+import { type PriceActionAnalysis, type PriceActionInterval } from '../analysis/priceAction'
 import { candleBucketTime, isFreshTick, normalizeCandles, tickTimestamp } from '../analysis/candleData'
 import { abortableWait, formatHistoricalDate, historyRetryDelay, historySyncRange, prioritizeHistoryJobs } from '../analysis/historySync'
 import { useCompletedCandles } from '../hooks/useCompletedCandles'
 import { LiveCandleBook } from '../analysis/liveCandleBook'
-import { agentInterval, monitorInterval, historyIntervals, timeframeInfo } from '../analysis/timeframes'
+import { defaultChartInterval, historyIntervals, timeframeInfo } from '../analysis/timeframes'
 import { resolveIndiaVixInstrument, type IndiaVixInstrument } from '../analysis/indiaVix'
 import MarketContextPanel from '../components/MarketContextPanel'
 import { useNewsAssessment } from '../hooks/useNewsAssessment'
@@ -21,7 +28,7 @@ import { useIndiaVix } from '../hooks/useIndiaVix'
 import ErrorToast from '../components/ErrorToast'
 import AgentTradeCard from '../components/AgentTradeCard'
 import ConfirmedTrades from '../components/ConfirmedTrades'
-import { buildEarlyPrediction, type EarlyPrediction, type PredictionPlan } from '../analysis/earlyPrediction'
+import { type EarlyPrediction, type PredictionPlan } from '../analysis/earlyPrediction'
 import { usePredictionHistory } from '../hooks/usePredictionHistory'
 import PredictionHeader from '../components/PredictionHeader'
 import PredictionNotifications from '../components/PredictionNotifications'
@@ -78,14 +85,14 @@ function formatProfileList(value: AngelOneProfile['exchanges']) {
   }
 }
 
-type ChartInterval = PriceActionInterval
+type ChartInterval = AgentTimeframe
 const chartCacheVersion = 1
 
-function chartCacheKey(token: string, interval: ChartInterval) {
+function chartCacheKey(token: string, interval: PriceActionInterval) {
   return `angelone_chart_v${chartCacheVersion}_${token}_${interval}`
 }
 
-function readChartCache(token: string, interval: ChartInterval): AngelOneCandle[] | null {
+function readChartCache(token: string, interval: PriceActionInterval): AngelOneCandle[] | null {
   const saved = localStorage.getItem(chartCacheKey(token, interval))
   if (!saved) return null
   const parsed: unknown = JSON.parse(saved)
@@ -102,11 +109,11 @@ function readChartCache(token: string, interval: ChartInterval): AngelOneCandle[
   return normalized.length ? normalized : null
 }
 
-function intervalLabel(interval: ChartInterval) {
+function intervalLabel(interval: PriceActionInterval) {
   return timeframeInfo[interval].label
 }
 
-function intervalMilliseconds(interval: ChartInterval) {
+function intervalMilliseconds(interval: PriceActionInterval) {
   return timeframeInfo[interval].milliseconds
 }
 
@@ -117,6 +124,7 @@ function formatCountdown(milliseconds: number) {
 
 function CommodityContractInfo({ instrument, tick, lastQuote, connected, now }: { instrument: MarketInstrument; tick?: AngelOneStreamTick; lastQuote?: { price: number; receivedAt: number }; connected: boolean; now: number }) {
   const session = mcxSession(now), live = connected && isFreshTick(tick, now)
+  const expiry = validCommodityContract(instrument, instrument.name) ? contractExpiryNotice(instrument, now) : undefined
   const useRest = !live && lastQuote && (!tick || lastQuote.receivedAt > tickTimestamp(tick))
   const value = useRest ? lastQuote.price : tick?.ltp ?? lastQuote?.price
   const time = (timestamp: number) => new Date(timestamp).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false })
@@ -125,21 +133,42 @@ function CommodityContractInfo({ instrument, tick, lastQuote, connected, now }: 
     <div><strong>{instrument.name} · ₹{value?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ?? '—'}</strong><span>MCX futures · {instrument.symbol} · Expiry {instrument.expiry}{instrument.lotSize ? ` · Lot ${instrument.lotSize}` : ''}</span></div>
     <p><a href="https://www.mcxindia.com/market-operations/trading-surveillance" target="_blank" rel="noopener noreferrer">Regular MCX session</a>: Mon–Fri 09:00–{session.closeLabel} IST · {session.regularSession ? 'Within regular hours' : 'Outside regular hours'} · Exchange holidays / special sessions may differ.</p>
     <small>{quoteLabel} · Live volume is partial until historical sync.</small>
+    {expiry && <p role="status">{expiry}</p>}
   </div>
 }
 
-function PriceActionAgent({ candles, minuteCandles, trackLevels, onMinuteConfirmation, openingCandles, interval, now, instrument, contract, activeTrade, pendingTrade, tick, activeTick, streamConnected, indiaVix, visible, onLevels, onError, onPrediction, onConfirmation }: { candles: AngelOneCandle[]; minuteCandles: AngelOneCandle[]; trackLevels: boolean; onMinuteConfirmation: (key: string, plan: PredictionPlan | undefined, checkedAt: number, review?: MinuteReview) => void; openingCandles: AngelOneCandle[]; interval: ChartInterval; now: number; instrument: string; contract?: CommodityContract; activeTrade?: PredictionRecord; pendingTrade?: PredictionRecord; tick?: AngelOneStreamTick; activeTick?: AngelOneStreamTick; streamConnected: boolean; indiaVix?: IndiaVixSnapshot; visible: boolean; onLevels: (instrument: string, support?: number, resistance?: number) => void; onError: (message: string) => void; onPrediction: (plan: PredictionPlan) => void; onConfirmation: (instrument: string, plan: PredictionPlan | undefined, now: number) => void }) {
-  const commodity = isCommodity(instrument)
-  const instrumentKey = contract?.token ?? instrument
+function PriceActionAgent({ candlesByInterval, chartInterval, trackLevels, onAssessment, openingCandles, now, instrument, contract, setupRecords, activeTrade, pendingTrade, tick, activeTick, streamConnected, indiaVix, visible, onLevels, onError, onPrediction }: {
+  candlesByInterval: Record<AgentTimeframe, AngelOneCandle[]>; chartInterval: AgentTimeframe; trackLevels: boolean
+  onAssessment: (key: string, assessment: MultiTimeframeAssessment | undefined) => void
+  openingCandles: AngelOneCandle[]; now: number; instrument: string; contract?: CommodityContract; setupRecords: PredictionRecord[]
+  activeTrade?: PredictionRecord; pendingTrade?: PredictionRecord; tick?: AngelOneStreamTick; activeTick?: AngelOneStreamTick
+  streamConnected: boolean; indiaVix?: IndiaVixSnapshot; visible: boolean; onLevels: (instrument: string, support?: number, resistance?: number) => void
+  onError: (message: string) => void; onPrediction: (plan: PredictionPlan) => void
+}) {
+  const commodity = isCommodity(instrument), instrumentKey = contract?.token ?? instrument
   const market = useMarketContext(instrument)
   useEffect(() => { if (market.error) onError(market.error) }, [market.error, onError])
   const news = useNewsAssessment(market.context, now)
   const { history: flowHistory } = useInstitutionalFlows(market.context?.inputs?.institutional)
-  const snapshot = useCompletedCandles(candles, interval, now)
-  const analysis: PriceActionAnalysis = useMemo(() => analyzePriceAction(snapshot, interval, Date.now(), instrument), [snapshot, interval, instrument])
-  useEffect(() => { if (trackLevels) onLevels(instrument, analysis.support, analysis.resistance) }, [instrument, analysis.support, analysis.resistance, onLevels, trackLevels])
+  const sessionOpenMinute = commodity ? 540 : 555
+  const five = useCompletedCandles(candlesByInterval.FIVE_MINUTE, 'FIVE_MINUTE', now, sessionOpenMinute)
+  const fifteen = useCompletedCandles(candlesByInterval.FIFTEEN_MINUTE, 'FIFTEEN_MINUTE', now, sessionOpenMinute)
+  const hourly = useCompletedCandles(candlesByInterval.ONE_HOUR, 'ONE_HOUR', now, sessionOpenMinute)
+  // Refresh source-age checks each minute; strategy inputs remain 5/15/60-minute candles.
+  const atm = useAtmVwap(instrument, tick?.ltp ?? five[five.length - 1]?.[4], now, !commodity)
+  const assessmentMinute = Math.floor(now / 60_000)
+  const base = useMemo(() => analyzeMultiTimeframe({ candlesByInterval: { FIVE_MINUTE: five, FIFTEEN_MINUTE: fifteen, ONE_HOUR: hourly }, instrument, now: Math.max(assessmentMinute * 60_000, Date.now()), contract, context: market.context, outlook: news.outlook, indiaVix, flowHistory, atmVwap: atm.data }), [five, fifteen, hourly, instrument, contract, market.context, news.outlook, indiaVix, flowHistory, assessmentMinute, atm.data])
+  const assessment = revalidateMultiTimeframeAssessment(base, { candlesByInterval, records: setupRecords, now })
+  const review = assessment.displayReview, interval = review.interval
+  const snapshot = interval === 'FIVE_MINUTE' ? five : interval === 'FIFTEEN_MINUTE' ? fifteen : hourly
+  const analysis: PriceActionAnalysis = review.analysis
+  const evidence = { ...review.evidence, historicalOutcomes: visible ? cachedHistoricalOutcomes(snapshot, interval, now, instrument) : undefined }
+  const trajectories = useTimeframeTrajectories(assessment, contract?.token, { FIVE_MINUTE: five, FIFTEEN_MINUTE: fifteen, ONE_HOUR: hourly })
+  const prediction: EarlyPrediction = review.prediction
+  const levels = assessment.reviews.find(item => item.interval === chartInterval)!.analysis
+  useEffect(() => { if (trackLevels) onLevels(instrument, levels.support, levels.resistance) }, [instrument, levels.support, levels.resistance, onLevels, trackLevels])
   const snapshotKey = useMemo(() => JSON.stringify(snapshot), [snapshot])
-  const chartCurrent = Boolean(analysis.latestCandleTime && now - Date.parse(analysis.latestCandleTime) <= 2 * intervalMilliseconds(interval))
+  const chartCurrent = review.current
   const [aiAnalysis, setAiAnalysis] = useState<AiPriceAction | null>(null)
   const [aiError, setAiError] = useState('')
   const [aiLoading, setAiLoading] = useState(false)
@@ -158,7 +187,7 @@ function PriceActionAgent({ candles, minuteCandles, trackLevels, onMinuteConfirm
     setAiLoading(true)
     setAiError('')
     try {
-      const preliminaryEvidence = analyzeTradingEvidence({ analysis, candles: snapshot, interval, instrument, context: market.context, indiaVix, flowHistory, now })
+      const preliminaryEvidence = analyzeTradingEvidence({ analysis, candles: snapshot, interval, instrument, context: market.context, indiaVix, flowHistory, atmVwap: atm.data, now })
       const result = await getAiPriceAction(instrument, interval, snapshot, analysis, controller.signal, false, preliminaryEvidence)
       if (result.asOf !== analysis.latestCandleTime) throw new Error('AI analysis returned a different chart timestamp. Using the current chart only.')
       if (!controller.signal.aborted) { setAiAnalysis(result); setAssessedSnapshot(assessmentKey); setAiError('') }
@@ -186,25 +215,13 @@ function PriceActionAgent({ candles, minuteCandles, trackLevels, onMinuteConfirm
   const aiStatus = ready ? aiAnalysis?.providerStatus ?? news.providerStatus : news.providerStatus
   const aiCoolingDown = Boolean(aiStatus?.retryAt && Date.parse(aiStatus.retryAt) > now)
   const aiMessage = aiError || aiStatus?.message || news.message
-  const evidence = analyzeTradingEvidence({ analysis, candles: snapshot, interval, instrument, context: displayContext, outlook: news.outlook, indiaVix, flowHistory, now, historicalReference: visible })
-  const atm = useAtmVwap(instrument, tick?.ltp ?? analysis.currentPrice, now, !commodity)
-  const minuteSnapshot = useCompletedCandles(minuteCandles, monitorInterval, now)
-  const minuteBoundary = Math.floor(now / 60_000) * 60_000
-  const minuteReview = useMemo(() => analyzeMinuteMonitor({ candles: minuteSnapshot, instrument, now: Math.max(minuteBoundary, Date.now()), contract, context: displayContext, outlook: news.outlook, indiaVix, flowHistory, optionVwap: atm.data, optionVwapError: atm.error }), [minuteSnapshot, minuteBoundary, instrument, contract, displayContext, news.outlook, indiaVix, flowHistory, atm.data, atm.error])
-  const minuteHistory = useRef<MinuteReview[]>([])
-  minuteHistory.current = rollingMinuteReviews(minuteHistory.current, minuteReview, now)
+  const gapReview = assessment.reviews.find(item => item.interval === 'FIVE_MINUTE')!
+  const gapOutlook = useGapOutlook(instrument, gapReview.evidence, now)
+  const signalPlan = assessment.selectedPlan
   useLayoutEffect(() => {
-    onMinuteConfirmation(instrumentKey, streamConnected && minuteReview.current ? minuteReview.plan : undefined, minuteReview.reviewedAt, streamConnected ? minuteReview : undefined)
-    return () => onMinuteConfirmation(instrumentKey, undefined, minuteReview.reviewedAt)
-  }, [instrumentKey, minuteReview, streamConnected, onMinuteConfirmation])
-  const gapOutlook = useGapOutlook(instrument, snapshot, analysis, evidence, now)
-  const prediction: EarlyPrediction = buildEarlyPrediction(analysis, instrument, interval, now, displayContext, news.outlook, evidence, contract)
-  const signalPlan = 'plan' in prediction ? prediction.plan : undefined
-  useLayoutEffect(() => {
-    onConfirmation(instrumentKey, streamConnected && signalPlan?.stage === 'CONFIRMED' ? signalPlan : undefined, now)
-    return () => onConfirmation(instrumentKey, undefined, now)
-  }, [instrumentKey, signalPlan, streamConnected, now, onConfirmation])
-  const minuteEntryPaused = minuteReviewOpposes(signalPlan, minuteReview, now)
+    onAssessment(instrumentKey, streamConnected ? assessment : undefined)
+    return () => onAssessment(instrumentKey, undefined)
+  }, [instrumentKey, assessment, streamConnected, onAssessment])
   const planRef = useRef(signalPlan)
   planRef.current = signalPlan
   useEffect(() => {
@@ -215,7 +232,9 @@ function PriceActionAgent({ candles, minuteCandles, trackLevels, onMinuteConfirm
   if (!visible) return null
   return (
     <section aria-label="Candle price-action agent" className="price-action-agent">
-      <AgentTradeCard minuteReview={minuteReview} minuteHistory={minuteHistory.current} minuteEntryPaused={minuteEntryPaused} analysis={evidence.selectedAnalysis ?? analysis} evidence={evidence} prediction={prediction} activeTrade={activeTrade} pendingTrade={pendingTrade} instrument={instrument} interval={interval} now={now} tick={activeTrade?.contract ? activeTick : tick} streamConnected={streamConnected} />
+      <MultiTimeframePanel trajectories={trajectories} assessment={assessment} activeTrade={activeTrade} connected={streamConnected} now={now} />
+      <SessionReview instrument={instrument} records={setupRecords} candles={five} now={now} contractToken={contract?.token} />
+      <AgentTradeCard replayCandles={five} records={setupRecords} frontContract={contract} analysis={evidence.selectedAnalysis ?? analysis} evidence={evidence} prediction={prediction} activeTrade={activeTrade} pendingTrade={pendingTrade} instrument={instrument} interval={interval} now={now} tick={activeTrade?.contract ? activeTick : tick} streamConnected={streamConnected} />
       {!commodity && <GapOutlookCard instrument={instrument} outlook={gapOutlook.outlook} error={gapOutlook.error} now={now} />}
       <MarketContextPanel instrument={instrument} context={displayContext} loading={market.loading} refresh={() => void market.refresh()} outlook={news.outlook} chartCurrent={chartCurrent} analysis={evidence.selectedAnalysis ?? analysis} candles={snapshot} openingCandles={openingCandles} now={now}>
         <section className="agent-analysis-tile agent-ai-tile" aria-label="Gemini AI second opinion">
@@ -272,13 +291,12 @@ export default function PredictionPage() {
   instrumentsRef.current = marketInstruments
   const [selectedIndexToken, setSelectedIndexToken] = useState(trackedInstruments[0].token)
   const chartSectionRef = useRef<HTMLDivElement>(null)
-  const [chartInterval, setChartInterval] = useState<ChartInterval>('FIVE_MINUTE')
+  const [chartInterval, setChartInterval] = useState<ChartInterval>(defaultChartInterval)
   const [candleBook] = useState(() => new LiveCandleBook((token, interval) => {
     try { return readChartCache(token, interval) || [] }
     catch { return [] }
   }, token => trackedInstruments.some(item => item.token === token) ? 555 : 540, tick => tick.exchangeType === 5))
-  const [chartCandles, setChartCandles] = useState<Record<string, AngelOneCandle[]>>(() => Object.fromEntries(trackedInstruments.map(instrument => [instrument.token, candleBook.get(instrument.token, 'FIVE_MINUTE')])))
-  const [agentCandles, setAgentCandles] = useState<Record<string, AngelOneCandle[]>>(() => Object.fromEntries(trackedInstruments.map(instrument => [instrument.token, candleBook.get(instrument.token, agentInterval)])))
+  const [chartCandles, setChartCandles] = useState<Record<string, AngelOneCandle[]>>(() => Object.fromEntries(trackedInstruments.map(instrument => [instrument.token, candleBook.get(instrument.token, defaultChartInterval)])))
   const [structureLevels, setStructureLevels] = useState<Record<string, { support?: number; resistance?: number }>>({})
   const updateStructureLevels = useCallback((instrument: string, support?: number, resistance?: number) => {
     setStructureLevels(existing => existing[instrument]?.support === support && existing[instrument]?.resistance === resistance ? existing : { ...existing, [instrument]: { support, resistance } })
@@ -309,25 +327,23 @@ export default function PredictionPage() {
   }, [marketInstruments, predictionRecords])
   instrumentsRef.current = monitoredInstruments
   const commodityStreamKey = monitoredInstruments.filter(item => item.exchange === 'MCX').map(item => item.token).sort().join(',')
-  const minuteConfirmations = useRef<Record<string, { plan?: PredictionPlan; checkedAt: number; review?: MinuteReview }>>({})
-  const updateMinuteConfirmation = useCallback((key: string, plan: PredictionPlan | undefined, checkedAt: number, review?: MinuteReview) => { minuteConfirmations.current[key] = { plan, checkedAt, review } }, [])
-  const confirmations = useRef<Record<string, { plan?: PredictionPlan; checkedAt: number }>>({})
-  const updateConfirmation = useCallback((instrument: string, plan: PredictionPlan | undefined, checkedAt: number) => {
-    confirmations.current[instrument] = { plan, checkedAt }
-  }, [])
+  const assessments = useRef<Record<string, MultiTimeframeAssessment | undefined>>({})
+  const updateAssessment = useCallback((key: string, assessment: MultiTimeframeAssessment | undefined) => { assessments.current[key] = assessment }, [])
   const getEntryConfirmation = useCallback((record: PredictionRecord) => {
-    const key = record.contract?.token ?? record.instrument
-    const confirmation = confirmations.current[key], minute = minuteConfirmations.current[key]
-    if (minute && minuteReviewOpposes(confirmation?.plan, minute.review, Date.now())) return undefined
-    return confirmation && canEnterConfirmedPrediction(record, confirmation.plan, confirmation.checkedAt, Date.now()) ? confirmation.plan : undefined
+    const current = assessments.current[record.contract?.token ?? record.instrument]
+    return current && canEnterConfirmedPrediction(record, current.selectedPlan, current.reviewedAt, Date.now()) ? current.selectedPlan : undefined
   }, [])
   const getReversalConfirmation = useCallback((record: PredictionRecord) => {
-    const key = record.contract?.token ?? record.instrument, now = Date.now(), minute = minuteConfirmations.current[key]
-    if (minute && minutePlanOpposes(record, minute.plan, minute.checkedAt, now)) return minute.plan
-    const confirmation = confirmations.current[key]
-    return confirmation && now >= confirmation.checkedAt && now - confirmation.checkedAt <= 30_000 ? confirmation.plan : undefined
+    const current = assessments.current[record.contract?.token ?? record.instrument]
+    return current ? selectReversalPlan(record, current.reviews, Date.now()) : undefined
   }, [])
-  const getMinuteReview = useCallback((record: PredictionRecord) => minuteConfirmations.current[record.contract?.token ?? record.instrument]?.review, [])
+  const getProtectionAssessment = useCallback((record: PredictionRecord): ProtectionAssessment | undefined => {
+    const current = assessments.current[record.contract?.token ?? record.instrument]
+    const review = current?.reviews.find(item => item.interval === record.interval && item.current && item.evidence.atr14)
+      ?? current?.reviews.find(item => item.interval === defaultChartInterval && item.current && item.evidence.atr14)
+      ?? current?.reviews.find(item => item.current && item.evidence.atr14)
+    return review?.asOf ? { instrument: review.instrument, contractToken: review.contractToken, interval: review.interval, asOf: review.asOf, reviewedAt: review.reviewedAt, atr: review.evidence.atr14 } : undefined
+  }, [])
   const chartTradeLevels = useMemo(() => Object.fromEntries(predictionRecords.filter(record => record.status === 'ACTIVE' && (!record.contract || marketInstruments.some(item => item.token === record.contract!.token)))
     .map(record => [record.instrument, { entry: record.entryPrice!, target: record.target, stopLoss: record.stopLoss }])), [predictionRecords, marketInstruments])
   const [indiaVixInstrument, setIndiaVixInstrument] = useState<IndiaVixInstrument>()
@@ -359,7 +375,6 @@ export default function PredictionPage() {
     }
     const next = instrumentsRef.current.filter(item => item.exchange === 'MCX')
     setChartCandles(existing => ({ ...existing, ...Object.fromEntries(next.map(item => [item.token, candleBook.get(item.token, chartIntervalRef.current)])) }))
-    setAgentCandles(existing => ({ ...existing, ...Object.fromEntries(next.map(item => [item.token, candleBook.get(item.token, agentInterval)])) }))
     commodityHistoryRef.current(next)
     previousCommodities.current = commodities
     // Contract tokens, rather than the once-per-second clock, define rollover.
@@ -369,9 +384,10 @@ export default function PredictionPage() {
   consumeTickRef.current = tick => {
     const instrument = instrumentsRef.current.find(item => item.token === tick.token && item.exchangeType === tick.exchangeType)
     if (!instrument || !Number.isFinite(tickTimestamp(tick))) return
+    recordIntrabarTick(tick, Date.now())
     syncTick(instrument.name, tick, record => {
       return candleBook.get(instrument.token, record.interval)
-    }, Date.now(), getEntryConfirmation, getReversalConfirmation, getMinuteReview)
+    }, Date.now(), getEntryConfirmation, getReversalConfirmation, getProtectionAssessment)
   }
   const saveChartCandles = useCallback((limit = Infinity) => {
     try {
@@ -411,8 +427,8 @@ export default function PredictionPage() {
         catch { cache.set(key, []) }
       }
       return { candles: cache.get(key)!, tick: streamTicks[instrument.token] }
-    }, heartbeat, getEntryConfirmation, getReversalConfirmation, getMinuteReview)
-  }, [heartbeat, streamTicks, chartCandles, agentCandles, chartInterval, candleBook, syncPredictions, getEntryConfirmation, getReversalConfirmation, getMinuteReview])
+    }, heartbeat, getEntryConfirmation, getReversalConfirmation, getProtectionAssessment)
+  }, [heartbeat, streamTicks, chartCandles, chartInterval, candleBook, syncPredictions, getEntryConfirmation, getReversalConfirmation, getProtectionAssessment])
 
   const previousErrors = useRef<string[]>([])
   useEffect(() => {
@@ -437,11 +453,6 @@ export default function PredictionPage() {
       setChartCandles(current => {
         const next = { ...current }
         for (const instrument of instrumentsRef.current) if (ticks[instrument.token]) next[instrument.token] = candleBook.get(instrument.token, chartIntervalRef.current)
-        return next
-      })
-      setAgentCandles(current => {
-        const next = { ...current }
-        for (const instrument of instrumentsRef.current) if (ticks[instrument.token]) next[instrument.token] = candleBook.get(instrument.token, agentInterval)
         return next
       })
       setStreamTicks(current => ({ ...current, ...ticks }))
@@ -559,7 +570,6 @@ export default function PredictionPage() {
             const candles = normalizeCandles(result.data || [])
             if (candles.length) {
               const merged = candleBook.mergeHistory(job.token, job.interval, candles, Math.floor(range.to / 60_000) * 60_000)
-              if (job.interval === agentInterval) setAgentCandles(existing => ({ ...existing, [instrument.token]: merged }))
               if (chartIntervalRef.current === job.interval) setChartCandles(existing => ({ ...existing, [instrument.token]: merged }))
             } else if (!cached.length) {
               errors.push(`${instrument.name} (${intervalLabel(job.interval)}): Angel One returned no candles. Saved data will appear when available.`)
@@ -810,21 +820,20 @@ export default function PredictionPage() {
                   onLevels={updateStructureLevels}
                   onError={showErrorToast}
                   onPrediction={recordPrediction}
-                  onConfirmation={updateConfirmation}
-                  onMinuteConfirmation={updateMinuteConfirmation}
+                  onAssessment={updateAssessment}
                   trackLevels={marketInstruments.some(item => item.token === instrument.token)}
-                  minuteCandles={candleBook.get(instrument.token, monitorInterval)}
+                  candlesByInterval={{ FIVE_MINUTE: candleBook.get(instrument.token, 'FIVE_MINUTE'), FIFTEEN_MINUTE: candleBook.get(instrument.token, 'FIFTEEN_MINUTE'), ONE_HOUR: candleBook.get(instrument.token, 'ONE_HOUR') }}
+                  chartInterval={chartInterval}
                   instrument={instrument.name}
                   contract={validCommodityContract(instrument, instrument.name) ? instrument : undefined}
+                  setupRecords={predictionRecords}
                   pendingTrade={predictionRecords.find(record => record.instrument === instrument.name && record.status === 'PENDING')}
                   activeTrade={predictionRecords.find(record => record.instrument === instrument.name && record.status === 'ACTIVE')}
                   tick={streamTicks[instrument.token]}
                   activeTick={streamTicks[predictionRecords.find(record => record.instrument === instrument.name && record.status === 'ACTIVE')?.contract?.token || instrument.token]}
                   streamConnected={streamStatus === 'Connected'}
                   indiaVix={indiaVix}
-                  candles={agentCandles[instrument.token] || []}
                   openingCandles={candleBook.get(instrument.token, 'FIVE_MINUTE')}
-                  interval={agentInterval}
                   now={heartbeat}
                 />
               </div>

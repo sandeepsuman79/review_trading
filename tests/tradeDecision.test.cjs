@@ -15,12 +15,12 @@ function fixture(d=1,count=80,time=now) {
   return {analysis,candles,instrument:'Nifty 50',interval:'FIVE_MINUTE',now:time}
 }
 
-test('55/15 confirms standard CALL and PUT, while high VIX retains 65/20',()=>{
-  assert.equal(tradingEvidenceRules.minimumScore,55);assert.equal(tradingEvidenceRules.minimumGap,15)
+test('1.5x confirms standard CALL and PUT, while high VIX retains 65/20',()=>{
+  assert.equal(tradingEvidenceRules.minimumScore,0);assert.equal(tradingEvidenceRules.minimumGap,0)
   for(const d of [1,-1]){
     const input=fixture(d), evidence=analyzeTradingEvidence(input), own=evidence.decisions.find(item=>item.side===input.analysis.side)
     assert.equal(evidence.canConfirm,true,evidence.reason);assert.equal(evidence.quality,'STANDARD')
-    assert(own.supportScore>=55 && own.supportScore<60);assert.equal(own.state,'CONFIRMED')
+    assert(own.supportScore>0 && own.supportScore>=1.5*own.opposingScore);assert.equal(own.state,'CONFIRMED')
     assert.equal(buildEarlyPrediction(input.analysis,input.instrument,input.interval,now,undefined,undefined,evidence).plan.stage,'CONFIRMED')
     for(const [price,changePercent] of [[26,0],[15,10]]) {
       const high=analyzeTradingEvidence({...input,indiaVix:{status:'AVAILABLE',fetchedAt:new Date(now).toISOString(),data:{symbol:'^INDIAVIX',price,changePercent,asOf:new Date(now).toISOString()}}})

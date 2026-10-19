@@ -19,7 +19,7 @@ export type AnalysisTile = {
   sourceUrl?: string
   asOf?: string
   asOfDateOnly?: boolean
-  rowDetails?: Record<string, { tone: 'bullish' | 'bearish' | 'neutral' | 'missing'; caption?: string; vote?: number }>
+  rowDetails?: Record<string, { tone: 'bullish' | 'bearish' | 'neutral' | 'missing'; caption?: string; vote?: number; asOf?: string }>
 }
 export const flowHistoryKey = 'traders_institutional_flows_v1'
 export const dashboardWeights = { chart: 22, indicators: 22, oi: 18, flows: 13, news: 12, global: 13 }
@@ -58,7 +58,7 @@ export function globalMarketRows(context: MarketContext | null, now: number, ins
     const change = spec.kind === 'yield' && data.change != null ? `${signedMarketValue(data.change * 100)} bps` : `${signedMarketValue(data.changePercent)}%${spec.kind === 'yield' ? ' relative' : ''}`
     rows.push([spec.name, `${formatted}\n${arrow} ${change}${fresh ? '' : ' (stale)'}`])
     const indiaDirection = direction * spec.indiaSign
-    details[spec.name] = { tone: !fresh ? 'missing' : indiaDirection > 0 ? 'bullish' : indiaDirection < 0 ? 'bearish' : 'neutral', caption: fresh && spec.showCue ? `${indiaDirection > 0 ? 'Bullish' : indiaDirection < 0 ? 'Bearish' : 'Neutral'} ${commodity ? 'commodity reference' : 'India cue'}` : undefined, vote: fresh && spec.indiaSign !== 0 ? clamp(data.changePercent) * spec.indiaSign : undefined }
+    details[spec.name] = { tone: !fresh ? 'missing' : indiaDirection > 0 ? 'bullish' : indiaDirection < 0 ? 'bearish' : 'neutral', caption: fresh && spec.showCue ? `${indiaDirection > 0 ? 'Bullish' : indiaDirection < 0 ? 'Bearish' : 'Neutral'} ${commodity ? 'commodity reference' : 'India cue'}` : undefined, vote: fresh && spec.indiaSign !== 0 ? clamp(data.changePercent) * spec.indiaSign : undefined, asOf: data.asOf }
     if (fresh && spec.indiaSign !== 0) votes.push(clamp(data.changePercent) * spec.indiaSign)
   }
   return { rows, details, votes, count: specs.filter(spec => spec.indiaSign !== 0).length }

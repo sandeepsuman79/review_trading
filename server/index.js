@@ -1,3 +1,4 @@
+import { createSessionReviewService } from './sessionReview.js'
 import { createAtmVwapService } from './atmVwap.js'
 import { createOptionPremiumService, nearestIndexOptions } from './optionPremiums.js'
 import { createHistoricalProxy } from './historicalProxy.js'
@@ -72,6 +73,7 @@ const marketContextService = createMarketContextService()
 const aiCache = createAiCache(resolve('.cache/ai-news.json'))
 const gemini = createGeminiClient({ apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite', savedState: aiCache.providerState, saveState: state => { aiCache.providerState = state; aiCache.save() } })
 const localNews = createLocalNewsClassifier({ enabled: process.env.NEWS_LOCAL_CLASSIFIER || 'auto' })
+const reviewSession = createSessionReviewService({ gemini })
 const aiNews = createAiNewsService({ gemini, cache: aiCache, localClassify: articles => localNews.classify(articles) })
 const staticDirectory = resolve('dist')
 const contentTypes = {
@@ -439,6 +441,13 @@ const server = createServer(async (request, response) => {
     }
 
     return
+  }
+
+  if (request.method === 'POST' && request.url === '/api/ai/session-review') {
+    try {
+      const input = JSON.parse(await readBody(request))
+      return sendJson(response, 200, await reviewSession(input))
+    } catch (error) { return sendJson(response, error instanceof SyntaxError ? 400 : error.status || 503, { message: error instanceof SyntaxError ? 'Invalid review JSON.' : error.message || 'Gemini review unavailable.' }) }
   }
 
   if (request.method === 'POST' && request.url?.startsWith('/api/angelone/historical/')) {

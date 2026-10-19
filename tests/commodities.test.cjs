@@ -89,10 +89,10 @@ test('commodity live volume counts only observed within-bar deltas, not the sess
  accept('18:05:41',100);assert.equal(book.get('1000','FIVE_MINUTE')[1][5],3,'counter resets do not subtract volume')
 })
 
-test('commodity history backfills from 09:00 and prioritizes the selected chart without index-agent constraints',()=>{
- const candles=Array.from({length:60},(_,i)=>[new Date(at('17:00:00')+i*60000).toISOString(),300,301,299,300,100])
- assert.equal(historySyncRange(candles,'ONE_MINUTE',at('18:00:00'),540).from,at('09:00:00'))
- const jobs=['ONE_MINUTE','FIVE_MINUTE','FIFTEEN_MINUTE','ONE_HOUR'].flatMap(interval=>['nifty','gas'].map(token=>({token,interval})))
+test('commodity history backfills from 09:00 and prioritizes the default or explicitly selected chart',()=>{
+ const candles=Array.from({length:60},(_,i)=>[new Date(at('12:00:00')+i*300000).toISOString(),300,301,299,300,100])
+ assert.equal(historySyncRange(candles,'FIVE_MINUTE',at('18:00:00'),540).from,at('09:00:00'))
+ const jobs=['FIVE_MINUTE','FIFTEEN_MINUTE','ONE_HOUR'].flatMap(interval=>['nifty','gas'].map(token=>({token,interval})))
  assert.deepEqual(prioritizeHistoryJobs(jobs,'gas','ONE_HOUR',false)[0],{token:'gas',interval:'ONE_HOUR'})
  assert.deepEqual(prioritizeHistoryJobs(jobs,'nifty','ONE_HOUR')[0],{token:'nifty',interval:'FIVE_MINUTE'})
 })

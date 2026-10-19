@@ -1,3 +1,5 @@
+import { scoreDominates } from './scoreTrajectory'
+import { atmVwapBias, type AtmVwapSnapshot } from '../api/atmVwap'
 import { findRiskyLevelSetup, type RiskyLevelSetup } from './riskyLevelSetup'
 import { cachedHistoricalOutcomes, type HistoricalOutcomes } from './historicalOutcomes'
 import type { AngelOneCandle } from '../api/angelOne'
@@ -12,9 +14,10 @@ import { candleSession } from './vwap'
 import { type IndicatorTurn } from './indicatorTrajectory'
 import { isCommodity } from './commodities'
 import { marketHours, squareOffLabel } from './tradingSession'
+import { sentimentAgeLabel, sentimentFreshness, type SentimentFreshness } from './sentimentFreshness'
 
 export const tradingEvidenceRules = {
-  minimumCoverage: 70, minimumScore: 55, minimumGap: 15,
+  minimumCoverage: 70, minimumScore: 0, minimumGap: 0,
   strongScore: 60, strongGap: 20, elevatedVixGap: 20,
   earlyCandles: 30, earlyCoverage: 60, earlyScore: 55, earlyGap: 15,
   elevatedVixScore: 65, highVixLevel: 25, vixJumpPercent: 10,
@@ -39,7 +42,7 @@ export type TradingEvidence = {
   historicalOutcomes?: HistoricalOutcomes
   checks?: Array<{ label: string; passed: boolean; detail: string }>
   canConfirm: boolean; reason: string; layers: EvidenceLayer[]; bullishEvidence: string[]; bearishEvidence: string[]
-  missing: string[]; riskNotes: string[]; atr14?: number; vwap?: number
+  missing: string[]; riskNotes: string[]; atr14?: number; vwap?: number; atmVwap?: AtmVwapSnapshot
   indiaVix?: { price: number; changePercent: number; asOf: string }; requiredScore: number; stopLoss?: number; observedFlowReports: InstitutionalFlow[]
   sentiment: MarketSentiment; turns: IndicatorTurn[]
 }
@@ -55,9 +58,9 @@ function fresh<T extends { asOf: string }>(snapshot: PublicSnapshot<T> | undefin
 }
 
 /** Fixed evidence budgets avoid multiplying correlated signals or promoting missing data to support. */
-function analyzeSetupEvidence({ analysis, candles, interval, instrument, context, outlook, indiaVix, flowHistory, now, historicalReference = false }: {
+function analyzeSetupEvidence({ analysis, candles, interval, instrument, context, outlook, indiaVix, flowHistory, atmVwap, now, historicalReference = false }: {
   analysis: PriceActionAnalysis; candles: AngelOneCandle[]; interval: PriceActionInterval; instrument: string
-  context?: MarketContext | null; outlook?: MarketOutlook; indiaVix?: IndiaVixSnapshot; flowHistory?: InstitutionalFlow[]; now: number; historicalReference?: boolean
+  context?: MarketContext | null; outlook?: MarketOutlook; indiaVix?: IndiaVixSnapshot; flowHistory?: InstitutionalFlow[]; now: number; atmVwap?: AtmVwapSnapshot; historicalReference?: boolean
 }): TradingEvidence {
   const commodity = isCommodity(instrument)
   const historicalOutcomes = historicalReference ? cachedHistoricalOutcomes(candles, interval, now, instrument) : undefined
@@ -85,6 +88,10 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
     item.bearish += item.weight * fraction * Math.max(0, -signal)
     if (signal >= .15) (item.key in technicalWeights ? bullishEvidence : sentimentBullish).push(`${item.name}: ${detail}`)
     if (signal <= -.15) (item.key in technicalWeights ? bearishEvidence : sentimentBearish).push(`${item.name}: ${detail}`)
+  }
+  // Only reference layers decay. Keep observed coverage and fixed budgets; do not reweight technical OI.
+  const addAgedSentiment = (item: EvidenceLayer, fraction: number, vote: number | undefined, detail: string, freshness: SentimentFreshness | undefined) => {
+    add(item, fraction, vote === undefined || !freshness ? undefined : clamp(vote) * freshness.factor, `${detail} · ${sentimentAgeLabel(freshness)}`)
   }
   const chart = layer('chart', 'Chart & pattern')
   const chartBullish = analysis.bullishEvidence.filter(item => !/EMA|SMA|RSI|Supertrend/i.test(item))
@@ -117,8 +124,13 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
   add(indicators, .1, price !== undefined && finite(analysis.rsi14Momentum) ? analysis.rsi14Momentum / 8 : undefined, `RSI(14) momentum: ${finite(analysis.rsi14Momentum) ? format(analysis.rsi14Momentum) : 'warming up'}`)
   if (price !== undefined && finite(analysis.rsi14) && (analysis.rsi14 >= 70 || analysis.rsi14 <= 30)) riskNotes.push(`RSI(14) is ${analysis.rsi14 >= 70 ? 'overbought' : 'oversold'}; momentum and the confirmed price pattern must be considered together, not as an automatic reversal.`)
   add(indicators, .2, price !== undefined && analysis.supertrendDirection ? analysis.supertrendDirection === 'UP' ? 1 : -1 : undefined, `Supertrend(10,3): ${analysis.supertrendDirection || 'warming up'}`)
-  add(indicators, .15, price !== undefined && finite(vwap) ? Math.sign(price - vwap) : undefined, `VWAP: ${finite(vwap) ? `${format(vwap)} · price ${price !== undefined && price > vwap ? 'above' : 'below'}` : 'unavailable; zero traded volume'}`)
-  if (!finite(vwap)) missing.push('VWAP (genuine traded volume unavailable)')
+  const indexVwap = ['Nifty 50', 'Sensex', 'Bank Nifty'].includes(instrument)
+  const atmBias = indexVwap ? atmVwapBias(atmVwap, instrument, price, now) : undefined
+  const vwapVote = price === undefined ? undefined : indexVwap ? atmBias === undefined ? undefined : atmBias === 'BULLISH' ? 1 : atmBias === 'BEARISH' ? -1 : 0 : finite(vwap) ? Math.sign(price - vwap) : undefined
+  add(indicators, .15, vwapVote, indexVwap
+    ? `ATM CE/PE VWAP: ${atmBias === undefined ? 'unavailable; waiting for current full-session ATM candles' : `strike ${atmVwap!.strike} · CE ${format(atmVwap!.ce.vwap)} / PE ${format(atmVwap!.pe.vwap)} · ${atmBias.toLowerCase()}`}`
+    : `VWAP: ${finite(vwap) ? `${format(vwap)} · price ${price !== undefined && price > vwap ? 'above' : 'below'}` : 'unavailable; zero traded volume'}`)
+  if (vwapVote === undefined) missing.push(indexVwap ? 'Current ATM CE/PE VWAP' : 'VWAP (genuine traded volume unavailable)')
   if (atr === undefined) missing.push('ATR(14)')
   else riskNotes.push(`ATR(14) ${format(atr)} pts · stop distance must cover at least 1 ATR; reward/risk must remain ≥ 1.5`)
 
@@ -128,7 +140,7 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
   if (fresh(oi, now, 30 * 60_000) && oi!.data!.unit === 'CONTRACTS' && finite(expiry) && expiry >= now && oi!.data!.symbol === (instrument === 'Bank Nifty' ? 'BANKNIFTY' : instrument === 'Nifty 50' ? 'NIFTY' : 'SENSEX')) {
     const data = oi!.data!
     add(oiLayer, .6, finite(data.pcr) && data.pcr >= 0 ? (data.pcr - 1) / .5 : undefined, `PCR ${format(data.pcr)} · expiry ${data.expiry}; positioning heuristic`)
-    add(pcrLayer, 1, finite(data.pcr) && data.pcr >= 0 ? (data.pcr - 1) / .5 : undefined, `PCR ${format(data.pcr)} · same option chain as technical analysis; reference only`)
+    addAgedSentiment(pcrLayer, 1, finite(data.pcr) && data.pcr >= 0 ? (data.pcr - 1) / .5 : undefined, `PCR ${format(data.pcr)} · same option chain as technical analysis; reference only`, sentimentFreshness('pcr', data.asOf, now))
     const callChange = data.callOiChange, putChange = data.putOiChange
     add(oiLayer, .4, finite(callChange) && finite(putChange) ? (putChange - callChange) / (Math.abs(putChange) + Math.abs(callChange) || 1) : undefined, `Call OI ${format(data.callOi)} · Put OI ${format(data.putOi)} · change ${callChange == null ? '—' : format(callChange)} / ${putChange == null ? '—' : format(putChange)} contracts; writing is unverified`)
     oiLayer.details.push(`Call wall ${format(data.callWall)} · Put wall ${format(data.putWall)} · Max pain ${format(data.maxPain)}; reference levels, not price targets`)
@@ -138,13 +150,14 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
   const flows = layer('flows', 'FII / DII'), institutional = commodity ? undefined : market?.inputs?.institutional, positions = commodity ? undefined : market?.inputs?.participantPositions
   if (fresh(institutional, now, 7 * 86_400_000) && institutional!.data!.unit === 'INR_CRORE') {
     const data = institutional!.data!, total = Math.abs(data.fiiCash) + Math.abs(data.diiCash) || 1
-    add(flows, .5, data.netFlow / total, `Net cash flow ₹${format(data.netFlow)} cr · report ${data.asOf.slice(0, 10)}`)
-    add(flows, .15, data.fiiCash / total, `FII cash ₹${format(data.fiiCash)} cr; daily market-wide flow`)
-    add(flows, .15, data.diiCash / total, `DII cash ₹${format(data.diiCash)} cr; daily market-wide flow`)
+    const freshness = sentimentFreshness('flows', data.asOf, now)
+    addAgedSentiment(flows, .5, data.netFlow / total, `Net cash flow ₹${format(data.netFlow)} cr · report ${data.asOf.slice(0, 10)}`, freshness)
+    addAgedSentiment(flows, .15, data.fiiCash / total, `FII cash ₹${format(data.fiiCash)} cr; daily market-wide flow`, freshness)
+    addAgedSentiment(flows, .15, data.diiCash / total, `DII cash ₹${format(data.diiCash)} cr; daily market-wide flow`, freshness)
   } else sentimentMissing.push('Published FII / DII cash report')
   if (fresh(positions, now, 7 * 86_400_000)) {
     const data = positions!.data!
-    add(flows, .1, (data.longPercent - data.shortPercent) / 50, `FII index futures long / short ${format(data.longPercent)}% / ${format(data.shortPercent)}%`)
+    addAgedSentiment(flows, .1, (data.longPercent - data.shortPercent) / 50, `FII index futures long / short ${format(data.longPercent)}% / ${format(data.shortPercent)}%`, sentimentFreshness('flows', data.asOf, now))
   } else sentimentMissing.push('FII index futures positions')
   const observedFlowReports = observedFlows(commodity ? [] : flowHistory).filter(flow => {
     const age = now - Date.parse(flow.asOf)
@@ -152,18 +165,19 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
   }).slice(-5)
   if (fresh(institutional, now, 7 * 86_400_000) && observedFlowReports.length >= 3) {
     const fii = observedFlowReports.reduce((sum, flow) => sum + flow.fiiCash, 0), absolute = observedFlowReports.reduce((sum, flow) => sum + Math.abs(flow.fiiCash), 0)
-    add(flows, .1, fii / (absolute || 1), `FII last ${observedFlowReports.length} observed reports ₹${format(fii)} cr · selling in ${observedFlowReports.filter(flow => flow.fiiCash < 0).length}/${observedFlowReports.length} reports`)
+    const agedFii = observedFlowReports.reduce((sum, flow) => sum + flow.fiiCash * (sentimentFreshness('flows', flow.asOf, now, 14 * 86_400_000)?.factor ?? 0), 0)
+    add(flows, .1, agedFii / (absolute || 1), `FII last ${observedFlowReports.length} observed reports ₹${format(fii)} cr · selling in ${observedFlowReports.filter(flow => flow.fiiCash < 0).length}/${observedFlowReports.length} reports · each report decays by publication age (3d half-life); absolute-flow denominator unchanged`)
   } else sentimentMissing.push('FII multi-session trend (at least 3 saved daily reports)')
 
   const newsLayer = layer('news', 'News'), news = buildNewsEvidence(market, outlook, now)
   for (const headline of news.headlines.filter(item => item.eligible)) {
-    add(newsLayer, 1 / Math.max(1, news.articles.length), headline.score === undefined ? undefined : headline.score / 2, `${headline.article.title}${headline.score === undefined ? ' · awaiting / unclear assessment' : ` · impact ${headline.score}`}`)
+    addAgedSentiment(newsLayer, 1 / Math.max(1, news.articles.length), headline.score === undefined ? undefined : headline.score / 2, `${headline.article.title}${headline.score === undefined ? ' · awaiting / unclear assessment' : ` · impact ${headline.score}`}`, headline.freshness)
   }
   if (!news.assessed) sentimentMissing.push('Current, assessed news headlines')
   const globalLayer = layer('global', 'Global'), global = globalMarketRows(market, now, instrument)
   for (const [label, value] of global.rows) {
     const detail = global.details[label]
-    add(globalLayer, 1 / global.count, detail.vote, `${label}: ${value.replace(/\n/g, ' ')}; ${commodity ? 'commodity reference' : 'India context cue'}`)
+    addAgedSentiment(globalLayer, 1 / global.count, detail.vote, `${label}: ${value.replace(/\n/g, ' ')}; ${commodity ? 'commodity reference' : 'India context cue'}`, sentimentFreshness('global', detail.asOf, now))
   }
   if (!global.votes.length) sentimentMissing.push('Current global market quotes')
 
@@ -183,8 +197,7 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
 
   const bullishScore = round(layers.reduce((sum, item) => sum + item.bullish, 0)), bearishScore = round(layers.reduce((sum, item) => sum + item.bearish, 0))
   const coverage = round(layers.reduce((sum, item) => sum + item.weight * item.coverage, 0))
-  const gap = round(bullishScore - bearishScore)
-  const bias = Math.abs(gap) < tradingEvidenceRules.minimumGap ? 'NEUTRAL' : gap > 0 ? 'BULLISH' : 'BEARISH'
+  const bias = scoreDominates(bullishScore, bearishScore) ? 'BULLISH' : scoreDominates(bearishScore, bullishScore) ? 'BEARISH' : 'NEUTRAL'
   const sentimentBullishScore = round(sentimentLayers.reduce((sum, item) => sum + item.bullish, 0)), sentimentBearishScore = round(sentimentLayers.reduce((sum, item) => sum + item.bearish, 0))
   const sentimentCoverage = round(sentimentLayers.reduce((sum, item) => sum + item.weight * item.coverage, 0))
   const sentimentGap = sentimentBullishScore - sentimentBearishScore
@@ -215,7 +228,7 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
   else if (!coreIndicators) reason = 'Waiting for EMA(20/50), RSI(14), momentum and Supertrend to warm up on at least 50 completed candles.'
   else if (coverage < tradingEvidenceRules.minimumCoverage) reason = `Insufficient technical evidence: ${coverage}% coverage. Need ≥70% technical coverage; missing inputs are not reweighted.`
   else if (!directionalRoute) reason = 'Waiting for an EMA trajectory/crossover, Supertrend trajectory/flip or support/resistance break/reversal in the setup direction.'
-  else if (dominant < requiredScore || directionalLead < requiredGap) reason = `Evidence is weak or conflicting: ${dominant}/100 support versus ${opposing}/100 opposition. Need ≥${requiredScore} support and a ≥${requiredGap}-point lead.`
+  else if (dominant < requiredScore || directionalLead < requiredGap || !scoreDominates(dominant, opposing)) reason = `Evidence is weak or conflicting: ${dominant}/100 support versus ${opposing}/100 opposition. Need positive support ≥1.5× opposition${requiredScore > 0 ? `, ≥${requiredScore} support and ≥${requiredGap} lead for elevated VIX` : ''}.`
   else if (!finite(stopLoss) || stopLoss <= 0 || !finite(rewardRisk) || rewardRisk < tradingEvidenceRules.minimumRewardRisk) reason = 'Chart target fails the ATR / reward-to-risk check. The stop covers chart invalidation and at least 1 ATR; the target is not stretched to force a trade.'
   const checks = [
     { label: 'Recent completed candles', passed: chartCurrent, detail: chartCurrent ? `Latest completed candle ${analysis.latestCandleTime}` : 'Saved or forming candles cannot create a current entry.' },
@@ -223,13 +236,13 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
     { label: 'Indicator warmup', passed: coreIndicators, detail: `${closed.length} closed candles · EMA20/50, RSI and Supertrend require at least 50.` },
     { label: 'ATR risk', passed: Boolean(atr), detail: atr ? `ATR(14) ${atr.toFixed(2)} points · Stop covers at least 1 ATR.` : 'A current, positive ATR estimate is required.' },
     { label: 'Technical coverage', passed: coverage >= tradingEvidenceRules.minimumCoverage, detail: `${coverage}% available / ${tradingEvidenceRules.minimumCoverage}% required. Missing inputs are not reweighted.` },
-    { label: 'Directional agreement', passed: side !== 'WAIT' && directionalRoute && dominant >= requiredScore && directionalLead >= requiredGap, detail: `Matched route: ${directionalRoute ? matchingRoutes.map(route => route.name).join(' or ') : 'none'}. Bullish ${bullishScore}/100 · Bearish ${bearishScore}/100 · Need ${requiredScore} support and ${requiredGap}-point lead.` },
+    { label: 'Directional agreement', passed: side !== 'WAIT' && directionalRoute && dominant >= requiredScore && directionalLead >= requiredGap && scoreDominates(dominant, opposing), detail: `Matched route: ${directionalRoute ? matchingRoutes.map(route => route.name).join(' or ') : 'none'}. Bullish ${bullishScore}/100 · Bearish ${bearishScore}/100 · Need support ≥1.5× opposition; risk floors ${requiredScore} support / ${requiredGap} lead.` },
     { label: 'Reward/risk on confirmed setup', passed: finite(stopLoss) && stopLoss > 0 && finite(rewardRisk) && rewardRisk >= tradingEvidenceRules.minimumRewardRisk, detail: finite(rewardRisk) ? `${rewardRisk.toFixed(2)} : 1 after ATR stop adjustment / ${tradingEvidenceRules.minimumRewardRisk} : 1 required.` : 'A confirmed price setup and its validated entry, stop and target are required.' },
   ]
   const canConfirm = reason === `${side} completed chart setup and technical evidence align.`
   const riskySetup = canConfirm ? undefined : findRiskyLevelSetup({ analysis, candles: closed, checks, bullishScore, bearishScore, interval, now, instrument })
   return { version: 'technical-v2', instrument, interval, asOf: analysis.latestCandleTime, bullishScore, bearishScore, coverage, bias, canConfirm, reason, checks, riskySetup, historicalOutcomes, layers, sentiment, turns: chartCurrent ? trajectory.turns : [],
-    bullishEvidence: [...new Set(bullishEvidence)], bearishEvidence: [...new Set(bearishEvidence)], missing, riskNotes, atr14: atr, vwap, indiaVix: currentVix, requiredScore, requiredGap, quality: canConfirm ? dominant >= tradingEvidenceRules.strongScore && directionalLead >= tradingEvidenceRules.strongGap ? 'STRONG' : 'STANDARD' : undefined, stopLoss, observedFlowReports }
+    bullishEvidence: [...new Set(bullishEvidence)], bearishEvidence: [...new Set(bearishEvidence)], missing, riskNotes, atr14: atr, vwap, atmVwap: atmBias !== undefined ? atmVwap : undefined, indiaVix: currentVix, requiredScore, requiredGap, quality: canConfirm ? dominant >= tradingEvidenceRules.strongScore && directionalLead >= tradingEvidenceRules.strongGap ? 'STRONG' : 'STANDARD' : undefined, stopLoss, observedFlowReports }
 }
 
 /** Score CE and PE independently before selecting an entry candidate. Shared indicators stay memory-cached. */

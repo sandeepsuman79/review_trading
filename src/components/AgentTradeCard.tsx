@@ -1,11 +1,13 @@
-import MinuteMonitor from './MinuteMonitor'
-import type { MinuteReview } from '../analysis/minuteMonitor'
+import AgentMonitoringPanel from './AgentMonitoringPanel'
+import { contractExpiryNotice } from '../analysis/agentMonitoring'
+import ScoreContributions from './ScoreContributions'
+import type { CommodityContract } from '../analysis/commodities'
 import { isCommodity, tradeDirection } from '../analysis/commodities'
 import { timeframeInfo } from '../analysis/timeframes'
 import { squareOffTime, squareOffLabel } from '../analysis/tradingSession'
 import TradeDecisionPanel from './TradeDecisionPanel'
 import type { CSSProperties } from 'react'
-import type { AngelOneStreamTick } from '../api/angelOne'
+import type { AngelOneCandle, AngelOneStreamTick } from '../api/angelOne'
 import { candleIntervalMs, isFreshTick, tickTimestamp } from '../analysis/candleData'
 import type { EarlyPrediction } from '../analysis/earlyPrediction'
 import type { PredictionRecord } from '../analysis/predictionHistory'
@@ -24,10 +26,10 @@ function timeframe(interval: PriceActionInterval) {
   return timeframeInfo[interval].label
 }
 
-export default function AgentTradeCard({ analysis, evidence, prediction, activeTrade, pendingTrade, minuteReview, minuteHistory = [], minuteEntryPaused = false, instrument, interval, now, tick, streamConnected }: {
-  minuteReview?: MinuteReview
-  minuteHistory?: MinuteReview[]
-  minuteEntryPaused?: boolean
+export default function AgentTradeCard({ analysis, evidence, prediction, activeTrade, pendingTrade, records = [], frontContract, replayCandles, instrument, interval, now, tick, streamConnected }: {
+  records?: PredictionRecord[]
+  frontContract?: CommodityContract
+  replayCandles?: AngelOneCandle[]
   analysis: PriceActionAnalysis
   evidence?: TradingEvidence
   prediction: EarlyPrediction
@@ -40,17 +42,16 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
   streamConnected: boolean
 }) {
   const commodity = isCommodity(instrument)
+  const heldContractNotice = activeTrade?.contract && activeTrade.contract.token !== frontContract?.token ? contractExpiryNotice(activeTrade.contract, now, frontContract) : undefined
   const unit = commodity ? 'futures' : 'index'
   const directionLabel = (value: string) => commodity ? tradeDirection(instrument, value) : value === 'CALL' ? 'CALL / CE' : value === 'PUT' ? 'PUT / PE' : value
   const plan = activeTrade ?? ('plan' in prediction ? prediction.plan : undefined)
   const early = evidence?.decisions?.find(decision => decision.state === 'EARLY')
   const side = activeTrade?.side ?? (prediction.side === 'WAIT' && early ? early.side : prediction.side)
-  const minuteSide = minuteReview?.current ? minuteReview.pressure?.side ?? minuteReview.plan?.side : undefined
-  const waitingPressure = !activeTrade && prediction.side === 'WAIT' && minuteSide !== undefined
-  const tone = side === 'CALL' || side === 'WAIT' && waitingPressure && minuteSide === 'CALL' ? 'bullish' : side === 'PUT' || side === 'WAIT' && waitingPressure && minuteSide === 'PUT' ? 'bearish' : 'neutral'
+  const tone = side === 'CALL' ? 'bullish' : side === 'PUT' ? 'bearish' : 'neutral'
   const risky = plan?.stage === 'RISKY'
-  const status = waitingPressure ? `1-MIN ${minuteSide === 'CALL' ? 'BULLISH' : 'BEARISH'} WATCH · 5-MIN ENTRY WAIT` : activeTrade ? 'CONFIRMED · OPEN' : plan?.stage === 'CONFIRMED' ? `CONFIRMED SETUP · AWAITING ENTRY${evidence?.quality ? ` · ${evidence.quality}` : ''}` : risky ? 'RISKY · CONDITIONAL SETUP' : plan ? 'EARLY ANALYSIS · NO TRADE' : early ? `EARLY ${directionLabel(early.side)} CANDIDATE · NOT CONFIRMED` : 'WAIT · NO TRADE'
-  const reason = waitingPressure ? `Completed minute data shows ${minuteSide === 'CALL' ? 'bullish' : 'bearish'} pressure. A new 5-minute trade is not yet confirmed. Protective exit checks operate independently of new-entry confirmation.` : activeTrade
+  const status = activeTrade ? 'CONFIRMED · OPEN' : plan?.stage === 'CONFIRMED' ? `CONFIRMED SETUP · AWAITING ENTRY${evidence?.quality ? ` · ${evidence.quality}` : ''}` : risky ? 'RISKY · CONDITIONAL SETUP' : plan ? 'EARLY ANALYSIS · NO TRADE' : early ? `EARLY ${directionLabel(early.side)} CANDIDATE · NOT CONFIRMED` : 'WAIT · NO TRADE'
+  const reason = activeTrade
     ? `Monitoring the live ${directionLabel(activeTrade.side)} trade. The agent records its profit or loss before another ${instrument} trade can start.`
     : early && !plan ? `Developing ${directionLabel(early.side)} candidate. Full confirmation is incomplete: ${early.checks.filter(check => check.status === 'FAIL').map(check => check.label).join(' · ')}.` : prediction.reason
   const entry = activeTrade?.entryPrice ?? plan?.entry
@@ -67,13 +68,14 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
   const movement = activeTrade?.entryPrice !== undefined && quote !== undefined ? (quote - activeTrade.entryPrice) * (activeTrade.side === 'CALL' ? 1 : -1) : undefined
   const points = movement === 0 ? 0 : movement
   const progress = plan && quote !== undefined && plan.target !== plan.stopLoss ? Math.max(0, Math.min(100, (quote - plan.stopLoss) / (plan.target - plan.stopLoss) * 100)) : undefined
+  const endedSetup = !activeTrade && prediction.side === 'WAIT' && Boolean(evidence?.canConfirm)
   const marketBias = evidence?.bias ?? analysis.earlyBias
-  const marketTone = marketBias === 'BULLISH' ? 'bullish' : marketBias === 'BEARISH' ? 'bearish' : 'neutral'
+  const marketTone = endedSetup ? 'neutral' : marketBias === 'BULLISH' ? 'bullish' : marketBias === 'BEARISH' ? 'bearish' : 'neutral'
   const direction = marketBias === 'BULLISH' ? directionLabel('CALL') : marketBias === 'BEARISH' ? directionLabel('PUT') : 'NEUTRAL'
-  const marketView = risky ? `RISKY ${directionLabel(plan.side)}` : marketBias === 'NEUTRAL' ? 'NEUTRAL' : evidence ? evidence.canConfirm && 'plan' in prediction && prediction.plan.stage === 'CONFIRMED' ? `CONFIRMED ${direction}` : `EARLY ${direction}` : analysis.earlyStage === 'TRIGGER' ? `${direction} TRIGGER` : analysis.earlyStage === 'CONFIRMED' ? `CONFIRMED ${direction}` : `EARLY ${direction}`
+  const marketView = endedSetup ? 'SETUP ENDED · WAIT FOR A FRESH SETUP' : risky ? `RISKY ${directionLabel(plan.side)}` : marketBias === 'NEUTRAL' ? 'NEUTRAL' : evidence ? evidence.canConfirm && 'plan' in prediction && prediction.plan.stage === 'CONFIRMED' ? `CONFIRMED ${direction}` : `EARLY ${direction}` : analysis.earlyStage === 'TRIGGER' ? `${direction} TRIGGER` : analysis.earlyStage === 'CONFIRMED' ? `CONFIRMED ${direction}` : `EARLY ${direction}`
   const bullishScore = evidence?.bullishScore ?? analysis.bullishScore, bearishScore = evidence?.bearishScore ?? analysis.bearishScore
   const bullishEvidence = evidence?.bullishEvidence ?? analysis.bullishEvidence, bearishEvidence = evidence?.bearishEvidence ?? analysis.bearishEvidence
-  const strength = risky ? 'PARTIAL ALIGNMENT' : evidence ? Math.max(bullishScore, bearishScore) < 30 ? 'NO BIAS' : marketBias === 'NEUTRAL' ? 'CONFLICTED' : Math.max(bullishScore, bearishScore) < evidence.requiredScore ? 'WEAK' : 'ALIGNED' : analysis.earlyStrength.replace(/_/g, ' ')
+  const strength = endedSetup ? 'ENTRY RETIRED' : risky ? 'PARTIAL ALIGNMENT' : evidence ? Math.max(bullishScore, bearishScore) < 30 ? 'NO BIAS' : marketBias === 'NEUTRAL' ? 'CONFLICTED' : Math.max(bullishScore, bearishScore) < evidence.requiredScore ? 'WEAK' : 'ALIGNED' : analysis.earlyStrength.replace(/_/g, ' ')
   const details = [['Structure', analysis.structure], ['Location', risky && plan.risk ? `Proposed ${plan.risk.levelType.toLowerCase()} reaction at ${price(plan.risk.level)}` : analysis.location], ['Last closed candle', analysis.candleBehavior], ['Setup', risky ? 'Risky level setup · Confirmation pending' : analysis.setup]]
   const historical = analysis.latestCandleTime && now - Date.parse(analysis.latestCandleTime) > 2 * candleIntervalMs(interval)
 
@@ -84,10 +86,11 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
         <span className={`agent-trade-status ${activeTrade ? 'is-open' : risky ? 'is-risky' : ''}`} role="status">{status}</span>
       </div>
       <div className="agent-trade-direction-row">
-        <strong className="agent-trade-direction">{side === 'WAIT' ? waitingPressure ? `${minuteSide === 'CALL' ? 'BULLISH' : 'BEARISH'} WATCH` : 'WAIT' : `${directionLabel(side)} · ${side === 'CALL' ? 'BULLISH' : 'BEARISH'}`}</strong>
+        <strong className="agent-trade-direction">{side === 'WAIT' ? 'WAIT' : `${directionLabel(side)} · ${side === 'CALL' ? 'BULLISH' : 'BEARISH'}`}</strong>
         <div className="agent-trade-instrument"><strong>{instrument}</strong>{plan?.contract && <span>{plan.contract.symbol} · Expiry {plan.contract.expiry}</span>}<span>Analysis: {timeframe(interval)} · {commodity ? 'MCX futures levels' : 'Index levels'}{activeTrade && activeTrade.interval !== interval ? ` · Open trade: ${timeframe(activeTrade.interval)}` : ''}</span></div>
       </div>
       {!streamConnected && <p className="agent-entry-status" role="status">Live stream disconnected · New entries paused; saved trade monitoring continues.</p>}
+      {heldContractNotice && <p className="agent-entry-status" role="status">{heldContractNotice}</p>}
       {activeTrade?.entryAt !== undefined && now >= squareOffTime(activeTrade.entryAt, instrument) && <p className="agent-entry-status" role="status">{squareOffLabel(instrument, activeTrade.entryAt)} IST square-off is due · Waiting for an observed exit quote. No exit price has been assumed.</p>}
       {streamConnected && (!isFreshTick(tick, now) || !activeTrade && !freshEntryQuote) && <p className="agent-entry-status" role="status">Waiting for a fresh instrument quote · Entry requires a quote no more than 30 seconds old.</p>}
       <div className="early-prediction-result" aria-live="polite"><p>{reason}</p></div>
@@ -96,7 +99,7 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
       {plan && <dl className="agent-trade-facts">
         <div><dt>{activeTrade ? `Entry (${unit})` : `Entry trigger (${unit})`}</dt><dd>{price(entry)}</dd></div>
         <div><dt>{quoteLabel}</dt><dd className={live ? 'agent-text-bullish' : ''}>{price(current)}</dd><small>{quoteAt !== undefined ? time(quoteAt) : analysis.latestCandleTime ? time(Date.parse(analysis.latestCandleTime)) : 'Waiting for data'}</small></div>
-        <div><dt>{activeTrade ? 'Entry time' : 'Setup time'}</dt><dd className="agent-trade-time">{time(activeTrade?.entryAt ?? plan?.generatedAt)}</dd></div>
+        <div><dt>{activeTrade ? 'Entry time' : 'Setup time'}</dt><dd className="agent-trade-time">{time(activeTrade?.entryAt ?? (pendingTrade?.id === plan?.id ? pendingTrade?.generatedAt : plan?.generatedAt))}</dd></div>
         <div><dt>{activeTrade ? 'Trade timeframe' : 'Analysis timeframe'}</dt><dd className="agent-trade-time">{timeframe(activeTrade?.interval ?? interval)}</dd></div>
         <div><dt>Stop-loss ({unit})</dt><dd className="agent-text-bearish">{price(plan?.stopLoss)}</dd></div>
         <div><dt>Target ({unit})</dt><dd className="agent-text-bullish">{price(plan?.target)}</dd></div>
@@ -112,9 +115,8 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
       {plan && <p className="agent-trade-note">{activeTrade ? 'Agent-managed exit · One live trade per instrument' : plan.stage === 'CONFIRMED' ? 'Conditional entry · Current setup must remain confirmed · Trade tracking starts when entry is observed' : risky ? 'Risky conditional setup · Full confirmation incomplete' : 'Early analysis only · Not recorded as a trade'} · {plan.strategyVersion === 'technical-v2' ? 'Technical confirmation · Sentiment is reference only' : 'Recorded under the previous strategy'}<br />{plan.targetBasis}</p>}
 
       <div className="agent-market-view">
-        {minuteReview && <MinuteMonitor review={minuteReview} history={minuteHistory} activeTrade={activeTrade} entryPaused={minuteEntryPaused} connected={streamConnected} now={now} />}
         <div className="agent-market-view-heading"><strong className={`agent-text-${marketTone}`}>Technical analysis: {marketView}</strong><span>· {strength}</span></div>
-        <p className="agent-analysis-time">{timeframe(interval)} analysis · {analysis.analyzedCandles} completed candles · Forming candle excluded{analysis.latestCandleTime && <> · Last closed <time dateTime={analysis.latestCandleTime}>{time(Date.parse(analysis.latestCandleTime))}</time></>}{historical ? ' · Historical snapshot' : ''}</p>
+        <p className="agent-analysis-time">{timeframe(interval)} analysis · {analysis.analyzedCandles} completed candles · Forming candle excluded{analysis.latestCandleTime && <> · Candle closed <time dateTime={new Date(Date.parse(analysis.latestCandleTime) + candleIntervalMs(interval)).toISOString()}>{time(Date.parse(analysis.latestCandleTime) + candleIntervalMs(interval))}</time></>}{historical ? ' · Historical snapshot' : ''}</p>
         <div className="agent-evidence-scores"><span className="agent-text-bullish">Bullish score: <strong>{bullishScore}/100</strong></span><span className="agent-text-bearish">Bearish score: <strong>{bearishScore}/100</strong></span></div>
         <p className="agent-score-note">Technical evidence scores, not probabilities.{evidence && ` Technical coverage: ${evidence.coverage}%.`} Sentiment cannot create or veto a confirmed trade.</p>
         {analysis.alignment && <details className="agent-evidence-checks agent-directional-routes"><summary>Directional alignment · EMA or Supertrend or support/resistance</summary>
@@ -145,9 +147,10 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
       {evidence?.checks && <details className="agent-evidence-checks agent-confirmation-checks"><summary>Confirmation checks · {evidence.checks.filter(check => check.passed).length}/{evidence.checks.length} passed</summary>
         <ul>{evidence.checks.map(check => <li key={check.label}><strong className={check.passed ? 'agent-text-bullish' : 'agent-text-bearish'}>{check.passed ? '✓' : 'Waiting'} · {check.label}</strong><span>{check.detail}</span></li>)}</ul>
       </details>}
-      {evidence?.decisions && <TradeDecisionPanel decisions={evidence.decisions} instrument={instrument} plan={plan} tick={tick} connected={streamConnected} now={now} active={Boolean(activeTrade)} issuedAt={pendingTrade?.generatedAt} />}
+      <AgentMonitoringPanel instrument={instrument} records={records} plan={plan} active={Boolean(activeTrade)} now={now} frontContract={frontContract} candles={replayCandles} tick={tick} issuedAt={pendingTrade?.id === plan?.id ? pendingTrade?.generatedAt : undefined} />
+      {evidence?.decisions && <TradeDecisionPanel retired={endedSetup} decisions={evidence.decisions} instrument={instrument} plan={plan} tick={tick} connected={streamConnected} now={now} active={Boolean(activeTrade)} issuedAt={pendingTrade?.generatedAt} />}
       {evidence && <details className="agent-evidence-checks"><summary>Inputs & confirmation checks · {evidence.coverage}% available</summary>
-        <div className="agent-evidence-table"><table><thead><tr><th>Input</th><th>Weight</th><th>Available</th><th>Bullish</th><th>Bearish</th></tr></thead><tbody>{evidence.layers.map(layer => <tr key={layer.key}><th>{layer.name}</th><td>{layer.weight}%</td><td>{Math.round(layer.coverage * 100)}%</td><td>{layer.bullish.toFixed(1)}</td><td>{layer.bearish.toFixed(1)}</td></tr>)}</tbody></table></div>
+        <ScoreContributions layers={evidence.layers} />
         <p>Confirmation needs a completed chart setup, warmed-up EMA(20/50), RSI and Supertrend, ≥70% technical coverage, ≥{evidence.requiredScore} directional support and a ≥{evidence.requiredGap}-point lead. {commodity ? 'ATR provides commodity risk checks; India VIX is excluded.' : 'ATR and India VIX provide risk checks.'} Directional alignment accepts EMA trajectory/crossover OR Supertrend trajectory/flip OR support/resistance break/reversal. A completed price pattern and the score and risk checks are still required.</p>
         <ul>{evidence.riskNotes.map(note => <li key={note}>{note}</li>)}{evidence.missing.map(item => <li key={item}>Unavailable: {item}</li>)}</ul>
       </details>}
@@ -157,7 +160,7 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
         <p className="agent-score-note">{commodity ? 'Commodity news · Global futures benchmarks · Currency reference. Equity flows and India VIX are excluded.' : 'FII/DII · Indian & global news · Global markets · PCR reference.'} Sentiment coverage: {evidence.sentiment.coverage}%. Evidence ratings, not probabilities.</p>
         <p className={evidence.sentiment.alignment === 'OPPOSES' ? 'agent-text-bearish' : 'agent-score-note'} role="status">{evidence.sentiment.reason}</p>
         <details className="agent-evidence-checks"><summary>Sentiment inputs · Reference only</summary>
-          <div className="agent-evidence-table"><table><thead><tr><th>Input</th><th>Weight</th><th>Available</th><th>Bullish</th><th>Bearish</th></tr></thead><tbody>{evidence.sentiment.layers.map(layer => <tr key={layer.key}><th>{layer.name}</th><td>{layer.weight}%</td><td>{Math.round(layer.coverage * 100)}%</td><td>{layer.bullish.toFixed(1)}</td><td>{layer.bearish.toFixed(1)}</td></tr>)}</tbody></table></div>
+          <ScoreContributions layers={evidence.sentiment.layers} />
           <p>PCR is shared with technical analysis; sentiment never adds a second PCR vote to the technical score.</p>
           <div className="agent-evidence-columns">{([['Bullish sentiment', evidence.sentiment.bullishEvidence, 'bullish'], ['Bearish sentiment', evidence.sentiment.bearishEvidence, 'bearish']] as const).map(([label, items, sentimentTone]) => <div key={label}><strong className={`agent-text-${sentimentTone}`}>{label}</strong>{items.length ? <ul>{items.map((item, index) => <li key={`${index}:${item}`}>{item}</li>)}</ul> : <p>None currently</p>}</div>)}</div>
           {evidence.sentiment.missing.length > 0 && <ul>{evidence.sentiment.missing.map(item => <li key={item}>Unavailable: {item}</li>)}</ul>}

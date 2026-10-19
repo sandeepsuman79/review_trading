@@ -4,6 +4,7 @@ import type { MarketArticle, MarketContext, MarketOutlook } from '../api/marketC
 import type { TradingEvidence } from './tradingEvidence'
 import { isCommodity, validCommodityContract, type CommodityContract } from './commodities'
 import { squareOffTime, inTradingEntryWindow, marketHours } from './tradingSession'
+import { chartIntervals } from './timeframes'
 
 export type PredictionPlan = {
   id: string
@@ -41,6 +42,7 @@ const round = (price: number) => Math.round(price * 100) / 100
 export function buildEarlyPrediction(analysis: PriceActionAnalysis, instrument: string, interval: PriceActionInterval, now: number, context?: MarketContext | null, outlook?: MarketOutlook, evidence?: TradingEvidence, contract?: CommodityContract): EarlyPrediction {
   analysis = evidence?.selectedAnalysis ?? analysis
   const wait = (reason: string): EarlyPrediction => ({ side: 'WAIT', reason })
+  if (!(chartIntervals as readonly string[]).includes(interval)) return wait('New setups use completed 5-minute, 15-minute or 1-hour candles. One-minute strategy analysis is disabled.')
   if (isCommodity(instrument) && !evidence) return wait('Commodity entries require the current full technical assessment.')
   if (isCommodity(instrument) && (!validCommodityContract(contract, instrument) || contract.expiresAt <= now)) return wait('Waiting for a matching, unexpired MCX futures contract before issuing a trade setup.')
   if (isCommodity(instrument) && !inTradingEntryWindow(now, instrument)) return wait(`Outside the MCX entry window (${marketHours(instrument, now)}).`)
@@ -93,7 +95,7 @@ export function buildEarlyPrediction(analysis: PriceActionAnalysis, instrument: 
     ...(confirmed && evidence?.quality ? { confirmationQuality: evidence.quality } : {}),
     strategyVersion: evidence?.version ?? 'early-v1', instrument, interval, side, stage: risky ? 'RISKY' : confirmed ? 'CONFIRMED' : 'EARLY', signalCandleTime: analysis.latestCandleTime!,
     ...(risky ? { risk: { level: risky.level, levelType: risky.levelType, passedChecks: risky.passedChecks, unmetChecks: risky.unmetChecks, alignedIndicators: risky.alignedIndicators, opposedIndicators: risky.opposedIndicators } } : {}),
-    generatedAt: now, expiresAt: contract ? Math.min(now + 3 * candleIntervalMs(interval), contract.expiresAt, squareOffTime(now, instrument)) : now + 3 * candleIntervalMs(interval), entry: roundedEntry, stopLoss: roundedStop, target: roundedTarget, riskReward: round(riskReward), targetBasis, reason,
+    generatedAt: now, expiresAt: Math.min(confirmed && evidence?.version === 'technical-v2' ? candleTime + 2 * candleIntervalMs(interval) : now + 3 * candleIntervalMs(interval), squareOffTime(now, instrument), contract?.expiresAt ?? Infinity), entry: roundedEntry, stopLoss: roundedStop, target: roundedTarget, riskReward: round(riskReward), targetBasis, reason,
     contextMode: !evidence && newsAligned ? 'NEWS_ALIGNED' : 'TECHNICAL_ONLY', bullishScore: evidence?.bullishScore ?? analysis.bullishScore, bearishScore: evidence?.bearishScore ?? analysis.bearishScore,
     technicalEvidence: [...(evidence ? side === 'CALL' ? evidence.bullishEvidence : evidence.bearishEvidence : side === 'CALL' ? analysis.bullishEvidence : analysis.bearishEvidence)],
     ...(evidence ? { evidenceSummary: { version: evidence.version, coverage: evidence.coverage, atr14: evidence.atr14, indiaVix: evidence.indiaVix?.price, layers: evidence.layers.map(({ name, weight, coverage, bullish, bearish }) => ({ name, weight, coverage, bullish, bearish })), sentiment: { bullishScore: evidence.sentiment.bullishScore, bearishScore: evidence.sentiment.bearishScore, coverage: evidence.sentiment.coverage, bias: evidence.sentiment.bias, alignment: evidence.sentiment.alignment, reason: evidence.sentiment.reason } } } : {}),

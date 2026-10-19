@@ -74,6 +74,7 @@ export async function getAiPriceAction(
         pattern: rules.pattern,
         setup: rules.setup,
         vwap: evidence?.vwap,
+        atmVwap: evidence?.atmVwap,
         observedFlowReports: evidence?.observedFlowReports,
         technicalEvidence: evidence ? { bullishScore: evidence.bullishScore, bearishScore: evidence.bearishScore, coverage: evidence.coverage, riskNotes: evidence.riskNotes.slice(0, 3), layers: evidence.layers.map(({ name, weight, coverage, bullish, bearish }) => ({ name, weight, coverage, bullish, bearish })), turns: evidence.turns } : undefined,
         marketSentiment: evidence ? { bullishScore: evidence.sentiment.bullishScore, bearishScore: evidence.sentiment.bearishScore, coverage: evidence.sentiment.coverage, bias: evidence.sentiment.bias, alignment: evidence.sentiment.alignment, role: 'REFERENCE_ONLY' } : undefined,
