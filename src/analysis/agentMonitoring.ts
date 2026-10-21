@@ -11,7 +11,7 @@ export type TradeTransition = {
   entry: number; stop: number; target: number
 }
 const transitions: TradeTransition[] = []
-/** Only successful writes generate audit entries; quote-only updates and reloads do not. */
+/** Only observed state changes generate audit entries; quote-only updates and reloads do not. */
 export function recordTradeTransitions(previous: PredictionRecord[], next: PredictionRecord[], now: number) {
   const before = new Map(previous.map(record => [record.id, record]))
   for (const record of next) {

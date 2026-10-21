@@ -19,7 +19,7 @@ export function useScoreTrajectory(evidence: TradingEvidence, contract = '', ana
       const samples: ScoreSample[] = (Array.isArray(raw) ? raw : []).filter(s => Number.isFinite(s.at) && Number.isFinite(s.bullish) && Number.isFinite(s.bearish) && new Date(s.at + 330 * 60000).toISOString().slice(0, 10) === session && (s.at < at || !enabled && s.at === at))
       const indicators = Object.fromEntries(Object.entries({ EMA20: ema20, EMA50: ema50, RSI: rsi, ATR: atr, 'India VIX': vix, Supertrend: supertrend, ADX: adx, '+DI': plusDi, '-DI': minusDi, SMA20: sma20 }).filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1])))
       if (enabled) samples.push({ at, bullish: bullishScore, bearish: bearishScore, indicators, supertrendDirection })
-      const bounded = samples.slice(-300)
+      const bounded = samples.slice(-64)
       if (enabled) localStorage.setItem(key, JSON.stringify(bounded))
       const trend = scoreTrajectory(bounded, candleIntervalMs(interval))
       let indicatorSamples = bounded

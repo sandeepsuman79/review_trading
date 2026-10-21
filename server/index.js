@@ -1,8 +1,8 @@
 import { createSessionReviewService } from './sessionReview.js'
 import { createAtmVwapService } from './atmVwap.js'
-import { createOptionPremiumService, nearestIndexOptions } from './optionPremiums.js'
+import { createOptionPremiumService } from './optionPremiums.js'
 import { createHistoricalProxy } from './historicalProxy.js'
-import { commodityInstruments } from './commodityInstruments.js'
+import { createInstrumentMasterService } from './instrumentMaster.js'
 import { createAiCache } from './aiCache.js'
 import { createGeminiClient } from './geminiClient.js'
 import { createAiNewsService } from './aiNews.js'
@@ -10,7 +10,7 @@ import { createLocalNewsClassifier } from './localNews.js'
 import { createMarketContextService, contextForAi, supportsMarket, commoditySources, sanitizeMarketOutlook, sanitizeObservedFlowReports } from './marketContext.js'
 import { createServer } from 'node:http'
 import { existsSync, readFileSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, rename } from 'node:fs/promises'
 import { extname, join, resolve, sep } from 'node:path'
 import { gzip } from 'node:zlib'
 import { promisify } from 'node:util'
@@ -37,29 +37,17 @@ const angelOneGttUrls = {
   details: 'https://apiconnect.angelone.in/rest/secure/angelbroking/gtt/v1/ruleDetails',
   list: 'https://apiconnect.angelone.in/rest/secure/angelbroking/gtt/v1/ruleList',
 }
-const instrumentMasterUrl = 'https://margincalculator.angelone.in/OpenAPI_File/files/OpenAPIScripMaster.json'
-let instrumentMasterCache
-let instrumentMasterPending
-async function loadInstrumentMaster() {
-  if (!instrumentMasterPending) instrumentMasterPending = (async () => {
-    const response = await fetch(instrumentMasterUrl, { signal: AbortSignal.timeout(30_000) })
-    const data = await response.json()
-    if (!response.ok || !Array.isArray(data)) throw new Error('Invalid instrument master')
-    const options = nearestIndexOptions(data, Date.now())
-    instrumentMasterCache = { expiresAt: Math.min(Date.now() + 6 * 3_600_000, ...Object.values(options).map(group => group.expiryAt)), options, commodities: commodityInstruments(data),
-      data: data.filter(item => ['99926000', '99919000', '99926009'].includes(String(item.token)) || /INDIAVIX/i.test(`${item.name} ${item.symbol}`.replace(/[^a-z0-9]/gi, ''))).map(item => {
-        const indexName = { '99926000': 'Nifty 50', '99919000': 'Sensex', '99926009': 'Bank Nifty' }[String(item.token)]
-        const group = options[indexName]
-        return { ...item, ...(group?.contracts.length ? { optionExpiry: new Date(group.expiryAt).toISOString().slice(0, 10) } : {}) }
-      }) }
-    return data
-  })().finally(() => { instrumentMasterPending = undefined })
-  return instrumentMasterPending
-}
-const optionPremiums = createOptionPremiumService({ loadOptions: async () => {
-  if (!instrumentMasterCache || instrumentMasterCache.expiresAt <= Date.now()) await loadInstrumentMaster()
-  return instrumentMasterCache.options
-} })
+const instrumentMasterPath = resolve('.cache/instrument-master.json')
+const instrumentMaster = createInstrumentMasterService({
+  readCache: async () => JSON.parse(await readFile(instrumentMasterPath, 'utf8')),
+  saveCache: async data => {
+    await mkdir(resolve('.cache'), { recursive: true })
+    const temporary = `${instrumentMasterPath}.tmp`
+    await writeFile(temporary, JSON.stringify(data), 'utf8')
+    await rename(temporary, instrumentMasterPath)
+  },
+})
+const optionPremiums = createOptionPremiumService({ loadOptions: index => instrumentMaster.getOptions(index) })
 const compressedAssets = new Map()
 const compress = promisify(gzip)
 const angelOneLtpUrl = 'https://apiconnect.angelone.in/order-service/rest/secure/angelbroking/order/v1/getLtpData'
@@ -68,7 +56,7 @@ const angelOneHistoricalUrls = {
   oi: 'https://apiconnect.angelone.in/rest/secure/angelbroking/historical/v1/getOIData',
 }
 const historicalRequest = createHistoricalProxy()
-const atmVwap = createAtmVwapService({ loadOptions: async () => { if (!instrumentMasterCache || instrumentMasterCache.expiresAt <= Date.now()) await loadInstrumentMaster(); return instrumentMasterCache.options }, history: (headers, input) => historicalRequest(angelOneHistoricalUrls.candles, headers.Authorization, headers, input) })
+const atmVwap = createAtmVwapService({ loadOptions: index => instrumentMaster.getOptions(index), history: (headers, input) => historicalRequest(angelOneHistoricalUrls.candles, headers.Authorization, headers, input) })
 const marketContextService = createMarketContextService()
 const aiCache = createAiCache(resolve('.cache/ai-news.json'))
 const gemini = createGeminiClient({ apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite', savedState: aiCache.providerState, saveState: state => { aiCache.providerState = state; aiCache.save() } })
@@ -189,17 +177,15 @@ const server = createServer(async (request, response) => {
 
   if (request.method === 'GET' && ['/api/instruments', '/api/instruments?scope=indices', '/api/instruments?scope=commodities'].includes(request.url)) {
     try {
-      const indicesOnly = request.url.includes('?scope=indices')
-      const commoditiesOnly = request.url.includes('?scope=commodities')
-      let body
-      if ((indicesOnly || commoditiesOnly) && instrumentMasterCache?.expiresAt > Date.now()) body = commoditiesOnly ? instrumentMasterCache.commodities : instrumentMasterCache.data
-      else {
-        const data = await loadInstrumentMaster()
-        body = commoditiesOnly ? instrumentMasterCache.commodities : indicesOnly ? instrumentMasterCache.data : data
-      }
-      sendJson(response, 200, body)
-    } catch {
-      sendJson(response, 502, { message: 'Unable to fetch instrument master.' })
+      const scope = request.url.includes('?scope=indices') ? 'indices' : request.url.includes('?scope=commodities') ? 'commodities' : 'all'
+      const result = await instrumentMaster.get(scope)
+      response.setHeader('X-Instrument-Master-Status', result.status)
+      if (result.retryAfterMs) response.setHeader('Retry-After', String(Math.ceil(result.retryAfterMs / 1000)))
+      sendJson(response, 200, result.data)
+    } catch (error) {
+      const retryAfterMs = error.retryAfterMs || 15000
+      response.setHeader('Retry-After', String(Math.ceil(retryAfterMs / 1000)))
+      sendJson(response, error.status || 503, { message: error.message || 'Instrument metadata is temporarily unavailable.', retryAfterMs })
     }
     return
   }

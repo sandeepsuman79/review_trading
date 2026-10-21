@@ -1,3 +1,4 @@
+import { writeChartCache } from '../storage/chartCache'
 import { useTimeframeTrajectories } from '../hooks/useTimeframeTrajectories'
 import SessionReview from '../components/SessionReview'
 import { useAtmVwap } from '../hooks/useAtmVwap'
@@ -391,8 +392,11 @@ export default function PredictionPage() {
   }
   const saveChartCandles = useCallback((limit = Infinity) => {
     try {
-      const remaining = candleBook.flush((token, interval, candles) => localStorage.setItem(chartCacheKey(token, interval), JSON.stringify(candles)), limit)
-      setChartCacheError('')
+      let saved = true
+      const remaining = candleBook.flush((token, interval, candles) => {
+        if (!writeChartCache(localStorage, chartCacheKey(token, interval), candles, selectedIndexRef.current)) saved = false
+      }, limit)
+      setChartCacheError(saved ? '' : 'Chart cache is full; live analysis continues. Candle history will be fetched again after reload.')
       return remaining
     } catch (error) {
       setChartCacheError(error instanceof Error ? `Unable to save chart locally: ${error.message}` : 'Unable to save chart locally.')
@@ -694,14 +698,18 @@ export default function PredictionPage() {
       const master = await getInstrumentMaster('indices')
       setOptionExpiries(Object.fromEntries(trackedInstruments.map(instrument => [instrument.name, master.find(item => String(item.token) === instrument.token)?.optionExpiry || ''])))
       const vix = resolveIndiaVixInstrument(master)
-      setIndiaVixInstrument(current => current?.token === vix?.token && current?.symbol === vix?.symbol ? current : vix)
+      setIndiaVixInstrument(current => !vix || current?.token === vix.token && current?.symbol === vix.symbol ? current : vix)
       await Promise.all(trackedInstruments.map(async (tracked) => {
         const instrument = master.find((item) => item.token === tracked.token)
           || { token: tracked.token, symbol: tracked.symbol, exch_seg: tracked.exchange === 'BSE' ? 'bse_cm' : 'nse_cm' }
         await quote(instrument)
       }))
     })(), (async () => {
-      const master = await getInstrumentMaster('commodities')
+      const master = await getInstrumentMaster('commodities').catch(error => {
+        const saved = readCommodityMaster()
+        if (resolveCommodityContracts(saved, Date.now()).length) return saved
+        throw error
+      })
       setCommodityMaster(master)
       try { localStorage.setItem('angelone_commodity_instruments_v1', JSON.stringify(master)) }
       catch { setChartCacheError('Commodity contracts could not be saved locally.') }
