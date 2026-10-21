@@ -31,7 +31,10 @@ export default function ConfirmedTrades({ records, now, streamConnected, storage
       <div className="confirmed-trades-count" role="status">{stats.total} {stats.total === 1 ? 'trade' : 'trades'} · {stats.wins} {stats.wins === 1 ? 'win' : 'wins'}{stats.open > 0 && ` · ${stats.open} live`}{stats.excluded > 0 && ` · ${stats.excluded} unverified`}</div>
     </div>
     {indices.some(index => index.resolved > 0) && <div className="confirmed-trades-totals" aria-label="Booked profit and loss by instrument">{indices.filter(index => index.resolved > 0).map(index => <span key={index.instrument}>{index.instrument} <strong className={`confirmed-pnl-${tone(index.netPoints)}`}>{signed(index.netPoints)} pts</strong></span>)}</div>}
-    {storageError && <p className="confirmed-trades-storage" role="status">Trade saving is unavailable in this browser. Existing saved data is preserved.</p>}
+    {storageError && <div className="confirmed-trades-storage" role="status"><p>{storageError}</p><button type="button" onClick={() => {
+      const url = URL.createObjectURL(new Blob([JSON.stringify({ version: 1, records }, null, 2)], { type: 'application/json' }))
+      const link = document.createElement('a'); link.href = url; link.download = 'trade-history-backup.json'; link.click(); URL.revokeObjectURL(url)
+    }}>Download trade history backup</button></div>}
     {trades.length === 0 ? <p className="confirmed-trades-empty">No confirmed entries today.</p> : <div ref={scrollRef} className="confirmed-trades-grid" tabIndex={0} aria-label="Scroll confirmed trades horizontally">{trades.map(record => {
       const unit = isCommodity(record.instrument) ? 'futures' : 'index'
       const points = confirmedTradePoints(record)

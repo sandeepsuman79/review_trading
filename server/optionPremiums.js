@@ -38,7 +38,7 @@ export function createOptionPremiumService({ loadOptions, fetcher = fetch, now =
   const cache = new Map(), pending = new Map()
   let queue = Promise.resolve(), nextRequestAt = 0, cooldownUntil = 0
   async function run(input, headers) {
-    const options = (await loadOptions())[input.index]
+    const options = (await loadOptions(input.index))[input.index]
     if (!options || !options.contracts.length || options.expiryAt <= now()) throw Object.assign(new Error('No unexpired option contracts are available for this index.'), { status: 503 })
     const contracts = options.contracts.filter(contract => input.strikes.includes(contract.strike))
     const tokens = Object.fromEntries([...new Set(contracts.map(contract => contract.exchange))].map(exchange => [exchange, [...new Set(contracts.filter(contract => contract.exchange === exchange).map(contract => contract.token))]]))

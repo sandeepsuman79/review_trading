@@ -20,7 +20,7 @@ export function createAtmVwapService({ loadOptions, history, now = Date.now }) {
     if (!input || !Object.hasOwn(optionIndices,input.index) || typeof input.price !== 'number' || !Number.isFinite(input.price) || input.price <= 0) throw Object.assign(new Error('A supported index and positive index price are required.'),{status:400})
     const time = now(), end = Math.floor(time / minute) * minute, start = Math.floor((time + 330 * minute) / day) * day - 330 * minute + 555 * minute
     if (end <= start || end > start + 375 * minute || [0,6].includes(new Date(time + 330 * minute).getUTCDay())) throw Object.assign(new Error('ATM option VWAP is available during the regular index session.'),{status:400})
-    const options = (await loadOptions())[input.index], nominal = Math.round(input.price / optionIndices[input.index].step) * optionIndices[input.index].step
+    const options = (await loadOptions(input.index))[input.index], nominal = Math.round(input.price / optionIndices[input.index].step) * optionIndices[input.index].step
     if (!options || options.expiryAt <= time) throw Object.assign(new Error('Current option expiry unavailable.'),{status:503})
     const strikes = [...new Set(options.contracts.map(c=>c.strike))].filter(strike=>['ce','pe'].every(side=>options.contracts.some(c=>c.strike===strike&&c.side===side))).sort((a,b)=>Math.abs(a-nominal)-Math.abs(b-nominal)||a-b)
     const strike = strikes[0]

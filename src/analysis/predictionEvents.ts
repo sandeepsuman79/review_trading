@@ -11,7 +11,7 @@ export type PredictionEvent = {
   detail: string
 }
 
-/** Compare a successful history write with its prior value. Loading history emits nothing. */
+/** Compare observed ledger states. Loading history emits nothing; unsaved live transitions still alert the user. */
 export function predictionEvents(previous: PredictionRecord[], next: PredictionRecord[], now?: number): PredictionEvent[] {
   const before = new Map(previous.map(record => [record.id, record]))
   // Settle an existing position before announcing entry into its replacement, regardless of array order.

@@ -1,8 +1,9 @@
+import { createPredictionHistoryStore, indexedHistoryBackend } from '../storage/predictionHistoryStore'
 import { recordTradeTransitions } from '../analysis/agentMonitoring'
 import type { ProtectionAssessment } from '../analysis/tradeProtection'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PredictionPlan } from '../analysis/earlyPrediction'
-import { isOpenPrediction, reconcilePredictionRecords, registerConfirmedPrediction, syncPredictionRecord, predictionHistoryKey, readPredictionHistory, writePredictionHistory, type PredictionRecord } from '../analysis/predictionHistory'
+import { isOpenPrediction, reconcilePredictionRecords, registerConfirmedPrediction, syncPredictionRecord, predictionHistoryKey, type PredictionRecord } from '../analysis/predictionHistory'
 import { predictionEvents, type PredictionEvent } from '../analysis/predictionEvents'
 import type { AngelOneCandle, AngelOneStreamTick } from '../api/angelOne'
 
@@ -21,53 +22,66 @@ export function usePredictionHistory(onError: (message: string) => void, onEvent
     lastError.current = message
   }, [onError])
 
+  const store = useRef<ReturnType<typeof createPredictionHistoryStore>>()
+  const channel = useRef<BroadcastChannel>()
+  const mounted = useRef(true)
+  const getStore = useCallback(() => {
+    return store.current ||= createPredictionHistoryStore({ storage: localStorage, ...(typeof indexedDB === 'undefined' ? {} : { backend: indexedHistoryBackend(indexedDB) }) })
+  }, [])
   const mutate = useCallback((update: (current: PredictionRecord[]) => PredictionRecord[]) => {
     try {
-      // Read the latest persisted value before every write, including changes from another tab.
-      const current = readPredictionHistory(localStorage)
-      const next = update(current)
-      if (JSON.stringify(next) !== JSON.stringify(current)) {
-        writePredictionHistory(localStorage, next)
-        recordTradeTransitions(current, next, Date.now())
-        const events = predictionEvents(current, next, Date.now())
-        if (events.length) eventHandler.current(events)
-      }
-      setRecords(existing => JSON.stringify(existing) === JSON.stringify(next) ? existing : next)
-      setStorageError('')
-      lastError.current = ''
+      void getStore().update(update).then(result => {
+        if (!mounted.current) return
+        if (result.changed) {
+          recordTradeTransitions(result.previous, result.records, Date.now())
+          const events = predictionEvents(result.previous, result.records, Date.now())
+          if (events.length) eventHandler.current(events)
+          if (result.durable) channel.current?.postMessage('updated')
+        }
+        setRecords(existing => JSON.stringify(existing) === JSON.stringify(result.records) ? existing : result.records)
+        if (result.error) report(new Error(result.error))
+        else { setStorageError(''); lastError.current = '' }
+      }).catch(report)
     } catch (error) { report(error) }
-  }, [report])
+  }, [getStore, report])
 
   useEffect(() => {
+    mounted.current = true
     const load = () => {
-      try { setRecords(reconcilePredictionRecords(readPredictionHistory(localStorage))); setStorageError(''); lastError.current = '' } catch (error) { report(error) }
+      try {
+        void getStore().load().then(saved => { if (mounted.current) setRecords(reconcilePredictionRecords(saved)) }).catch(report)
+      } catch (error) { report(error) }
     }
     load()
+    if (typeof BroadcastChannel !== 'undefined') {
+      try { channel.current = new BroadcastChannel('traders_prediction_history'); channel.current.onmessage = load } catch { /* Atomic database writes still prevent overlapping ledger updates. */ }
+    }
     const receive = (event: StorageEvent) => { if (event.storageArea === localStorage && (event.key === predictionHistoryKey || event.key === null)) load() }
     window.addEventListener('storage', receive)
-    return () => window.removeEventListener('storage', receive)
-  }, [report])
+    window.addEventListener('focus', load)
+    return () => { mounted.current = false; channel.current?.close(); channel.current = undefined; window.removeEventListener('storage', receive); window.removeEventListener('focus', load) }
+  }, [getStore, report])
 
   const recordPrediction = useCallback((plan: PredictionPlan) => {
     mutate(current => registerConfirmedPrediction(current, plan, Date.now()))
   }, [mutate])
 
   const sync = useCallback((observe: (record: PredictionRecord) => Observation, now: number, confirmEntry?: (record: PredictionRecord) => PredictionPlan | undefined, confirmReversal?: (record: PredictionRecord) => PredictionPlan | undefined, reviewProtection?: (record: PredictionRecord) => ProtectionAssessment | undefined) => {
-    mutate(current => reconcilePredictionRecords(current).map(record => {
+    mutate(current => { const observedNow = Math.max(now, Date.now()); return reconcilePredictionRecords(current).map(record => {
       if (!isOpenPrediction(record)) return record
       const { candles, tick } = observe(record)
       const plan = confirmEntry?.(record)
-      return syncPredictionRecord(record, candles, tick, now, confirmEntry ? Boolean(plan) : true, plan, confirmReversal ? confirmReversal(record) ?? null : undefined, reviewProtection?.(record))
-    }))
+      return syncPredictionRecord(record, candles, tick, observedNow, confirmEntry ? Boolean(plan) : true, plan, confirmReversal ? confirmReversal(record) ?? null : undefined, reviewProtection?.(record))
+    }) })
   }, [mutate])
 
   const syncTick = useCallback((instrument: string, tick: AngelOneStreamTick, candlesFor: (record: PredictionRecord) => AngelOneCandle[], now: number, confirmEntry?: (record: PredictionRecord) => PredictionPlan | undefined, confirmReversal?: (record: PredictionRecord) => PredictionPlan | undefined, reviewProtection?: (record: PredictionRecord) => ProtectionAssessment | undefined) => {
-    mutate(current => reconcilePredictionRecords(current).map(record => {
+    mutate(current => { const observedNow = Math.max(now, Date.now()); return reconcilePredictionRecords(current).map(record => {
       if (record.instrument !== instrument || !isOpenPrediction(record)) return record
       if (record.contract && (record.contract.token !== tick.token || tick.exchangeType !== 5)) return record
       const plan = confirmEntry?.(record)
-      return syncPredictionRecord(record, candlesFor(record), tick, now, confirmEntry ? Boolean(plan) : true, plan, confirmReversal ? confirmReversal(record) ?? null : undefined, reviewProtection?.(record))
-    }))
+      return syncPredictionRecord(record, candlesFor(record), tick, observedNow, confirmEntry ? Boolean(plan) : true, plan, confirmReversal ? confirmReversal(record) ?? null : undefined, reviewProtection?.(record))
+    }) })
   }, [mutate])
   return { records, storageError, recordPrediction, sync, syncTick }
 }

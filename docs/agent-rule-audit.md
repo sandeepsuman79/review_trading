@@ -441,3 +441,36 @@ own units. A direction change or broken indicator structure does not guarantee
 a market reversal or protect a particular amount of profit. References:
 [StockCharts RSI and failure swings](https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-indicators/relative-strength-index-rsi),
 [Fidelity technical analysis overview](https://www.fidelity.com/learning-center/trading-investing/technical-analysis/what-is-technical-analysis).
+
+
+## 18. Storage and instrument-master recovery
+
+Trade history now uses IndexedDB read/write transactions, isolated from the small
+localStorage quota used by refetchable chart caches. The existing version-1 ledger
+is validated and migrated without pruning trade records. Its localStorage key is
+removed only after the database commits; malformed history is preserved. Native
+transactions serialize updates across tabs, with broadcast notifications to refresh
+their displays. Queued updates recheck the actual current time for quote freshness.
+
+If storage fails after a ledger is loaded, the tab retains observed trade state
+and continues monitoring, retries persistence with a 15-second cooldown and shows
+one persistent saving warning plus a JSON backup action. A failed write cannot
+restore a stopped position as a later winning trade. Unsaved state requires keeping
+the tab open or downloading the backup; it cannot survive a reload by itself.
+
+Refetchable chart caches are bounded to 1,200 candles and 90,000 characters each,
+with an aggregate target of 700,000 characters. On quota pressure only owned candle
+cache keys are evicted, prioritizing the selected index. Full in-memory candles,
+trade records, credentials and saved analysis reports are not deleted. All indices
+continue background analysis. Score sample persistence retains the last 64
+observations, enough for the 32-observation trajectory window.
+
+Instrument metadata downloads are shared by quotes, ATM VWAP and option-premium
+requests. Compact last-good metadata is saved server-side and reused after refresh
+failures, with exponential retry delays of 15 seconds to 5 minutes. Cold-start
+index quotes can use the three existing fixed spot-index tokens. No option/futures
+tokens or expiries are invented; expired option contracts remain unavailable.
+Valid browser-cached MCX metadata is reused if the public master fails, with
+contract expiry checked by the existing resolver. Disk-cache write failures do not
+invalidate a successful in-memory master. On hosts with ephemeral disks, a new
+instance may still need to download contract metadata again.
