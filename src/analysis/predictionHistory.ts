@@ -142,7 +142,7 @@ function validEvidenceSummary(value: PredictionRecord['evidenceSummary']) {
   return value === undefined || value !== null && typeof value === 'object' && ['combined-v1', 'technical-v2'].includes(value.version)
     && Number.isFinite(value.coverage) && value.coverage >= 0 && value.coverage <= 100
     && [value.atr14, value.indiaVix].every(item => item === undefined || Number.isFinite(item) && item > 0)
-    && Array.isArray(value.layers) && value.layers.length === (value.version === 'technical-v2' ? 3 : 6) && value.layers.every(layer => layer
+    && Array.isArray(value.layers) && (value.version === 'technical-v2' ? [3, 4].includes(value.layers.length) : value.layers.length === 6) && value.layers.every(layer => layer
       && typeof layer.name === 'string' && layer.name.length <= 60
       && [layer.weight, layer.coverage, layer.bullish, layer.bearish].every(Number.isFinite)
       && layer.weight > 0 && layer.weight <= 100 && layer.coverage >= 0 && layer.coverage <= 1.000001

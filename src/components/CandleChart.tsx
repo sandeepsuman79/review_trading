@@ -494,7 +494,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
         <span role="status" title={premiums.data ? `Latest premiums received ${new Date(premiums.data.fetchedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST; not historical candle premiums` : undefined}>{scaleView === 'INDEX' ? 'Swipe price scale ← CE · PE →' : premiums.error || (premiums.loading ? 'Loading premiums…' : premiums.data ? `${premiums.data.rows.some(row => (scaleView === 'CE' ? row.ce : row.pe).ltp !== null) ? 'Latest ₹ premiums' : `${scaleView} quotes unavailable`} · Expiry ${premiums.data.expiry} · Received ${new Date(premiums.data.fetchedAt).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false })}` : 'Option premiums unavailable')}</span>
         <div><button type="button" className={scaleView === 'CE' ? 'is-selected' : ''} onClick={() => { setMarker(null); setScaleView('CE') }} aria-label="Show CE premiums">← CE</button><button type="button" className={scaleView === 'INDEX' ? 'is-selected' : ''} onClick={() => { setMarker(null); setScaleView('INDEX') }} aria-label="Show index price levels" title={expiry ? `Nearest option expiry: ${expiry}` : 'Option expiry unavailable'}>{expiryLabel}</button><button type="button" className={scaleView === 'PE' ? 'is-selected' : ''} onClick={() => { setMarker(null); setScaleView('PE') }} aria-label="Show PE premiums">PE →</button></div>
       </div>}
-      <details className="chart-indicator-disclosure">
+      <details className="chart-indicator-disclosure" open={spotIndex || undefined}>
         <summary aria-label={showTradeContext ? 'Support, resistance and chart indicators' : 'Chart indicators'}>
           {showTradeContext ? <span className="chart-indicator-summary-levels">
             <span className="agent-text-bullish">Support (S): {levels?.support === undefined ? 'Not established' : price(levels.support)}</span>
@@ -503,7 +503,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
           <svg className="card-disclosure-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
         </summary>
         <ChartIndicators visibility={indicatorVisibility} onToggle={key => { setMarker(null); setIndicatorVisibility(current => ({ ...current, [key]: !current[key] })) }}
-          average={averages[selectedIndex] || {}} technical={indicators[selectedIndex] || {}} atmVwap={atm.data} atmVwapError={atm.error} vwap={vwap[selectedIndex]} hasVwap={hasVwap} spotIndex={spotIndex} showIndexContext={showIndexContext} showTradeContext={showTradeContext}
+          average={averages[selectedIndex] || {}} technical={indicators[selectedIndex] || {}} atmVwap={atm.data} atmVwapError={atm.error} atmIndexPrice={tick?.ltp ?? candles[latest]?.[4]} vwap={vwap[selectedIndex]} hasVwap={hasVwap} spotIndex={spotIndex} showIndexContext={showIndexContext} showTradeContext={showTradeContext}
           close={selected[4]} trade={trade} indiaVix={indiaVix} indiaVixLoading={indiaVixLoading} now={now} context={`${inspectedIndex >= 0 ? 'Selected candle' : 'Latest candle'} · ${candleDate(selected[0])} IST`} />
       </details>
     </section>

@@ -24,7 +24,8 @@ export const tradingEvidenceRules = {
   minimumAtrRisk: 1, minimumRewardRisk: 1.5,
 }
 export type EvidenceLayer = { key: string; name: string; weight: number; coverage: number; bullish: number; bearish: number; details: string[] }
-export const technicalWeights = { chart: 40, indicators: 45, oi: 15 }
+// Score allocation only. Confirmation cutoffs remain in tradingEvidenceRules.
+export const technicalWeights = { chart: 25, indicators: 15, rsiVwap: 50, oi: 10 }
 export const sentimentWeights = { flows: 30, news: 30, global: 30, pcr: 10 }
 export type MarketSentiment = {
   bullishScore: number; bearishScore: number; coverage: number; bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'UNAVAILABLE'
@@ -112,22 +113,33 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
   const previousEma = averages[averages.length - 2]?.ema20
   const vwap = vwapValues[vwapValues.length - 1]
   const atr = chartCurrent && finite(analysis.atr14) && analysis.atr14 > 0 ? analysis.atr14 : undefined
-  add(indicators, .05, price !== undefined && finite(analysis.movingAverage20) ? Math.sign(price - analysis.movingAverage20) : undefined, `SMA(20): ${finite(analysis.movingAverage20) ? format(analysis.movingAverage20) : 'warming up'}`)
-  add(indicators, .05, price !== undefined && finite(analysis.exponentialMovingAverage20) ? Math.sign(price - analysis.exponentialMovingAverage20) : undefined, `EMA(20): ${finite(analysis.exponentialMovingAverage20) ? format(analysis.exponentialMovingAverage20) : 'warming up'}`)
+  add(indicators, 1 / 15, price !== undefined && finite(analysis.movingAverage20) ? Math.sign(price - analysis.movingAverage20) : undefined, `SMA(20): ${finite(analysis.movingAverage20) ? format(analysis.movingAverage20) : 'warming up'}`)
+  add(indicators, 1 / 15, price !== undefined && finite(analysis.exponentialMovingAverage20) ? Math.sign(price - analysis.exponentialMovingAverage20) : undefined, `EMA(20): ${finite(analysis.exponentialMovingAverage20) ? format(analysis.exponentialMovingAverage20) : 'warming up'}`)
   const ema20 = analysis.exponentialMovingAverage20, ema50 = analysis.exponentialMovingAverage50
   const emaVote = price !== undefined && finite(ema20) && finite(ema50) && finite(previousEma)
     ? (Math.sign(ema20 - ema50) + Math.sign(ema20 - previousEma)) / 2 : undefined
-  add(indicators, .2, emaVote, `EMA(20/50) alignment and EMA(20) slope: ${emaVote === undefined ? 'warming up' : emaVote > 0 ? 'upward' : emaVote < 0 ? 'downward' : 'mixed'}`)
-  add(indicators, .1, price !== undefined ? trajectory.slopeVote : undefined, trajectory.slopeDetails.join(' · ') || 'EMA trajectories: warming up or interrupted candle data')
-  add(indicators, .05, price !== undefined ? trajectory.turnVote : undefined, trajectory.turns.length ? trajectory.turns.map(turn => turn.name).join(' · ') : 'No new completed-bar turn or crossover')
-  add(indicators, .1, price !== undefined && finite(analysis.rsi14) ? (analysis.rsi14 - 50) / 20 : undefined, `RSI(14): ${finite(analysis.rsi14) ? format(analysis.rsi14) : 'warming up'}`)
-  add(indicators, .1, price !== undefined && finite(analysis.rsi14Momentum) ? analysis.rsi14Momentum / 8 : undefined, `RSI(14) momentum: ${finite(analysis.rsi14Momentum) ? format(analysis.rsi14Momentum) : 'warming up'}`)
+  add(indicators, 5 / 15, emaVote, `EMA(20/50) alignment and EMA(20) slope: ${emaVote === undefined ? 'warming up' : emaVote > 0 ? 'upward' : emaVote < 0 ? 'downward' : 'mixed'}`)
+  add(indicators, 2 / 15, price !== undefined ? trajectory.slopeVote : undefined, trajectory.slopeDetails.join(' · ') || 'EMA trajectories: warming up or interrupted candle data')
+  const otherTurns = trajectory.turns.filter(turn => !/RSI|VWAP/i.test(turn.name))
+  const otherTurnVote = trajectory.turnVote === undefined ? undefined : otherTurns.length ? otherTurns.reduce((sum, turn) => sum + (turn.side === 'CALL' ? 1 : -1), 0) / otherTurns.length : 0
+  add(indicators, 1 / 15, price !== undefined ? otherTurnVote : undefined, otherTurns.length ? otherTurns.map(turn => turn.name).join(' · ') : 'No new non-RSI/non-VWAP completed-bar turn or crossover')
+  const rsiVwap = layer('rsiVwap', 'RSI structure + VWAP')
+  add(rsiVwap, .16, price !== undefined && finite(analysis.rsi14) ? (analysis.rsi14 - 50) / 20 : undefined, `RSI(14): ${finite(analysis.rsi14) ? format(analysis.rsi14) : 'warming up'}`)
+  add(rsiVwap, .14, price !== undefined && finite(analysis.rsi14Momentum) ? analysis.rsi14Momentum / 8 : undefined, `RSI(14) momentum: ${finite(analysis.rsi14Momentum) ? format(analysis.rsi14Momentum) : 'warming up'}`)
+  const rsiStructure = trajectory.swingEvidence.find(item => item.name === 'RSI')?.structure
+  const structureVote = price === undefined || !rsiStructure || rsiStructure.trend === 'WARMING_UP' ? undefined
+    : rsiStructure.breakDirection ? rsiStructure.breakDirection === 'UP' ? 1 : -1
+      : rsiStructure.trend === 'UPTREND' ? 1 : rsiStructure.trend === 'DOWNTREND' ? -1 : 0
+  add(rsiVwap, .2, structureVote, `RSI structure: ${rsiStructure?.pattern ?? 'warming up'}${rsiStructure?.breakDirection ? ` · broken ${rsiStructure.breakDirection.toLowerCase()}` : ''}`)
+  if (structureVote === undefined) missing.push('Confirmed RSI HH/HL/LH/LL swings')
   if (price !== undefined && finite(analysis.rsi14) && (analysis.rsi14 >= 70 || analysis.rsi14 <= 30)) riskNotes.push(`RSI(14) is ${analysis.rsi14 >= 70 ? 'overbought' : 'oversold'}; momentum and the confirmed price pattern must be considered together, not as an automatic reversal.`)
-  add(indicators, .2, price !== undefined && analysis.supertrendDirection ? analysis.supertrendDirection === 'UP' ? 1 : -1 : undefined, `Supertrend(10,3): ${analysis.supertrendDirection || 'warming up'}`)
+  add(indicators, 5 / 15, price !== undefined && analysis.supertrendDirection ? analysis.supertrendDirection === 'UP' ? 1 : -1 : undefined, `Supertrend(10,3): ${analysis.supertrendDirection || 'warming up'}`)
   const indexVwap = ['Nifty 50', 'Sensex', 'Bank Nifty'].includes(instrument)
-  const atmBias = indexVwap ? atmVwapBias(atmVwap, instrument, price, now) : undefined
+  // ATM follows the current index quote used for this fresh request. An hourly
+  // candle's older close must not invalidate the selected current ATM strike.
+  const atmBias = indexVwap ? atmVwapBias(atmVwap, instrument, atmVwap?.referenceIndexPrice ?? price, now) : undefined
   const vwapVote = price === undefined ? undefined : indexVwap ? atmBias === undefined ? undefined : atmBias === 'BULLISH' ? 1 : atmBias === 'BEARISH' ? -1 : 0 : finite(vwap) ? Math.sign(price - vwap) : undefined
-  add(indicators, .15, vwapVote, indexVwap
+  add(rsiVwap, .5, vwapVote, indexVwap
     ? `ATM CE/PE VWAP: ${atmBias === undefined ? 'unavailable; waiting for current full-session ATM candles' : `strike ${atmVwap!.strike} · CE ${format(atmVwap!.ce.vwap)} / PE ${format(atmVwap!.pe.vwap)} · ${atmBias.toLowerCase()}`}`
     : `VWAP: ${finite(vwap) ? `${format(vwap)} · price ${price !== undefined && price > vwap ? 'above' : 'below'}` : 'unavailable; zero traded volume'}`)
   if (vwapVote === undefined) missing.push(indexVwap ? 'Current ATM CE/PE VWAP' : 'VWAP (genuine traded volume unavailable)')

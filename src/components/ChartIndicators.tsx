@@ -16,13 +16,15 @@ const controls: Array<{ key: ChartIndicator; label: string; color: string }> = [
 ]
 const number = (value?: number) => value === undefined ? '—' : value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-export default function ChartIndicators({ visibility, onToggle, average, technical, atmVwap, atmVwapError, vwap, hasVwap, spotIndex, showIndexContext = true, showTradeContext = showIndexContext, close, context, trade, indiaVix, indiaVixLoading, now }: {
+export default function ChartIndicators({ visibility, onToggle, average, technical, atmVwap, atmVwapError, atmIndexPrice, vwap, hasVwap, spotIndex, showIndexContext = true, showTradeContext = showIndexContext, close, context, trade, indiaVix, indiaVixLoading, now }: {
   visibility: ChartIndicatorVisibility; onToggle: (key: ChartIndicator) => void;
   average: MovingAveragePoint; technical: TechnicalIndicatorPoint; vwap?: number;
-  atmVwap?: AtmVwapSnapshot; atmVwapError?: string;
+  atmVwap?: AtmVwapSnapshot; atmVwapError?: string; atmIndexPrice?: number;
   hasVwap: boolean; spotIndex: boolean; showIndexContext?: boolean; showTradeContext?: boolean; close: number; context: string; trade?: ChartTradeLevels;
   indiaVix?: IndiaVixSnapshot; indiaVixLoading?: boolean; now: number
 }) {
+  const atmBias = atmVwapBias(atmVwap, atmVwap?.index ?? '', atmIndexPrice ?? close, now)
+  const atmTime = atmVwap?.ce.asOf && atmVwap.pe.asOf ? Math.min(Date.parse(atmVwap.ce.asOf), Date.parse(atmVwap.pe.asOf)) : undefined
   const vwapPosition = vwap === undefined ? 'neutral' : close > vwap ? 'positive' : close < vwap ? 'negative' : 'neutral'
   const emaDirection = average.ema20 === undefined || average.ema50 === undefined ? 'neutral' : average.ema20 > average.ema50 ? 'positive' : average.ema20 < average.ema50 ? 'negative' : 'neutral'
   const rsiExtreme = technical.rsi14 !== undefined && (technical.rsi14 >= 70 || technical.rsi14 <= 30)
@@ -48,9 +50,12 @@ export default function ChartIndicators({ visibility, onToggle, average, technic
     <div className="chart-indicator-context">{context}</div>
     <div className="chart-indicator-metrics" role="region" aria-label="Chart indicator values" tabIndex={0}>
       {spotIndex ? <div className="chart-indicator-metric" aria-label="VWAP indicator">
-        <span className="chart-indicator-metric-title">ATM VWAP · CE / PE</span>
+        <span className="chart-indicator-metric-title">{atmVwap?.index} ATM VWAP · CE / PE</span>
         <strong>{atmVwap ? `${number(atmVwap.ce.vwap ?? undefined)} / ${number(atmVwap.pe.vwap ?? undefined)}` : atmVwapError ? 'Unavailable' : 'Loading…'}</strong>
-        <small>{atmVwap ? `Strike ${atmVwap.strike.toLocaleString('en-IN')} · ${atmVwap.expiry} · ${atmVwapBias(atmVwap, atmVwap.index, close, now)?.toLowerCase() ?? 'Data not current or incomplete'}` : atmVwapError || 'Waiting for ATM option candles'}</small>
+        <small>{atmVwap ? `Strike ${atmVwap.strike.toLocaleString('en-IN')} · Expiry ${atmVwap.expiry} · ${atmBias?.toLowerCase() ?? 'Last available / incomplete; excluded from signals'}` : atmVwapError || 'Waiting for ATM option candles'}</small>
+        {atmVwap && <small>CE price {number(atmVwap.ce.close ?? undefined)} · PE price {number(atmVwap.pe.close ?? undefined)}</small>}
+        {atmTime !== undefined && <small>As of {new Date(atmTime).toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} IST</small>}
+        {atmVwap && atmVwapError && <small>{atmVwapError}</small>}
       </div> : <div className="chart-indicator-metric" aria-label="VWAP indicator">
         <span className="chart-indicator-metric-title">VWAP</span><strong>{vwap === undefined ? 'Unavailable' : number(vwap)}</strong>
         <small className={`indicator-${vwapPosition}`}>{vwap === undefined ? 'Waiting for candle volume' : close > vwap ? 'Price above' : close < vwap ? 'Price below' : 'Price at VWAP'}</small>

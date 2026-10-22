@@ -1,3 +1,4 @@
+import { findTrendSetups, type TrendCandidate } from './trendSetups'
 import { analyzeDirectionalAlignment, type DirectionalAlignment } from './directionalAlignment'
 import type { AngelOneCandle } from '../api/angelOne'
 import type { MovingAveragePoint } from './movingAverages'
@@ -9,7 +10,7 @@ import { inTradingEntryWindow } from './tradingSession'
 import { isCommodity } from './commodities'
 
 export type MomentumCandidate = {
-  side: 'CALL' | 'PUT'; pattern: 'TREND_MOMENTUM_BREAK' | 'EMA_PULLBACK_RECLAIM' | 'OPENING_RANGE_BREAKOUT' | 'LEVEL_BREAK_REVERSAL' | 'THREE_CANDLE_REVERSAL'
+  side: 'CALL' | 'PUT'; pattern: TrendCandidate['pattern'] | 'TREND_MOMENTUM_BREAK' | 'EMA_PULLBACK_RECLAIM' | 'OPENING_RANGE_BREAKOUT' | 'LEVEL_BREAK_REVERSAL' | 'THREE_CANDLE_REVERSAL'
   setup: string; reason: string; entry: number; stopLoss: number; target: number; score: number
   confluence: string[]; invalidation: string; targetBasis: string
 }
@@ -22,14 +23,16 @@ export function findMomentumSetups(candles: AngelOneCandle[], averages: MovingAv
   const atr = current.atr14, adx = current.adx14, rsi = current.rsi14
   if (!atr || adx === undefined || rsi === undefined || current.plusDi14 === undefined || current.minusDi14 === undefined || avg.ema20 === undefined || avg.ema50 === undefined || oldAvg.ema20 === undefined) return []
   if (!inTradingEntryWindow(Date.parse(latest[0]) + candleIntervalMs(interval), instrument)) return []
-  const session = candleSession(latest[0]), recent = candles.slice(-7)
+  const session = candleSession(latest[0]), recent = candles.slice(-3)
   if (recent.some((bar, i) => candleSession(bar[0]) !== session || i > 0 && Date.parse(bar[0]) - Date.parse(recent[i - 1][0]) !== candleIntervalMs(interval))) return []
   const candleRange = latest[2] - latest[3], body = Math.abs(latest[4] - latest[1])
-  // A gap/large spike or a tiny indecisive body is not a fresh momentum entry.
-  if (candleRange <= 0 || candleRange > 2 * atr || body < .4 * candleRange || Math.abs(latest[4] - avg.ema20) > 1.8 * atr) return []
-  const buffer = Math.max(.05 * atr, latest[4] * .00003), candidates: MomentumCandidate[] = []
   const alignment = suppliedAlignment ?? analyzeDirectionalAlignment(candles, averages, indicators, interval, { support, resistance })
   if (Date.parse(alignment.at ?? '') !== Date.parse(latest[0])) return []
+  const candidates: MomentumCandidate[] = findTrendSetups(candles, averages, indicators, interval, alignment, support, resistance, instrument)
+  // Keep the original families' stricter filters. The local continuation and
+  // impulse families have their own bounded extension/body/price-event checks.
+  if (candleRange <= 0 || candleRange > 2 * atr || body < .4 * candleRange || Math.abs(latest[4] - avg.ema20) > 1.8 * atr) return candidates
+  const buffer = Math.max(.05 * atr, latest[4] * .00003)
   const sameSession = candles.filter(bar => candleSession(bar[0]) === session)
   const openMinute = isCommodity(instrument) ? 540 : 555
   const opening = sameSession.filter(bar => {
@@ -57,7 +60,9 @@ export function findMomentumSetups(candles: AngelOneCandle[], averages: MovingAv
     }
     const prior = candles.slice(-4, -1)
     const breakLevel = d === 1 ? Math.max(...prior.map(bar => bar[2])) : Math.min(...prior.map(bar => bar[3]))
-    if (d * (latest[4] - breakLevel) > buffer && d * (previous[4] - breakLevel) <= 0) add('TREND_MOMENTUM_BREAK', `${d === 1 ? 'Bullish' : 'Bearish'} trend momentum break`, breakLevel, 73)
+    const breakWindow = candles.slice(-4)
+    const breakReady = breakWindow.every((bar, i) => candleSession(bar[0]) === session && (i === 0 || Date.parse(bar[0]) - Date.parse(breakWindow[i - 1][0]) === candleIntervalMs(interval)))
+    if (breakReady && d * (latest[4] - breakLevel) > buffer && d * (previous[4] - breakLevel) <= 0) add('TREND_MOMENTUM_BREAK', `${d === 1 ? 'Bullish' : 'Bearish'} trend momentum break`, breakLevel, 73)
     const touchedEma = d === 1 ? previous[3] <= oldAvg.ema20 + .2 * atr : previous[2] >= oldAvg.ema20 - .2 * atr
     const reclaimLevel = d === 1 ? previous[2] : previous[3]
     if (routes.some(route => route.family === 'EMA') && touchedEma && d * (latest[4] - reclaimLevel) > buffer) add('EMA_PULLBACK_RECLAIM', `EMA(20) pullback + ${d === 1 ? 'bullish' : 'bearish'} reclaim`, oldAvg.ema20, 79)

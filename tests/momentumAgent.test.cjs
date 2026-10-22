@@ -1,3 +1,4 @@
+const atmVwapFixture = require('./helpers/atmVwap.cjs')
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs'), ts = require('typescript')
@@ -37,7 +38,7 @@ test('real completed CALL and PUT momentum patterns confirm without unavailable 
     const candles = fixture(d), now = start + candles.length * 300000
     const analysis = analyzePriceAction(candles, 'FIVE_MINUTE', now)
     assert.equal(analysis.pattern, 'TREND_MOMENTUM_BREAK'); assert.equal(analysis.side, d === 1 ? 'CALL' : 'PUT')
-    const evidence = analyzeTradingEvidence({ analysis, candles, instrument: 'Nifty 50', interval: 'FIVE_MINUTE', now })
+    const evidence = analyzeTradingEvidence({ analysis, candles, instrument: 'Nifty 50', interval: 'FIVE_MINUTE', now, atmVwap: atmVwapFixture('Nifty 50', analysis.currentPrice, now, d) })
     assert.equal(evidence.canConfirm, true); assert(evidence.checks.every(check => check.passed))
     assert.equal(evidence.vwap, undefined)
     const result = buildEarlyPrediction(analysis, 'Nifty 50', 'FIVE_MINUTE', now, undefined, undefined, evidence)

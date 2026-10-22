@@ -1,3 +1,4 @@
+const atmVwapFixture = require('./helpers/atmVwap.cjs')
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs'), ts = require('typescript')
@@ -60,7 +61,7 @@ test('real five-minute pattern scoring rejects consumed moves symmetrically acro
     const contract = root ? { name:instrument, root, token:'12345', symbol:`${root}20NOV26FUT`, exchange:'MCX', exchangeType:5, expiry:'2026-11-20', expiresAt:mcxSession(Date.parse('2026-11-20T12:00:00+05:30')).close, tickSize:root === 'NATURALGAS' ? .1 : 1 } : undefined
     const candles = Array.from({length:52}, (_,i) => { const o = base + d*(i*.3+Math.sin(i/4)*6)*scale, c = o+d*2*scale; return [new Date(at-(52-i)*duration).toISOString(), o, Math.max(o,c)+.7*scale, Math.min(o,c)-.7*scale, c, root ? 100 : 0] })
     const analysis = analyzePriceAction(candles, 'FIVE_MINUTE', at, instrument)
-    const evidence = analyzeTradingEvidence({ analysis, candles, instrument, interval:'FIVE_MINUTE', now:at })
+    const evidence = analyzeTradingEvidence({ analysis, candles, instrument, interval:'FIVE_MINUTE', now:at, atmVwap: root ? undefined : atmVwapFixture(instrument,analysis.currentPrice,at,d) })
     const prediction = buildEarlyPrediction(analysis, instrument, 'FIVE_MINUTE', at, undefined, undefined, evidence, contract)
     assert.equal(prediction.plan?.stage, 'CONFIRMED', `${instrument}: ${prediction.reason}`)
     assert.equal(prediction.plan.side, d === 1 ? 'CALL' : 'PUT')

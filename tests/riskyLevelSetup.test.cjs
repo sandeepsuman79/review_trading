@@ -1,3 +1,4 @@
+const atmVwapFixture = require('./helpers/atmVwap.cjs')
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs'), ts = require('typescript')
@@ -57,7 +58,7 @@ test('absent opposite target uses a clearly labelled projection, and no setup is
 
 test('full chart and indicator confirmation retains CONFIRMED stage',()=>{
   const candles=Array.from({length:52},(_,i)=>{const open=22000+i*.3+Math.sin(i/4)*6,close=open+2;return[new Date(start+i*300000).toISOString(),open,close+.7,open-.7,close,0]})
-  const now=start+52*300000,analysis=analyzePriceAction(candles,interval,now),evidence=analyzeTradingEvidence({analysis,candles,instrument:'Nifty 50',interval,now})
+  const now=start+52*300000,analysis=analyzePriceAction(candles,interval,now),evidence=analyzeTradingEvidence({analysis,candles,instrument:'Nifty 50',interval,now,atmVwap:atmVwapFixture('Nifty 50',analysis.currentPrice,now,1)})
   assert(evidence.canConfirm);assert.equal(evidence.riskySetup,undefined)
   assert.equal(buildEarlyPrediction(analysis,'Nifty 50',interval,now,undefined,undefined,evidence).plan.stage,'CONFIRMED')
 })
@@ -76,7 +77,7 @@ test('derived indicators and detected levels produce CALL/PUT risky setups from 
   for(const d of [1,-1]){
     const data=d===1?candles:candles.map(c=>[c[0],44000-c[1],44000-c[3],44000-c[2],44000-c[4],0])
     const now=start+70*300000,analysis=analyzePriceAction(data,interval,now)
-    const evidence=analyzeTradingEvidence({analysis,candles:data,instrument:'Nifty 50',interval,now})
+    const evidence=analyzeTradingEvidence({analysis,candles:data,instrument:'Nifty 50',interval,now,atmVwap:atmVwapFixture('Nifty 50',analysis.currentPrice,now,d)})
     assert.equal(evidence.checks.filter(c=>c.passed).length,4);assert.equal(evidence.canConfirm,false)
     assert(evidence.riskySetup);assert.equal(evidence.riskySetup.side,d===1?'CALL':'PUT')
     assert.equal(buildEarlyPrediction(analysis,'Nifty 50',interval,now,undefined,undefined,evidence).plan.stage,'RISKY')

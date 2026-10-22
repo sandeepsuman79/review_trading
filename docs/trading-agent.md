@@ -57,19 +57,23 @@ even though short-term structure detection uses a bounded recent window.
 
 | Input group | Fixed budget | Inputs |
 | --- | ---: | --- |
-| Chart | 40% | Completed setup, pattern, location, candle pressure, structure, bullish/bearish evidence |
-| Indicators | 45% | SMA20, price/EMA20, EMA20/50 alignment, slopes, turns and crossovers, RSI14/momentum, Supertrend10/3, genuine session VWAP |
-| OI / PCR | 15% | Current unexpired option-chain PCR and call/put OI change balance |
+| Chart | 25% | Completed setup, pattern, location, candle pressure, structure, bullish/bearish evidence |
+| Other indicators | 15% | SMA20, price/EMA20, EMA20/50 alignment, slopes, non-RSI/non-VWAP turns and crossovers, Supertrend10/3 |
+| RSI structure + VWAP | 50% | RSI14 level 8%, momentum 7%, confirmed RSI HH/HL/LH/LL structure 10%, genuine session VWAP 25% |
+| OI / PCR | 10% | Current unexpired option-chain PCR and call/put OI change balance |
 
 Each group's bullish and bearish contributions remain inside its budget. Missing
 inputs never increase other weights. OI walls, max pain and totals remain reference
 levels; OI alone does not establish writing. A missing option chain (including
 Sensex) can leave a trade eligible when remaining technical evidence is strong.
-Zero-volume spot-index candles cannot provide genuine VWAP; its budget stays missing.
+Indices use genuine volume from the selected index’s ATM CE/PE candles for VWAP.
+Zero-volume spot candles cannot supply VWAP; missing ATM data earns no VWAP points.
 
-Inside the 45% indicator budget: SMA20 5%, price/EMA20 5%, EMA20/50 alignment and
-EMA20 slope 20%, EMA20/50 trajectories 10%, new turns/crossovers 5%, RSI level 10%,
-RSI momentum 10%, Supertrend 20%, VWAP 15%. Correlated signals share capped budgets.
+The 15-point other-indicator budget comprises SMA20 1, price/EMA20 1, EMA20/50
+alignment and EMA20 slope 5, EMA trajectories 2, non-RSI/non-VWAP turns 1, and
+Supertrend 5. RSI including its own swing structure supplies 25 points and VWAP
+supplies 25, together exactly half the technical score for setups and confirmed
+reversal exits. Correlated signals share capped budgets.
 
 Completed-bar trajectories compare three-bar EMA20/50 slopes with preceding
 three-bar slopes, using 0.03 ATR as a flat/noise band. Crossovers detect EMA20/50,
@@ -424,9 +428,17 @@ request queue, caches per authenticated session/contract/day, and overlaps the
 last saved minute after initial session sync. Partial sessions, missing volume,
 stale data and options no longer near ATM cannot supply directional context. Paired
 CE-above/PE-below supports upward context; the reverse supports downward context.
-The paired ATM direction supplies the existing 6.75-point technical VWAP
+The paired ATM direction supplies the 25-point technical VWAP
 allocation for indices; mixed legs are neutral and missing data earns no coverage.
-The chart card shows both premium VWAPs and their default ATM strike.
+RSI level (8), momentum (7), and confirmed HH/HL/LH/LL RSI swing structure (10)
+add another 25 points, making RSI structure + VWAP exactly 50% of technical scoring.
+The remaining budgets are chart 25, other indicators 15 and OI/PCR 10. These weights
+also apply to opposite setups used for confirmed reversal exits; protective exits
+continue separately. The chart card stays expanded for indices and shows both
+premium VWAPs, CE/PE prices, ATM strike, expiry and the data timestamp. Before open,
+after close and over weekends, the latest weekday session remains visible but
+cannot earn live directional points. A delayed trailing broker minute is accepted
+only when history is contiguous from open and the separate freshness gate passes.
 Option premiums are compared with their own VWAPs, never with spot-index points. Raw one-minute option data does not
 enable one-minute strategy analysis. Commodity
 futures use their own traded-volume VWAP instead of equity option context.
@@ -442,3 +454,16 @@ order is submitted. Profitability requires separate out-of-sample validation.
 The October 19 changes, including default five-minute analysis, the 1.5× normal
 score rule, persisted score trajectories, refresh recovery and after-market
 learning reports, are specified in [agent-rule-audit.md](agent-rule-audit.md#13-october-19-enhancements).
+
+
+The 22 October continuation update adds fresh local trend breaks and bounded
+impulse breaks, including when the normal 1.8-ATR EMA-distance filter cannot
+accept an entry. These families require four completed contiguous session bars,
+current directional alignment, their own body/range/RSI/extension checks and all
+existing full confirmation/risk checks. Standard momentum families now require
+three current-session bars, with four checked separately for a three-bar range
+break. Seven same-session hourly bars are no longer a universal prerequisite for
+index momentum detection. A flat Supertrend band can qualify through a held-side
+route with fresh completed price progress. The main trade card explains failed
+checks and applicable price-event blockers. Scoring budgets and confirmation
+thresholds stay as documented above.
