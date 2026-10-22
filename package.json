@@ -10,7 +10,7 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "test:options": "node --test tests/optionPremiums.test.js tests/indexPriceScale.test.cjs tests/optionSession.test.cjs tests/atmVwap.test.js tests/atmVwapContext.test.cjs",
-    "test:agent": "node --test tests/tradeDecision.test.cjs tests/directionalAlignment.test.cjs tests/momentumAgent.test.cjs tests/historicalOutcomes.test.cjs tests/riskyLevelSetup.test.cjs tests/agentTimeframe.test.cjs tests/tradingSchedule.test.cjs tests/tradeProtection.test.cjs tests/setupTiming.test.cjs tests/multiTimeframe.test.cjs tests/multiTimeframeHistory.test.cjs tests/agentMonitoring.test.cjs tests/sentimentFreshness.test.cjs tests/intrabarContext.test.cjs",
+    "test:agent": "node --test tests/tradeDecision.test.cjs tests/directionalAlignment.test.cjs tests/momentumAgent.test.cjs tests/trendOpportunities.test.cjs tests/historicalOutcomes.test.cjs tests/riskyLevelSetup.test.cjs tests/agentTimeframe.test.cjs tests/tradingSchedule.test.cjs tests/tradeProtection.test.cjs tests/setupTiming.test.cjs tests/multiTimeframe.test.cjs tests/multiTimeframeHistory.test.cjs tests/agentMonitoring.test.cjs tests/sentimentFreshness.test.cjs tests/intrabarContext.test.cjs",
     "test:enhancements": "node --test tests/strategyEnhancements.test.cjs tests/sessionReview.test.js",
     "test:resilience": "node --test tests/storageResilience.test.cjs tests/instrumentMaster.test.js",
     "test:replay": "node --test tests/strategyReplay.test.cjs",

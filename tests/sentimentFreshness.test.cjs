@@ -1,3 +1,4 @@
+const atmVwapFixture = require('./helpers/atmVwap.cjs')
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -31,7 +32,7 @@ function fixture(direction = 1) {
       giftNifty: snapshot({ symbol: 'GIFT_NIFTY', price: 100, changePercent: direction, asOf: iso(0) }),
     } }
   const outlook = { contextRevision: 'r1', articleSentiments: [{ articleId: 'one', sentiment: direction === 1 ? 'POSITIVE' : 'NEGATIVE', impactScore: direction * 2, assessedAt: iso(0), scope: 'MARKET_IMPACT' }] }
-  return { analysis, candles, interval: 'FIVE_MINUTE', instrument: 'Nifty 50', context, outlook, now }
+  return { analysis, candles, atmVwap: atmVwapFixture('Nifty 50',100,now,direction), interval: 'FIVE_MINUTE', instrument: 'Nifty 50', context, outlook, now }
 }
 
 test('sentiment age factors halve at published defaults, stay bounded, and enforce hard expiry', () => {

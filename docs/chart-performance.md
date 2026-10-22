@@ -89,9 +89,10 @@ Fresh broker data continues to be consumed in the evening. The index agent's
 All seven instruments use the same Trading Prediction Agent, evidence disclosures,
 CALL/PUT diagnostics (displayed as LONG/SHORT for MCX), horizontal analysis cards,
 optional Gemini second opinion, and confirmed-trades ledger. Commodities use the
-same independent completed 5/15/60-minute setup/trajectory analysis, 55/15 score thresholds, ≥70%
+same independent completed 5/15/60-minute setup/trajectory analysis, positive supporting
+score ≥1.5× opposition, ≥70%
 coverage, ATR stops and ≥1.5:1 reward/risk as indices. Missing commodity option-chain
-OI/PCR keeps its 15% technical budget unavailable. Equity India VIX, index OI/PCR,
+OI/PCR keeps its 10% technical budget unavailable. Equity India VIX, index OI/PCR,
 FII/DII cash flows and equity participant positions do not vote on commodity trades.
 The corresponding cards explicitly retain unavailable data, without reweighting it.
 

@@ -1,3 +1,4 @@
+const atmVwapFixture = require('./helpers/atmVwap.cjs')
 const { test } = require('node:test'), assert = require('node:assert/strict')
 const fs = require('node:fs'), ts = require('typescript')
 require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true } }).outputText, filename)
@@ -12,7 +13,7 @@ function fixture(d=1,count=80,time=now) {
   const side=d===1?'CALL':'PUT'
   const analysis={side,pattern:d===1?'BREAKOUT_RETEST':'BREAKDOWN_RETEST',setup:'Completed retest',reason:'Fixture',phase:d===1?'UPTREND':'DOWNTREND',structure:'Fixture trend',structureEvent:'Established',location:'At level',candleBehavior:'Directional close',analyzedCandles:count,latestCandleTime:candles.at(-1)[0],currentPrice:100,entry:100,stopLoss:100-d*10,target:100+d*20,
     earlyBias:d===1?'BULLISH':'BEARISH',bullishScore:d===1?80:10,bearishScore:d===1?10:80,bullishEvidence:d===1?['Directional buying','Rising lows']:[],bearishEvidence:d===-1?['Directional selling','Falling highs']:[],movingAverage20:100-d,exponentialMovingAverage20:100-d*.8,exponentialMovingAverage50:100-d*2,rsi14:50,rsi14Momentum:0,atr14:2,supertrendDirection:d===1?'DOWN':'UP',alignment:{at:candles.at(-1)[0],routes:[{family:'EMA',side,name:'EMA trajectory'}]}}
-  return {analysis,candles,instrument:'Nifty 50',interval:'FIVE_MINUTE',now:time}
+  return {analysis,candles,instrument:'Nifty 50',interval:'FIVE_MINUTE',now:time,atmVwap:atmVwapFixture('Nifty 50',100,time,0)}
 }
 
 test('1.5x confirms standard CALL and PUT, while high VIX retains 65/20',()=>{
@@ -43,7 +44,7 @@ test('opposite pipeline can confirm independently when the original chart select
 })
 
 test('RR-rejected patterns stay visible with actual levels and cannot enter the ledger',()=>{
-  const input=fixture();input.analysis={...input.analysis,side:'WAIT',pattern:'NO_CONFIRMED_PATTERN',detectedSetups:[{side:'CALL',pattern:'BREAKOUT_RETEST',setup:'Detected retest',reason:'Fixture',entry:100,stopLoss:95,target:106,score:80,confluence:[],invalidation:'Fixture'}]}
+  const input=fixture();input.atmVwap=atmVwapFixture('Nifty 50',100,now,1);input.analysis.rsi14=70;input.analysis.rsi14Momentum=8;input.analysis={...input.analysis,side:'WAIT',pattern:'NO_CONFIRMED_PATTERN',detectedSetups:[{side:'CALL',pattern:'BREAKOUT_RETEST',setup:'Detected retest',reason:'Fixture',entry:100,stopLoss:95,target:106,score:80,confluence:[],invalidation:'Fixture'}]}
   const evidence=analyzeTradingEvidence(input), decision=evidence.decisions.find(item=>item.side==='CALL')
   assert.equal(decision.state,'EARLY');assert.equal(decision.riskReward,1.2);assert.equal(decision.entry,100)
   assert(decision.reasons.includes('RR_BELOW_MINIMUM'));assert.equal(evidence.canConfirm,false)
@@ -53,12 +54,12 @@ test('RR-rejected patterns stay visible with actual levels and cannot enter the 
 
 test('30-bar analysis can show an early candidate but cannot bypass EMA50 readiness',()=>{
   for(const d of [1,-1]) {
-    const input=fixture(d,30)
+    const input=fixture(d,30);input.atmVwap=atmVwapFixture('Nifty 50',100,now,d)
     input.analysis.exponentialMovingAverage50=undefined;input.analysis.supertrendDirection=d===1?'UP':'DOWN';input.analysis.rsi14=d===1?70:30;input.analysis.rsi14Momentum=8*d
     input.analysis.alignment.routes=[{family:'SUPERTREND',side:input.analysis.side,name:'Supertrend trajectory'}]
     const result=analyzeTradingEvidence(input), own=result.decisions.find(item=>item.side===input.analysis.side)
     assert.equal(result.canConfirm,false);assert.equal(own.state,'EARLY');assert(own.reasons.includes('INDICATOR_NOT_READY'))
-    assert(own.coverage>=60 && own.coverage<70)
+    assert(own.coverage>=60 && own.coverage<80)
     const insufficient=analyzeTradingEvidence({...input,candles:input.candles.slice(1),analysis:{...input.analysis,analyzedCandles:29}})
     assert.notEqual(insufficient.decisions.find(item=>item.side===input.analysis.side).state,'EARLY')
   }

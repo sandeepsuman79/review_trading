@@ -1,3 +1,4 @@
+const atmVwapFixture = require('./helpers/atmVwap.cjs')
 const { test } = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs'), ts = require('typescript')
 require.extensions['.ts'] = (m, f) => m._compile(ts.transpileModule(fs.readFileSync(f, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true } }).outputText, f)
 const { LiveCandleBook } = require('../src/analysis/liveCandleBook.ts')
@@ -15,7 +16,7 @@ const scenarioTime = i => i < 50 ? start - 86400000 + i * 300000 : start + (i - 
 const fixture = d => Array.from({ length: 52 }, (_, i) => { const open = 22000 + d * (i * .3 + Math.sin(i / 4) * 6); return bar(start + i * 300000, open, open + d * 2) })
 function assess(candles) {
   const now = Date.parse(candles.at(-1)[0]) + 300000, analysis = analyzePriceAction(candles, 'FIVE_MINUTE', now)
-  const evidence = analyzeTradingEvidence({ analysis, candles, instrument: 'Nifty 50', interval: 'FIVE_MINUTE', now })
+  const evidence = analyzeTradingEvidence({ analysis, candles, instrument: 'Nifty 50', interval: 'FIVE_MINUTE', now, atmVwap: atmVwapFixture('Nifty 50', analysis.currentPrice, now, Math.sign(candles.at(-1)[4] - candles.at(-1)[1])) })
   return { now, analysis, evidence, prediction: buildEarlyPrediction(analysis, 'Nifty 50', 'FIVE_MINUTE', now, undefined, undefined, evidence) }
 }
 
@@ -73,7 +74,7 @@ test('intraday tops at different prices and times can independently develop conf
       if(i===topBar-1)assert(Math.abs(price-top)<.00001)
       if(i<topBar)continue
       const now=scenarioTime(i)+300000,analysis=analyzePriceAction(candles,'FIVE_MINUTE',now)
-      const evidence=analyzeTradingEvidence({analysis,candles,instrument,interval:'FIVE_MINUTE',now})
+      const evidence=analyzeTradingEvidence({analysis,candles,instrument,interval:'FIVE_MINUTE',now,atmVwap:atmVwapFixture(instrument,analysis.currentPrice,now,-1)})
       if(evidence.canConfirm && evidence.selectedAnalysis.side==='PUT'){confirmed=true;assert(evidence.bearishScore>0&&evidence.bearishScore>=1.5*evidence.bullishScore);assert(evidence.checks.every(check=>check.passed));break}
     }
     assert(confirmed,instrument+' must support PUT confirmation after a qualified completed reversal')

@@ -73,6 +73,9 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
   const marketTone = endedSetup ? 'neutral' : marketBias === 'BULLISH' ? 'bullish' : marketBias === 'BEARISH' ? 'bearish' : 'neutral'
   const direction = marketBias === 'BULLISH' ? directionLabel('CALL') : marketBias === 'BEARISH' ? directionLabel('PUT') : 'NEUTRAL'
   const marketView = endedSetup ? 'SETUP ENDED · WAIT FOR A FRESH SETUP' : risky ? `RISKY ${directionLabel(plan.side)}` : marketBias === 'NEUTRAL' ? 'NEUTRAL' : evidence ? evidence.canConfirm && 'plan' in prediction && prediction.plan.stage === 'CONFIRMED' ? `CONFIRMED ${direction}` : `EARLY ${direction}` : analysis.earlyStage === 'TRIGGER' ? `${direction} TRIGGER` : analysis.earlyStage === 'CONFIRMED' ? `CONFIRMED ${direction}` : `EARLY ${direction}`
+  const blockedSide = marketBias === 'BULLISH' ? 'CALL' : marketBias === 'BEARISH' ? 'PUT' : undefined
+  const blockedDecision = evidence?.decisions?.find(decision => decision.side === blockedSide && decision.state !== 'CONFIRMED')
+  const setupBlockers = blockedDecision?.checks.filter(check => check.status === 'FAIL') ?? []
   const bullishScore = evidence?.bullishScore ?? analysis.bullishScore, bearishScore = evidence?.bearishScore ?? analysis.bearishScore
   const bullishEvidence = evidence?.bullishEvidence ?? analysis.bullishEvidence, bearishEvidence = evidence?.bearishEvidence ?? analysis.bearishEvidence
   const strength = endedSetup ? 'ENTRY RETIRED' : risky ? 'PARTIAL ALIGNMENT' : evidence ? Math.max(bullishScore, bearishScore) < 30 ? 'NO BIAS' : marketBias === 'NEUTRAL' ? 'CONFLICTED' : Math.max(bullishScore, bearishScore) < evidence.requiredScore ? 'WEAK' : 'ALIGNED' : analysis.earlyStrength.replace(/_/g, ' ')
@@ -94,6 +97,11 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
       {activeTrade?.entryAt !== undefined && now >= squareOffTime(activeTrade.entryAt, instrument) && <p className="agent-entry-status" role="status">{squareOffLabel(instrument, activeTrade.entryAt)} IST square-off is due · Waiting for an observed exit quote. No exit price has been assumed.</p>}
       {streamConnected && (!isFreshTick(tick, now) || !activeTrade && !freshEntryQuote) && <p className="agent-entry-status" role="status">Waiting for a fresh instrument quote · Entry requires a quote no more than 30 seconds old.</p>}
       <div className="early-prediction-result" aria-live="polite"><p>{reason}</p></div>
+      {!activeTrade && plan?.stage !== 'CONFIRMED' && blockedDecision && setupBlockers.length > 0 && <div className="agent-risk-details" role="status" aria-label="Current setup blockers">
+        <strong>{directionLabel(blockedDecision.side)} setup waiting for</strong>
+        <ul>{setupBlockers.map(check => <li key={check.code}>{check.label}: {check.detail}</li>)}</ul>
+        {analysis.setupDiagnostics?.map(detail => <p key={detail}>{detail}</p>)}
+      </div>}
       {risky && plan.risk && <div className="agent-risk-details" role="status"><strong>Elevated-risk setup · {plan.risk.passedChecks}/7 full-confirmation checks passed</strong><p>{plan.risk.levelType === 'SUPPORT' ? 'Support' : 'Resistance'} {price(plan.risk.level)} · Matched route: {plan.risk.alignedIndicators.join(' or ')}</p><p>Still missing: {plan.risk.unmetChecks.join(' · ')}{plan.risk.opposedIndicators.length > 0 && ` · Conflicting indicators: ${plan.risk.opposedIndicators.join(' · ')}`}</p><p>The proposed levels pass ATR and 1.5:1 reward/risk checks. Full confirmation still needs a valid completed setup and a fresh live quote.</p></div>}
       {!plan && current !== undefined && <div className="agent-quote-preview"><span>{quoteLabel}</span><strong>{price(current)}</strong><small>{time(quoteAt ?? (analysis.latestCandleTime ? Date.parse(analysis.latestCandleTime) : undefined))}</small></div>}
       {plan && <dl className="agent-trade-facts">

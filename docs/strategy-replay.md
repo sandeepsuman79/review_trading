@@ -113,3 +113,12 @@ The test injection parameter exists solely to stress the execution engine with
 controlled scenarios. The CLI always uses the current production technical rules.
 Validate on unseen sessions and multiple volatility conditions before proposing
 any live parameter changes. This tool does not modify those parameters.
+
+
+With the 22 October RSI/VWAP weights, index OHLC alone has at most 65% technical
+coverage: the paired ATM VWAP (25%) and OI/PCR (10%) are absent. The current offline
+CLI does not accept archived context, so it cannot confirm index entries at the
+70% coverage threshold. Zero index entries therefore do not establish strategy
+performance. MCX OHLCV includes its own genuine volume and can still supply VWAP.
+Live index analysis obtains ATM context separately; it must not be substituted
+into a past replay.

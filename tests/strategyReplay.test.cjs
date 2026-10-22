@@ -96,12 +96,16 @@ test('index cutoff is 15:15; MCX retains its own later session and squares off a
   }
 })
 
-test('real production strategy confirms both directions for all seven instruments without invented contextual inputs', () => {
+test('real production replay excludes indices without archived ATM/OI and confirms both MCX directions with genuine futures volume', () => {
   const at = Date.parse('2026-10-16T14:00:00+05:30')
   for (const [instrument, base, scale, root] of [['Nifty 50', 22000, 1], ['Sensex', 74000, 3], ['Bank Nifty', 50000, 2], ['Natural Gas', 300, .2, 'NATURALGAS'], ['Crude Oil', 6000, 2, 'CRUDEOIL'], ['Gold', 110000, 10, 'GOLD'], ['Silver', 90000, 10, 'SILVER']]) for (const d of [1, -1]) {
     const candles = Array.from({ length: 52 }, (_, i) => { const o = base + d * (i * .3 + Math.sin(i / 4) * 6) * scale, c = o + d * 2 * scale; return [new Date(at - (52 - i) * duration).toISOString(), o, Math.max(o, c) + .7 * scale, Math.min(o, c) - .7 * scale, c, root ? 100 : 0] })
     const matched = root ? { ...contract(instrument, root), tickSize: root === 'NATURALGAS' ? .1 : 1 } : undefined
     const plan = evaluateReplaySetup({ instrument, contract: matched, candles, now: at })
+    if (!root) {
+      assert.equal(plan, undefined, `${instrument}: absent ATM/OI leaves at most 65% coverage, below 70%`)
+      continue
+    }
     assert.equal(plan?.stage, 'CONFIRMED', instrument)
     assert.equal(plan.side, d === 1 ? 'CALL' : 'PUT')
     assert.equal(plan.evidenceSummary.indiaVix, undefined)

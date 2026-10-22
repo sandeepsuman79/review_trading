@@ -1,4 +1,5 @@
 import { analyzeDirectionalAlignment, type DirectionalAlignment } from './directionalAlignment'
+import { momentumSetupBlockers } from './trendSetups'
 import { findMomentumSetups } from './momentumSetups'
 import type { AngelOneCandle } from '../api/angelOne'
 import { completedCandles } from './candleData'
@@ -41,6 +42,8 @@ export type PriceActionPattern =
   | 'BULLISH_FALSE_BREAKDOWN'
   | 'BEARISH_FALSE_BREAKOUT'
   | 'COMPRESSION_BREAKOUT'
+  | 'TREND_CONTINUATION_BREAK'
+  | 'DIRECTIONAL_IMPULSE_BREAK'
   | 'TREND_MOMENTUM_BREAK'
   | 'EMA_PULLBACK_RECLAIM'
   | 'OPENING_RANGE_BREAKOUT'
@@ -56,6 +59,7 @@ export type DetectedChartSetup = {
 
 export type PriceActionAnalysis = {
   detectedSetups?: DetectedChartSetup[]
+  setupDiagnostics?: string[]
   side: PriceActionSide
   phase: PriceActionPhase
   structure: string
@@ -1474,6 +1478,7 @@ export function analyzePriceAction(
         structureEvent,
         location,
         candleBehavior: behavior,
+        setupDiagnostics: momentumSetupBlockers(closedCandles, movingAverageSeries, indicatorSeries, interval, alignment),
         alignment,
         support,
         resistance,

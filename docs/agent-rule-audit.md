@@ -1,7 +1,8 @@
 # Trading Prediction Agent: rules to verify
 
 This describes the implementation in this checkout, including the late-entry
-fixes and multi-timeframe update from 16 October 2026. It applies to Nifty 50, Sensex, Bank Nifty, Natural Gas,
+fixes, the multi-timeframe update from 16 October 2026 and the RSI/VWAP weighting
+and ATM display fixes from 22 October 2026. It applies to Nifty 50, Sensex, Bank Nifty, Natural Gas,
 Crude Oil, Silver and Gold. It does not certify the version currently deployed on
 Render or establish prediction accuracy.
 
@@ -68,6 +69,8 @@ families still need the technical gates in section 6.
 | EMA pullback reclaim | Prior candle touches EMA20; latest breaks its high with an EMA route | Mirrored reclaim downward |
 | Opening range | First completed close through the actual first 15-minute range high | First close through its low |
 | Level break/reversal | Current support reaction or resistance break route | Current resistance reaction or support break route |
+| Local trend continuation | Fresh close through the previous high with continuing upward progress, RSI and an eligible route | Mirrored fresh break through the previous low |
+| Directional impulse | Strong completed expansion through the prior three-bar high, with improving directional RSI and an eligible route | Mirrored break below the prior three-bar low |
 | Three-candle reversal | Strong opposing first body, small middle at support, upward confirmation through first-body midpoint and middle high | Mirrored at resistance |
 
 The prior range for the original families is `slice(-22, -2)`. Compression means
@@ -75,7 +78,9 @@ last-five average range ≤70% of the preceding-ten average; expansion means lat
 range ≥1.35 times the preceding-ten average.
 
 The five added momentum/reclaim/opening-range/level/three-candle families require
-50 bars, ATR/RSI/ADX/DMI/EMA readiness and seven consecutive same-session bars. They
+50 bars, ATR/RSI/ADX/DMI/EMA readiness and three consecutive same-session bars.
+The three-bar range break separately requires all four input bars in this session;
+each alignment route retains its own continuity requirement. These five families
 reject range >2 ATR, body <40% of range, or distance from EMA20 >1.8 ATR. The close
 must be in the directional 65% of the candle range. Their break buffer is
 max(0.05 ATR, price × 0.00003). Opening bars must actually be present: 09:15–09:30
@@ -85,6 +90,23 @@ Internal pattern-ranking scores are distinct from the technical evidence scores.
 Exact predicates and ranking adjustments: [priceAction.ts](../src/analysis/priceAction.ts)
 and [momentumSetups.ts](../src/analysis/momentumSetups.ts).
 
+The continuation and impulse families additionally use four consecutive completed
+same-session bars. Both reject an opening gap greater than 0.5 ATR or distance
+from EMA20 greater than 3 ATR, and require a current matching alignment route.
+Continuation needs a fresh break of the previous candle high/low, a directional
+body ≥35% of range, directional close location ≥65%, range ≤1.5 ATR, RSI on the
+matching side of 50, ≥0.25 ATR progress across three intervals, and at least two
+directional close improvements. EMA20 must progress with the move or Supertrend
+must hold on the correct side across all four bars.
+
+Impulse requires range >1.5 and ≤3 ATR, body ≥65% of range, a close in the
+directional 80% of range, RSI on the matching side of 50 and improving from the
+previous bar, and a fresh break beyond the prior three-bar range. Stops cover the
+local structural extremes and at least 1 ATR. Eligible observed targets remain
+caps; only an absent target permits a labelled 2R projection. All existing score,
+coverage, freshness, entry-window and reward/risk checks still apply. Source:
+[trendSetups.ts](../src/analysis/trendSetups.ts).
+
 ## 4. Directional alignment: OR between routes
 
 At least one route must match the completed pattern's direction:
@@ -93,7 +115,10 @@ At least one route must match the completed pattern's direction:
 - Fast EMA20 turn: preceding three-bar slope opposes the direction, current
   three-bar slope turns with it, and price breaks EMA20 and the preceding high/low
   with improving RSI. Requires seven consecutive same-session bars.
-- Supertrend flip, or a three-bar trajectory with price on its indicated side.
+- Supertrend flip, a three-bar trajectory with price on its indicated side, or
+  four completed bars holding the same Supertrend side with directional RSI, a
+  fresh break of the previous high/low and ≥0.15 ATR net price progress. A flat
+  Supertrend band does not by itself cancel an otherwise qualified continuation.
 - Break through a previously known resistance/support, or a confirmed reaction at
   support/resistance. Reactions require price improvement and a close in the
   directional 55% of range, no farther than 1.5 ATR from the level.
@@ -111,30 +136,53 @@ no coverage or points and its weight is not redistributed. Scores round to one d
 
 | Technical input | Maximum points out of 100 | Vote |
 | --- | ---: | --- |
-| Completed price setup | 18 | CALL +1; PUT -1; WAIT 0 |
-| Non-indicator chart evidence | 14 | Split proportionally between bullish/bearish evidence counts |
-| Market structure | 8 | Uptrend +1; downtrend -1; other 0 |
-| Price vs SMA20 | 2.25 | Sign of price minus SMA20 |
-| Price vs EMA20 | 2.25 | Sign of price minus EMA20 |
-| EMA20/50 alignment and EMA20 slope | 9 | Mean of alignment and latest slope signs |
-| EMA20/50 trajectories | 4.5 | Mean of three-bar trajectory signs |
-| New turns/crossovers | 2.25 | Mean direction of detected turns; no turn 0 |
-| RSI14 | 4.5 | (RSI − 50) / 20 |
-| RSI momentum | 4.5 | (current RSI − RSI three bars ago) / 8 |
-| Supertrend(10,3) | 9 | UP +1; DOWN -1 |
-| Session VWAP | 6.75 | Indices: paired default ATM CE/PE direction; MCX: sign of price minus futures VWAP |
-| PCR | 9 | (PCR − 1) / 0.5 |
-| Call/put OI change balance | 6 | (put change − call change) / (absolute changes total), using 1 if that total is zero |
+| Completed price setup | 11.25 | CALL +1; PUT -1; WAIT 0 |
+| Non-indicator chart evidence | 8.75 | Split proportionally between bullish/bearish evidence counts |
+| Price market structure | 5 | Uptrend +1; downtrend -1; other 0 |
+| Price vs SMA20 | 1 | Sign of price minus SMA20 |
+| Price vs EMA20 | 1 | Sign of price minus EMA20 |
+| EMA20/50 alignment and EMA20 slope | 5 | Mean of alignment and latest slope signs |
+| EMA20/50 trajectories | 2 | Mean of three-bar trajectory signs |
+| Other turns/crossovers | 1 | Mean direction of detected non-RSI/non-VWAP turns; no turn 0 |
+| RSI14 | 8 | (RSI − 50) / 20 |
+| RSI momentum | 7 | (current RSI − RSI three bars ago) / 8 |
+| RSI swing structure | 10 | HH/HL +1; LH/LL −1; mixed 0; confirmed break overrides prior trend |
+| Supertrend(10,3) | 5 | UP +1; DOWN -1 |
+| Session VWAP | 25 | Indices: paired default ATM CE/PE direction; MCX: sign of price minus futures VWAP |
+| PCR | 6 | (PCR − 1) / 0.5 |
+| Call/put OI change balance | 4 | (put change − call change) / (absolute changes total), using 1 if that total is zero |
 
-Group budgets are **chart 40, indicators 45, OI/PCR 15**. OI must be fresh, match the
-underlying and have an unexpired expiry. OI totals, walls and max pain are context;
-OI change alone does not prove option writing.
+**RSI including its swing structure is 25%; VWAP is 25%: together exactly 50%.**
+
+This changes each input's contribution to the existing 100-point evidence score.
+It does not set confirmation to 50 points, lower a score/lead cutoff, or award
+50 points automatically. RSI can contribute up to 25 points and VWAP up to 25;
+actual support/opposition depends on their observed signals. The other inputs
+share the remaining 50 points, and all existing confirmation checks still apply.
+For example, if a rule requires support ≥55 and lead ≥15, those cutoffs remain
+55 and 15 after increasing RSI/VWAP weights. In this checkout, STANDARD confirmed
+setups already use positive support ≥1.5× opposition; EARLY ideas retain 55/15,
+and elevated India VIX retains 65/20. The weighting change does not alter any of
+these rules.
+
+The four group budgets are **chart 25, other indicators 15, RSI structure + VWAP 50,
+OI/PCR 10**. Index ATM validation uses the fresh request’s reference index quote,
+so an older 15-minute/hourly close cannot reject the current ATM strike. RSI swings use the existing same-session confirmed indicator pivots
+(up to 32 completed bars; one-point RSI noise). Missing pivots earn no structure
+coverage or points. A break below the last HL votes bearish; a break above the
+last LH votes bullish. Forming candles cannot change this vote. The same fixed
+weights apply on 5/15/60-minute setups and fully confirmed opposite setups used
+for reversal exits. Stops, targets, ATR trailing protection and scheduled exits
+continue independently of directional scores.
+
+OI must be fresh, match the underlying and have an unexpired expiry. OI totals,
+walls and max pain are context; OI change alone does not prove option writing.
 
 ADX/DMI describe trend strength/direction and participate in setup readiness,
 risk disclosures and historical matching. They do not have another independent
 technical score allocation. ATR and India VIX are risk inputs, not directional votes.
 
-Indices default to nearest-expiry ATM CE/PE VWAP for their 6.75-point VWAP allocation.
+Indices default to nearest-expiry ATM CE/PE VWAP for their 25-point VWAP allocation.
 CE above its own VWAP and PE below supports bullish analysis; the inverse supports
 bearish analysis; mixed legs are neutral. Premiums are never compared with spot points.
 MCX uses actual futures volume; equity option-chain OI/PCR is not connected for MCX
@@ -242,10 +290,18 @@ For the three equity indices, resolve actual nearest-expiry ATM CE and PE tokens
 Each leg uses sum(HLC3 × actual one-minute volume) / sum(volume), from 09:15 to the
 latest completed minute. CE above its own VWAP plus PE below its own VWAP supports
 upward context; the inverse supports downward context; disagreement is mixed.
-Both legs need complete contiguous session coverage, positive volume, current
+Both legs need contiguous coverage from the session open through their latest available
+completed minute, positive volume, current
 expiry, data younger than two minutes and a strike still within one strike interval
 of current spot (Nifty 50: 50; Sensex/Bank Nifty: 100). Partial/stale data supplies
-no directional context. The one-minute option candles are raw volume data for
+no directional context. A delayed trailing broker minute does not invalidate the
+contiguous history; the independent two-minute age limit still applies. Chart and
+agent consumers share one ATM request per index/strike/minute. Before open, after
+close and on weekends the display loads the most recent weekday session, with
+strike, expiry, CE/PE prices and data timestamp. Last-session values remain display
+context and cannot earn current-session points. Broker outages, absent contracts
+or zero traded volume still cannot produce an invented VWAP.
+The one-minute option candles are raw volume data for
 this calculation, not a strategy timeframe. This paired direction supplies the technical VWAP allocation on each strategy
 timeframe. It does not supply a one-minute entry/exit trigger.
 Sources: [atmVwap.js](../server/atmVwap.js), [atmVwap.ts](../src/api/atmVwap.ts).
@@ -426,8 +482,8 @@ missing values/bars reset the comparison. Unfinished swings do not repaint prior
 trade decisions.
 
 The technical engine applies the same swing evaluator to EMA20/50, RSI and the
-price-to-Supertrend cushion. A fresh break contributes inside the existing
-2.25-point turn budget. A new alignment route requires an EMA break plus an RSI
+price-to-Supertrend cushion. RSI structure and its breaks use the dedicated
+10-point RSI structure allocation. Other indicator turns share a 1-point budget. A new alignment route requires an EMA break plus an RSI
 or Supertrend-cushion break, improving RSI, a directional completed body, a close
 through the previous price high/low, and price on the matching side of EMA20.
 Other setup, warmup, coverage, ratio, ATR and reward/risk checks still apply.
@@ -474,3 +530,31 @@ Valid browser-cached MCX metadata is reused if the public master fails, with
 contract expiry checked by the existing resolver. Disk-cache write failures do not
 invalidate a successful in-memory master. On hosts with ephemeral disks, a new
 instance may still need to download contract metadata again.
+
+
+## 15. Trend opportunity detection and visible rejection reasons (22 October)
+
+A directional market view is separate from an eligible entry. Earlier momentum
+filters rejected all five event families beyond 1.8 ATR from EMA20, and required
+seven bars in the current session on every interval. A regular index session
+cannot supply seven completed hourly bars. Setup-specific three/four-bar checks
+now allow eligible hourly and early-session patterns; seven-bar EMA turn routes
+still need all their original inputs. The local continuation and impulse families
+cover fresh completed events with bounded extension, rather than repeatedly
+promoting a trend label to an entry.
+
+The main agent card shows failed checks for the dominant direction. When no price
+pattern is detected, diagnostics also explain EMA distance, excessive candle
+range, weak candle body, missing routes or interrupted session data. This makes a
+bearish view with no SHORT setup explainable without expanding the diagnostic log.
+The RSI/VWAP 50-point allocation and confirmation thresholds are unchanged.
+Confirmed opposite setups continue to use existing post-entry/fresh-quote reversal
+checks; stops, targets, trailing protection and one-open-trade tracking remain in
+force.
+
+Regression tests exercise generated, timezone-aware session histories for all
+seven instruments in both directions, all three intervals and three dates, plus
+negative cases and reversal exits. These are scenario checks, not a replay of the
+user's screenshots or evidence of profitability. The reference photos describe
+price action, indicators and news; news remains separate sentiment context and
+introduces no automatic blackout or entry rule from image text.

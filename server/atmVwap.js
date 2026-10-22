@@ -11,15 +11,20 @@ export function candleVwap(raw, start, end) {
   let volume = 0, vwap = 0
   for (const row of candles) if (row[5] > 0) { const total = volume + row[5]; vwap += ((row[2] / 3 + row[3] / 3 + row[4] / 3) - vwap) * row[5] / total; volume = total }
   const last = candles[candles.length - 1]
-  const complete = candles.length > 0 && Date.parse(candles[0][0]) === start && Date.parse(last[0]) + minute === end && candles.every((row,i) => i === 0 || Date.parse(row[0]) - Date.parse(candles[i - 1][0]) === minute)
+  const complete = candles.length > 0 && Date.parse(candles[0][0]) === start && candles.every((row,i) => i === 0 || Date.parse(row[0]) - Date.parse(candles[i - 1][0]) === minute)
   return { close: last?.[4] ?? null, vwap: volume > 0 ? vwap : null, volume, asOf: last ? new Date(Date.parse(last[0]) + minute).toISOString() : null, coverage: complete ? 'FULL_SESSION' : 'PARTIAL_SESSION' }
 }
 export function createAtmVwapService({ loadOptions, history, now = Date.now }) {
   const cache = new Map(), pending = new Map(), sessions = new Map()
   return { async get(input, headers) {
     if (!input || !Object.hasOwn(optionIndices,input.index) || typeof input.price !== 'number' || !Number.isFinite(input.price) || input.price <= 0) throw Object.assign(new Error('A supported index and positive index price are required.'),{status:400})
-    const time = now(), end = Math.floor(time / minute) * minute, start = Math.floor((time + 330 * minute) / day) * day - 330 * minute + 555 * minute
-    if (end <= start || end > start + 375 * minute || [0,6].includes(new Date(time + 330 * minute).getUTCDay())) throw Object.assign(new Error('ATM option VWAP is available during the regular index session.'),{status:400})
+    const time = now()
+    // Keep the most recent session visible before open, after close and on weekends.
+    // Signal eligibility remains a separate client freshness check.
+    let start = Math.floor((time + 330 * minute) / day) * day - 330 * minute + 555 * minute
+    if (time < start + minute) start -= day
+    while ([0, 6].includes(new Date(start + 330 * minute).getUTCDay())) start -= day
+    const end = Math.min(Math.floor(time / minute) * minute, start + 375 * minute)
     const options = (await loadOptions(input.index))[input.index], nominal = Math.round(input.price / optionIndices[input.index].step) * optionIndices[input.index].step
     if (!options || options.expiryAt <= time) throw Object.assign(new Error('Current option expiry unavailable.'),{status:503})
     const strikes = [...new Set(options.contracts.map(c=>c.strike))].filter(strike=>['ce','pe'].every(side=>options.contracts.some(c=>c.strike===strike&&c.side===side))).sort((a,b)=>Math.abs(a-nominal)-Math.abs(b-nominal)||a-b)

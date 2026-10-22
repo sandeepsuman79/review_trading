@@ -259,7 +259,7 @@ function PriceActionAgent({ candlesByInterval, chartInterval, trackLevels, onAss
               {aiAnalysis.caveat && <div style={{ color: 'var(--text-secondary)' }}><strong>Caveat:</strong> {aiAnalysis.caveat}</div>}
             </div>
           )}
-          <div style={{ marginTop: 6, color: 'var(--text-muted)', fontSize: 11 }}>{commodity ? 'Technical analysis uses completed chart setups, indicators, genuine VWAP and ATR. Commodity news and global benchmarks provide sentiment reference; missing commodity OI/PCR stays unavailable.' : 'Technical analysis confirms trades using completed chart setups, indicators, OI/PCR and ATR/VIX risk checks. FII/DII, news, global markets and PCR provide a separate sentiment reference.'} Gemini analysis does not delay, confirm or veto entries.</div>
+          <div style={{ marginTop: 6, color: 'var(--text-muted)', fontSize: 11 }}>{commodity ? 'RSI level, momentum and swing structure (25%) plus futures VWAP (25%) supply half the technical score for setups and confirmed reversal exits. Chart patterns, other indicators and ATR complete the checks. Commodity news and global benchmarks provide sentiment reference; missing commodity OI/PCR stays unavailable.' : 'RSI level, momentum and HH/HL/LH/LL structure (25%) plus selected-index ATM CE/PE VWAP (25%) supply half the technical score for setups and confirmed reversal exits. Chart patterns, other indicators, OI/PCR and ATR/VIX complete the checks. FII/DII, news, global markets and PCR provide a separate sentiment reference.'} Gemini analysis does not delay, confirm or veto entries.</div>
         </section>
       </MarketContextPanel>
       {(analysis.support !== undefined || analysis.resistance !== undefined) && (

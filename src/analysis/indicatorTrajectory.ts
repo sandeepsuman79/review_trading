@@ -73,5 +73,5 @@ export function analyzeIndicatorTrajectory(candles: AngelOneCandle[], interval: 
     if (item.structure.newBreak) record(`${item.name} ${item.structure.pattern} structure broke ${item.structure.breakDirection!.toLowerCase()}`, item.structure.breakDirection === 'UP' ? 1 : -1)
   }
   const turnVote = turns.length ? turns.reduce((sum, turn) => sum + (turn.side === 'CALL' ? 1 : -1), 0) / turns.length : 0
-  return { indicatorSeries: indicators, slopeVote, slopeDetails, turns, turnVote: consecutive(end - 1) ? turnVote : undefined }
+  return { indicatorSeries: indicators, swingEvidence, slopeVote, slopeDetails, turns, turnVote: consecutive(end - 1) ? turnVote : undefined }
 }

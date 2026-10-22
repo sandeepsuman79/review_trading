@@ -37,7 +37,9 @@ function fixture(direction = 1, instrument = 'Nifty 50') {
   } }
   const outlook = { bias: direction === 1 ? 'BULLISH' : 'BEARISH', agreement: 'SUPPORTS_CHART', contextRevision: context.revision, evidenceIds: ['0'], summary: 'Fixture news agrees', articleSentiments: articles.map(article => ({ articleId: article.id, sentiment: direction === 1 ? 'POSITIVE' : 'NEGATIVE', impactScore: direction * 2 })) }
   const indiaVix = snapshot({ symbol: '^INDIAVIX', price: 15, changePercent: -2, asOf: new Date(now).toISOString() })
-  return { analysis, candles, instrument, interval: 'FIVE_MINUTE', context, outlook, indiaVix, now }
+  const leg = close => ({ symbol: 'fixture', token: '1', exchange: 'NFO', close, vwap: 100, volume: 100, asOf: new Date(now).toISOString(), coverage: 'FULL_SESSION' })
+  const atmVwap = { index: instrument, strike: 100, expiry: '2026-10-20', fetchedAt: new Date(now).toISOString(), method: 'SESSION_HLC3_VOLUME', referenceIndexPrice: 100, ce: leg(100 + direction * 10), pe: leg(100 - direction * 10) }
+  return { analysis, candles, instrument, atmVwap, interval: 'FIVE_MINUTE', context, outlook, indiaVix, now }
 }
 
 test('aligned CALL and PUT evidence across all input groups confirms and snapshots real chart levels', () => {
@@ -45,7 +47,7 @@ test('aligned CALL and PUT evidence across all input groups confirms and snapsho
     const input = fixture(direction, instrument), result = analyzeTradingEvidence(input)
     assert.equal(result.canConfirm, true, result.reason)
     assert.equal(result.layers.reduce((sum, item) => sum + item.weight, 0), 100)
-    assert(result.coverage > 90 && result.coverage < 100, 'zero-volume VWAP keeps a missing fixed budget')
+    assert.equal(result.coverage, 90, 'unconfirmed RSI swings keep their fixed 10-point budget missing')
     assert.equal(result.bias, direction === 1 ? 'BULLISH' : 'BEARISH')
     const prediction = buildEarlyPrediction(input.analysis, instrument, input.interval, now, input.context, input.outlook, result)
     assert.equal(prediction.plan.stage, 'CONFIRMED')
@@ -69,7 +71,7 @@ test('missing, stale and wrong-index context leave technical confirmation indepe
   for (const context of [null, { ...input.context, instrument: 'Sensex' }, { ...input.context, retrievedAt: new Date(now - 11 * 60000).toISOString() }]) {
     const result = analyzeTradingEvidence({ ...input, context })
     assert.equal(result.canConfirm, true, result.reason)
-    assert.equal(result.coverage, full.coverage - 15)
+    assert.equal(result.coverage, full.coverage - 10)
     assert(result.bullishScore < full.bullishScore, 'missing OI keeps its fixed technical budget')
     assert.equal(result.sentiment.bias, 'UNAVAILABLE')
   }
@@ -119,7 +121,7 @@ test('OI/PCR contributes to technical confluence and independently to the sentim
   const changed = analyzeTradingEvidence({ ...input, context: { ...input.context, inputs: { ...input.context.inputs, openInterest: fixture(-1).context.inputs.openInterest } } })
   assert(changed.bullishScore < initial.bullishScore)
   assert(changed.bearishScore > initial.bearishScore)
-  assert.deepEqual(initial.layers.map(layer => layer.key), ['chart', 'indicators', 'oi'])
+  assert.deepEqual(initial.layers.map(layer => layer.key), ['chart', 'indicators', 'rsiVwap', 'oi'])
   assert.equal(initial.sentiment.layers.reduce((sum, layer) => sum + layer.weight, 0), 100)
   assert.equal(initial.sentiment.layers.find(layer => layer.key === 'pcr').bullish, 10)
 })
@@ -264,7 +266,7 @@ test('AI request includes location, pattern, all chart indicator readings and we
   assert(body.length < 10000)
   assert.equal(parsed.candles.length, 40)
   for (const key of ['structure', 'structureEvent', 'location', 'candleBehavior', 'pattern', 'setup', 'rsi14', 'atr14']) assert.equal(parsed.rules[key], input.analysis[key])
-  assert.equal(parsed.rules.technicalEvidence.layers.length, 3)
+  assert.equal(parsed.rules.technicalEvidence.layers.length, 4)
   assert.equal(parsed.rules.technicalEvidence.bullishScore, evidence.bullishScore)
   assert.equal(parsed.rules.marketSentiment.role, 'REFERENCE_ONLY')
   assert.equal(parsed.rules.marketSentiment.bullishScore, evidence.sentiment.bullishScore)
@@ -389,10 +391,10 @@ test('full CALL and PUT confirmation accepts one route family despite other indi
     const input = fixture(direction, instrument)
     const leg = close => ({ symbol: 'fixture', token: '1', exchange: 'NFO', close, vwap: 100, volume: 100, asOf: new Date(now).toISOString(), coverage: 'FULL_SESSION' })
     const atmVwap = { index: instrument, strike: 100, expiry: '2026-10-20', fetchedAt: new Date(now).toISOString(), method: 'SESSION_HLC3_VOLUME', referenceIndexPrice: 100, ce: leg(100 + direction * 10), pe: leg(100 - direction * 10) }
-    const baseline = analyzeTradingEvidence(input)
+    const baseline = analyzeTradingEvidence({ ...input, atmVwap: undefined })
     const result = analyzeTradingEvidence({ ...input, atmVwap })
     const key = direction === 1 ? 'bullishScore' : 'bearishScore'
-    assert(Math.abs(result[key] - baseline[key] - 6.75) <= .11)
+    assert(Math.abs(result[key] - baseline[key] - 25) <= .11)
     assert(!result.missing.includes('Current ATM CE/PE VWAP'))
     for (const invalid of [{ ...atmVwap, ce: { ...atmVwap.ce, coverage: 'PARTIAL_SESSION' } }, { ...atmVwap, fetchedAt: new Date(now - 120000).toISOString() }]) {
       const rejected = analyzeTradingEvidence({ ...input, atmVwap: invalid })
@@ -401,3 +403,51 @@ test('full CALL and PUT confirmation accepts one route family despite other indi
     }
   }
  })
+
+
+test('RSI level, momentum and VWAP have fixed 8/7/25 budgets and cannot borrow missing swing points', () => {
+ for (const direction of [1,-1]) {
+  const input=fixture(direction), result=analyzeTradingEvidence(input)
+  const group=result.layers.find(layer=>layer.key==='rsiVwap')
+  assert.equal(group.weight,50)
+  assert.equal(group[direction===1?'bullish':'bearish'],40)
+  assert.equal(group[direction===1?'bearish':'bullish'],0)
+  assert.equal(group.coverage,.8)
+  assert(result.missing.includes('Confirmed RSI HH/HL/LH/LL swings'))
+  const missing=analyzeTradingEvidence({...input,atmVwap:undefined})
+  assert.equal(missing.layers.find(layer=>layer.key==='rsiVwap')[direction===1?'bullish':'bearish'],15)
+  assert.equal(missing.coverage,65)
+  assert.equal(missing.canConfirm,false)
+  const reversed=analyzeTradingEvidence({...input,analysis:{...input.analysis,rsi14:direction===1?30:70,rsi14Momentum:-8*direction},atmVwap:fixture(-direction).atmVwap})
+  assert.equal(reversed.canConfirm,false,'opposing RSI/VWAP must affect the full confirmation pipeline')
+ }
+})
+
+test('actual completed RSI HH/HL and LH/LL swings contribute ten points; a structure break reverses that vote', () => {
+ const time=Date.parse('2026-10-16T14:00:00+05:30')
+ for (const [frequency,slope,acceleration,trend,jump,breakDirection] of [[1,-3,.05,'HH / HL',-100,'DOWN'],[.7,0,-.05,'LH / LL',100,'UP']]) {
+  const candles=Array.from({length:52},(_,i)=>{const close=1000+slope*i+acceleration*i*i+20*Math.sin(i*frequency);return[new Date(time-(52-i)*duration).toISOString(),close-1,close+2,close-2,close,0]})
+  const input=fixture()
+  const analyze=bars=>analyzeTradingEvidence({...input,candles:bars,now:time,atmVwap:undefined,analysis:{...input.analysis,latestCandleTime:bars[51][0],currentPrice:bars[51][4],rsi14:50,rsi14Momentum:0}})
+  const group=analyze(candles).layers.find(layer=>layer.key==='rsiVwap')
+  assert(group.details.includes(`RSI structure: ${trend}`))
+  assert.equal(group[trend==='HH / HL'?'bullish':'bearish'],10)
+  const close=candles[51][4]+jump
+  const broken=[...candles.slice(0,-1),[candles[51][0],close-1,close+2,close-2,close,0]]
+  const reversed=analyze(broken).layers.find(layer=>layer.key==='rsiVwap')
+  assert(reversed.details.includes(`RSI structure: ${trend} · broken ${breakDirection.toLowerCase()}`))
+  assert.equal(reversed[breakDirection==='UP'?'bullish':'bearish'],10)
+  const forming=[new Date(time).toISOString(),close,close+500,close-500,close+400,1000]
+  assert.deepEqual(analyze([...candles,forming]).layers.find(layer=>layer.key==='rsiVwap'),group)
+ }
+})
+
+
+test('a fresh current ATM snapshot is matched to its index quote rather than a slower completed candle close', () => {
+ const input=fixture()
+ const atmVwap={...input.atmVwap,strike:250,referenceIndexPrice:251}
+ const result=analyzeTradingEvidence({...input,atmVwap})
+ assert(!result.missing.includes('Current ATM CE/PE VWAP'))
+ assert.equal(result.layers.find(layer=>layer.key==='rsiVwap').bullish,40)
+ assert.equal(analyzeTradingEvidence({...input,atmVwap:{...atmVwap,index:'Sensex'}}).layers.find(layer=>layer.key==='rsiVwap').bullish,15)
+})

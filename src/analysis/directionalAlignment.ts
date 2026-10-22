@@ -58,6 +58,15 @@ export function analyzeDirectionalAlignment(candles: AngelOneCandle[], averages:
       const older = indicators[end - 3]
       if (sameBars(3) && older?.supertrendDirection === trendDirection && finite(older.supertrend10) && d * (point.supertrend10 - older.supertrend10) > noise) add('SUPERTREND', side, `Supertrend trajectory ${direction}`, point.supertrend10)
     }
+    // A Supertrend band can stay flat during an intact trend. A new local
+    // price break and directional RSI can confirm continuation without a new flip.
+    if (sameBars(3) && finite(point.rsi14) && d * (point.rsi14 - 50) >= 0
+      && d * (current[4] - current[1]) > buffer && d * (current[4] - (d === 1 ? previous[2] : previous[3])) > buffer
+      && d * (current[4] - candles[end - 3][4]) >= .15 * atr
+      && indicators.slice(end - 3).every((p, i) => p.supertrendDirection === trendDirection && finite(p.supertrend10) && d * (candles[end - 3 + i][4] - p.supertrend10) > 0)
+      && !result.routes.some(route => route.family === 'SUPERTREND' && route.side === side)) {
+      add('SUPERTREND', side, `Supertrend held ${direction} with a fresh local price break`, point.supertrend10)
+    }
     const breakLevel = d === 1 ? levels.priorResistance : levels.priorSupport
     if (finite(breakLevel) && d * (previous[4] - breakLevel) <= 0 && d * (current[4] - breakLevel) > buffer) add('LEVEL', side, d === 1 ? 'Resistance crossed upward' : 'Support crossed downward', breakLevel)
     const reaction = d === 1 ? levels.priorSupport ?? levels.support : levels.priorResistance ?? levels.resistance

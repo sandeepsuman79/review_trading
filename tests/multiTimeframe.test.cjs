@@ -1,3 +1,4 @@
+const atmVwapFixture = require('./helpers/atmVwap.cjs')
 const { test } = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs'), ts = require('typescript')
 require.extensions['.ts'] = (m, f) => m._compile(ts.transpileModule(fs.readFileSync(f, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true } }).outputText, f)
 const { analyzeMultiTimeframe, revalidateMultiTimeframeAssessment, selectReversalPlan } = require('../src/analysis/multiTimeframe.ts')
@@ -26,7 +27,7 @@ function candlesFor(row, d, interval, end = now) {
  })
 }
 function input(row = markets[0], d = 1) {
- return { instrument: row[0], contract: contractFor(row), now, candlesByInterval: Object.fromEntries(['FIVE_MINUTE','FIFTEEN_MINUTE','ONE_HOUR'].map(interval => [interval, candlesFor(row,d,interval)])) }
+ return { instrument: row[0], contract: contractFor(row), now, atmVwap: atmVwapFixture(row[0], candlesFor(row,d,'FIVE_MINUTE').at(-1)[4], now, d), candlesByInterval: Object.fromEntries(['FIVE_MINUTE','FIFTEEN_MINUTE','ONE_HOUR'].map(interval => [interval, candlesFor(row,d,interval)])) }
 }
 test('all seven instruments independently evaluate both directions with actual completed indicator and score pipelines', () => {
  for (const row of markets) for (const d of [1,-1]) {
@@ -54,7 +55,7 @@ test('freshest eligible close wins, simultaneous closes prefer 5-minute, and an 
  assert.equal(conflict.conflicts,true);assert.equal(conflict.selectedPlan.interval,'FIVE_MINUTE');assert.equal(conflict.selectedPlan.side,'PUT')
  const lateNow=now+5*60000
  const newerFive=candlesFor(markets[0],1,'FIVE_MINUTE',lateNow)
- const newer=analyzeMultiTimeframe({...source,now:lateNow,candlesByInterval:{...source.candlesByInterval,FIVE_MINUTE:newerFive}})
+ const newer=analyzeMultiTimeframe({...source,now:lateNow,atmVwap:atmVwapFixture(source.instrument,newerFive.at(-1)[4],lateNow,1),candlesByInterval:{...source.candlesByInterval,FIVE_MINUTE:newerFive}})
  assert(newer.reviews[0].plan);assert.equal(newer.selectedPlan.interval,'FIVE_MINUTE')
 })
 test('missing, gapped, stale and forming-only views cannot borrow warmup or confirmation from another timeframe', () => {
