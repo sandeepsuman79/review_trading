@@ -448,6 +448,22 @@ Option premiums are compared with their own VWAPs, never with spot-index points.
 enable one-minute strategy analysis. Commodity
 futures use their own traded-volume VWAP instead of equity option context.
 
+The selected index also shows a default ATM option chart with CE/PE tabs. It uses
+the selected 5/15/60-minute interval and the actual contract's OHLC candles,
+volume bars, candle-derived VWAP, EMA, RSI and Supertrend. The spot-index chart
+retains index-point prices; ATM premiums use their own rupee axis. The VWAP
+control on the spot chart opens the ATM chart. Session volume for both legs is
+shown alongside the live VWAP card, separately from historical per-candle volume.
+Only the visible option chart loads history; minute refreshes overlap the last
+broker candle and share in-flight requests. Strike/expiry/login changes cannot
+reuse a different contract's chart. Unavailable contract history remains missing.
+
+Missing ATM VWAP removes 25 available technical points and can push coverage
+below the existing 70% minimum. Each index agent now displays the specific ATM
+feed blocker and its actual evidence coverage. Valid paired ATM context enables
+zero-volume spot indices to qualify using the same setup, risk and freshness
+checks as before; the option chart itself does not create extra strategy votes.
+
 ATR describes volatility, and trailing stops are risk controls rather than market
 forecasts; see [TradingView ATR](https://www.tradingview.com/support/solutions/43000501823-average-true-range-atr/)
 and [trailing-stop mechanics](https://www.tradingview.com/support/solutions/43000754965-introduction-to-trailing-stops/).

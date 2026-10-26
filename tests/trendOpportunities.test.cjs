@@ -148,3 +148,21 @@ test('newly detected opposite setups use the existing fresh post-entry reversal 
   assert.equal(observeConfirmedAgentReversal({...record,latestPriceAt:input.now-31000},plan,input.now).status,'ACTIVE')
  }
 })
+
+test('zero-volume spot indices can confirm both directions with real ATM volume context, without changing thresholds',()=>{
+ for(const market of markets.slice(0,3))for(const direction of [1,-1]){
+  const input=scenario(market,direction,'FIVE_MINUTE')
+  assert(input.candles.every(bar=>bar[5]===0))
+  const analysis=analyzePriceAction(input.candles,input.interval,input.now,input.instrument)
+  const missing=analyzeTradingEvidence({...input,analysis})
+  assert.equal(missing.canConfirm,false)
+  assert(missing.coverage<70)
+  const atm=atmVwapFixture(input.instrument,analysis.currentPrice,input.now,direction)
+  atm.method='BROKER_AVERAGE_PRICE'
+  const ready=analyzeTradingEvidence({...input,analysis,atmVwap:atm})
+  assert.equal(ready.canConfirm,true,`${input.instrument}: ${ready.reason}`)
+  assert.equal(ready.requiredScore,missing.requiredScore);assert.equal(ready.requiredGap,missing.requiredGap)
+  assert.equal(Math.round((ready.coverage-missing.coverage)*10)/10,25)
+  assert(input.candles.every(bar=>bar[5]===0),'option volume must not alter spot candles')
+ }
+})

@@ -27,6 +27,7 @@ import { useNewsAssessment } from '../hooks/useNewsAssessment'
 import { useMarketContext } from '../hooks/useMarketContext'
 import { useIndiaVix } from '../hooks/useIndiaVix'
 import ErrorToast from '../components/ErrorToast'
+import { atmVwapContext } from '../api/atmVwap'
 import AgentTradeCard from '../components/AgentTradeCard'
 import ConfirmedTrades from '../components/ConfirmedTrades'
 import { type EarlyPrediction, type PredictionPlan } from '../analysis/earlyPrediction'
@@ -43,6 +44,7 @@ import GapOutlookCard from '../components/GapOutlookCard'
 import { commoditySpecs, mcxSession, resolveCommodityContracts, validCommodityContract, isCommodity, type CommodityContract } from '../analysis/commodities'
 
 const CandleChart = lazy(() => import('../components/CandleChart'))
+const AtmOptionCharts = lazy(() => import('../components/AtmOptionCharts'))
 
 function isInvalidToken(message: string) {
   return /invalid[\s_-]*token|token[\s_-]*invalid/i.test(message)
@@ -161,6 +163,7 @@ function PriceActionAgent({ candlesByInterval, chartInterval, trackLevels, onAss
   const base = useMemo(() => analyzeMultiTimeframe({ candlesByInterval: { FIVE_MINUTE: five, FIFTEEN_MINUTE: fifteen, ONE_HOUR: hourly }, instrument, now: Math.max(assessmentMinute * 60_000, Date.now()), contract, context: market.context, outlook: news.outlook, indiaVix, flowHistory, atmVwap: atm.data }), [five, fifteen, hourly, instrument, contract, market.context, news.outlook, indiaVix, flowHistory, assessmentMinute, atm.data])
   const assessment = revalidateMultiTimeframeAssessment(base, { candlesByInterval, records: setupRecords, now })
   const review = assessment.displayReview, interval = review.interval
+  const atmContext = atmVwapContext(atm.data, instrument, tick?.ltp ?? five[five.length - 1]?.[4], now)
   const snapshot = interval === 'FIVE_MINUTE' ? five : interval === 'FIFTEEN_MINUTE' ? fifteen : hourly
   const analysis: PriceActionAnalysis = review.analysis
   const evidence = { ...review.evidence, historicalOutcomes: visible ? cachedHistoricalOutcomes(snapshot, interval, now, instrument) : undefined }
@@ -235,6 +238,9 @@ function PriceActionAgent({ candlesByInterval, chartInterval, trackLevels, onAss
     <section aria-label="Candle price-action agent" className="price-action-agent">
       <MultiTimeframePanel trajectories={trajectories} assessment={assessment} activeTrade={activeTrade} connected={streamConnected} now={now} />
       <SessionReview instrument={instrument} records={setupRecords} candles={five} now={now} contractToken={contract?.token} />
+      {!commodity && <p className="agent-score-note" role="status">ATM CE/PE VWAP · {atmContext.bias === undefined
+        ? `${atm.error || atmContext.reason} VWAP’s 25-point input is unavailable; technical coverage is ${evidence.coverage}% / 70% required.`
+        : `Strike ${atm.data!.strike} · CE volume ${atm.data!.ce.volume.toLocaleString('en-IN')} / PE volume ${atm.data!.pe.volume.toLocaleString('en-IN')} · ${atmContext.reason} ${evidence.canConfirm ? 'Technical setup confirmed.' : evidence.reason}`}</p>}
       <AgentTradeCard replayCandles={five} records={setupRecords} frontContract={contract} analysis={evidence.selectedAnalysis ?? analysis} evidence={evidence} prediction={prediction} activeTrade={activeTrade} pendingTrade={pendingTrade} instrument={instrument} interval={interval} now={now} tick={activeTrade?.contract ? activeTick : tick} streamConnected={streamConnected} />
       {!commodity && <GapOutlookCard instrument={instrument} outlook={gapOutlook.outlook} error={gapOutlook.error} now={now} />}
       <MarketContextPanel instrument={instrument} context={displayContext} loading={market.loading} refresh={() => void market.refresh()} outlook={news.outlook} chartCurrent={chartCurrent} analysis={evidence.selectedAnalysis ?? analysis} candles={snapshot} openingCandles={openingCandles} now={now}>
@@ -858,6 +864,9 @@ export default function PredictionPage() {
                   candles={chartCandles[instrument.token] || []}
                 />
                 </Suspense>
+                {instrument.exchange !== 'MCX' && <Suspense fallback={<p role="status">Loading ATM option chart…</p>}>
+                  <AtmOptionCharts index={instrument.name} price={streamTicks[instrument.token]?.ltp ?? chartCandles[instrument.token]?.[chartCandles[instrument.token].length - 1]?.[4]} interval={chartInterval} now={heartbeat} />
+                </Suspense>}
               </div>
             ))}
             {monitoredInstruments.map(instrument => (

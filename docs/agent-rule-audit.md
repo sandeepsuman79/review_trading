@@ -315,6 +315,37 @@ strategy timeframe; confirmation thresholds and the RSI 25-point budget are unch
 Sources: [atmVwap.js](../server/atmVwap.js), [atmVwap.ts](../src/api/atmVwap.ts),
 [SmartAPI market data](https://smartapi.angelone.in/docs).
 
+Index spot candles report no traded volume, so option-premium prices and VWAP
+must use their own price axis. The selected index now includes an expanded
+**Default ATM** chart with CE/PE tabs (CE initially), the selected 5/15/60-minute
+interval, actual option candles, per-candle volume bars, candle-volume VWAP and
+EMA/RSI/Supertrend metrics. The index VWAP control opens this chart. The ATM card
+and chart header show the separate CE and PE cumulative session volumes.
+The displayed option VWAP line is the HLC3 candle estimate, while the live card
+can use the broker session average; these sources are labeled separately.
+
+Only the visible ATM chart requests option history, once per minute with a
+publication grace. Requests share pending work across minute boundaries, scope
+caches by login/index/strike/expiry/token/interval, overlap the last broker bar,
+and accept corrections without adding the same volume twice. Switching ATM
+strike loads that contract's actual history; charts never splice different
+strikes together. History reads cannot block the ten-second live quote feed.
+Chart warmup uses only available history for that actual contract.
+
+An unavailable ATM feed removes the 25-point VWAP input from evidence coverage;
+with missing OI/PCR or RSI structure this can prevent reaching 70% coverage even
+in a strong price trend. The agent now shows specific missing/old CE/PE values,
+volume, expiry or timestamp reasons alongside its existing setup diagnostics.
+Tests confirm that all three zero-volume spot indices can produce bullish and
+bearish confirmed setups with current ATM volume context, without lowering any
+confirmation, freshness, risk or coverage requirement. Option-chart indicators
+are display context; they do not create an additional strategy or independent
+entry/exit score.
+Sources: [AtmOptionCharts.tsx](../src/components/AtmOptionCharts.tsx),
+[atmOptionCandles.ts](../src/api/atmOptionCandles.ts),
+[CandleVolume.tsx](../src/components/CandleVolume.tsx),
+[tradingEvidence.ts](../src/analysis/tradingEvidence.ts).
+
 Historical chart sync now checks every 15 seconds while visible and on focus,
 reconnection and authentication changes. During exchange hours, a completed
 5/15/60-minute candle becomes due after a five-second publication grace; the

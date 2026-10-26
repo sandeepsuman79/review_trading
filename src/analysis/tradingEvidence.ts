@@ -1,5 +1,5 @@
 import { scoreDominates } from './scoreTrajectory'
-import { atmVwapBias, type AtmVwapSnapshot } from '../api/atmVwap'
+import { atmVwapContext, type AtmVwapSnapshot } from '../api/atmVwap'
 import { findRiskyLevelSetup, type RiskyLevelSetup } from './riskyLevelSetup'
 import { cachedHistoricalOutcomes, type HistoricalOutcomes } from './historicalOutcomes'
 import type { AngelOneCandle } from '../api/angelOne'
@@ -137,10 +137,11 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
   const indexVwap = ['Nifty 50', 'Sensex', 'Bank Nifty'].includes(instrument)
   // ATM follows the current index quote used for this fresh request. An hourly
   // candle's older close must not invalidate the selected current ATM strike.
-  const atmBias = indexVwap ? atmVwapBias(atmVwap, instrument, atmVwap?.referenceIndexPrice ?? price, now) : undefined
+  const atmContext = indexVwap ? atmVwapContext(atmVwap, instrument, atmVwap?.referenceIndexPrice ?? price, now) : undefined
+  const atmBias = atmContext?.bias
   const vwapVote = price === undefined ? undefined : indexVwap ? atmBias === undefined ? undefined : atmBias === 'BULLISH' ? 1 : atmBias === 'BEARISH' ? -1 : 0 : finite(vwap) ? Math.sign(price - vwap) : undefined
   add(rsiVwap, .5, vwapVote, indexVwap
-    ? `ATM CE/PE VWAP: ${atmBias === undefined ? 'unavailable; waiting for current full-session ATM candles' : `strike ${atmVwap!.strike} · CE ${format(atmVwap!.ce.vwap)} / PE ${format(atmVwap!.pe.vwap)} · ${atmBias.toLowerCase()}`}`
+    ? `ATM CE/PE VWAP: ${atmBias === undefined ? `unavailable; ${atmContext?.reason}` : `strike ${atmVwap!.strike} · CE ${format(atmVwap!.ce.vwap)} / PE ${format(atmVwap!.pe.vwap)} · ${atmBias.toLowerCase()}`}`
     : `VWAP: ${finite(vwap) ? `${format(vwap)} · price ${price !== undefined && price > vwap ? 'above' : 'below'}` : 'unavailable; zero traded volume'}`)
   if (vwapVote === undefined) missing.push(indexVwap ? 'Current ATM CE/PE VWAP' : 'VWAP (genuine traded volume unavailable)')
   if (atr === undefined) missing.push('ATR(14)')

@@ -68,3 +68,13 @@ test('frontend shares pending ATM requests across heartbeat/minute boundaries an
   assert.equal(calls,2)
  } finally {global.fetch=oldFetch;global.localStorage=oldStorage}
 })
+
+test('ATM availability exposes specific blockers instead of silently losing the index VWAP input', () => {
+ const {atmVwapContext}=require('../src/api/atmVwap.ts')
+ const snapshot=require('./helpers/atmVwap.cjs')('Nifty 50',22000,now)
+ assert.equal(atmVwapContext(snapshot,'Nifty 50',22000,now).bias,'BULLISH')
+ assert.match(atmVwapContext(undefined,'Nifty 50',22000,now).reason,/Waiting for ATM CE\/PE/)
+ assert.match(atmVwapContext({...snapshot,pe:{...snapshot.pe,volume:0}},'Nifty 50',22000,now).reason,/PE.*no reported traded volume/)
+ assert.match(atmVwapContext({...snapshot,ce:{...snapshot.ce,asOf:null}},'Nifty 50',22000,now).reason,/CE.*timestamp/)
+ assert.match(atmVwapContext(snapshot,'Nifty 50',22050,now).reason,/current index ATM strike/)
+})

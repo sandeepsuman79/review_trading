@@ -39,10 +39,12 @@ export default function ChartIndicators({ visibility, onToggle, average, technic
   return <div className="chart-indicator-panel">
     <div className="chart-indicator-controls" role="group" aria-label="Chart indicator visibility">
       <span className="chart-indicator-controls-label">Indicators <small>(tap to show/hide)</small></span>
-      {controls.map(control => <button key={control.key} type="button" aria-pressed={visibility[control.key] && (control.key !== 'vwap' || hasVwap)} disabled={control.key === 'vwap' && !hasVwap}
-        onClick={() => onToggle(control.key)} title={control.key === 'vwap' && !hasVwap ? spotIndex ? 'ATM CE/PE VWAP is shown below in option premium units.' : 'VWAP needs traded candle volume. Waiting for historical or observed volume.' : `${visibility[control.key] ? 'Hide' : 'Show'} ${control.label}`}>
-        <i aria-hidden="true" style={{ background: control.color }} />{control.label}{control.key === 'vwap' && !hasVwap && <small>{spotIndex ? 'ATM' : 'N/A'}</small>}
-      </button>)}
+      {controls.map(control => spotIndex && control.key === 'vwap'
+        ? <button key={control.key} type="button" onClick={() => document.getElementById('atm-option-charts')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} title="View the current ATM CE/PE price, volume and VWAP charts" aria-label="View ATM option VWAP charts"><i aria-hidden="true" style={{ background: control.color }} />VWAP <small>ATM</small></button>
+        : <button key={control.key} type="button" aria-pressed={visibility[control.key] && (control.key !== 'vwap' || hasVwap)} disabled={control.key === 'vwap' && !hasVwap}
+          onClick={() => onToggle(control.key)} title={control.key === 'vwap' && !hasVwap ? 'VWAP needs traded candle volume. Waiting for historical or observed volume.' : `${visibility[control.key] ? 'Hide' : 'Show'} ${control.label}`}>
+          <i aria-hidden="true" style={{ background: control.color }} />{control.label}{control.key === 'vwap' && !hasVwap && <small>N/A</small>}
+        </button>)}
     </div>
     {showTradeContext && <div className="chart-trade-legend" aria-label="Trade level legend">
       <span><i className="is-entry" />Entry</span><span><i className="is-stop" />Stop-loss</span><span><i className="is-target" />Target</span>
@@ -55,6 +57,7 @@ export default function ChartIndicators({ visibility, onToggle, average, technic
         <strong>{atmVwap ? `${number(atmVwap.ce.vwap ?? undefined)} / ${number(atmVwap.pe.vwap ?? undefined)}` : atmVwapError ? 'Unavailable' : 'Loading…'}</strong>
         <small>{atmVwap ? `Strike ${atmVwap.strike.toLocaleString('en-IN')} · Expiry ${atmVwap.expiry} · ${atmBias?.toLowerCase() ?? 'Last available / incomplete; excluded from signals'}` : atmVwapError || 'Waiting for ATM option quotes'}</small>
         {atmVwap && <small>CE LTP {number(atmVwap.ce.close ?? undefined)} · PE LTP {number(atmVwap.pe.close ?? undefined)}</small>}
+        {atmVwap && <small>Session volume · CE {atmVwap.ce.volume.toLocaleString('en-IN')} · PE {atmVwap.pe.volume.toLocaleString('en-IN')}</small>}
         {atmVwap?.message && <small>{atmVwap.message}</small>}
         {atmVwap && <small>{atmVwap.method === 'BROKER_AVERAGE_PRICE' ? 'Broker session average · Quotes refresh every 10s' : 'Candle VWAP · Completed-minute volume'}</small>}
         {atmTime !== undefined && <small>As of {new Date(atmTime).toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' })} IST</small>}
