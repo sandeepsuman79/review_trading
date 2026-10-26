@@ -316,10 +316,12 @@ Sources: [atmVwap.js](../server/atmVwap.js), [atmVwap.ts](../src/api/atmVwap.ts)
 [SmartAPI market data](https://smartapi.angelone.in/docs).
 
 Index spot candles report no traded volume, so option-premium prices and VWAP
-must use their own price axis. The selected index now includes an expanded
-**Default ATM** chart with CE/PE tabs (CE initially), the selected 5/15/60-minute
-interval, actual option candles, per-candle volume bars, candle-volume VWAP and
-EMA/RSI/Supertrend metrics. The index VWAP control opens this chart. The ATM card
+must use their own price axis. A single chart area uses the existing
+**CE / expiry / PE** switch: CE shows the current ATM call; PE shows the current
+ATM put; the expiry button returns to the index chart (the initial view). There
+is no separate ATM panel. Option views use the selected 5/15/60-minute interval,
+actual option candles, per-candle volume bars, candle-volume VWAP and
+EMA/RSI/Supertrend metrics. The index VWAP control selects the ATM CE view. The ATM card
 and chart header show the separate CE and PE cumulative session volumes.
 The displayed option VWAP line is the HLC3 candle estimate, while the live card
 can use the broker session average; these sources are labeled separately.
@@ -341,7 +343,7 @@ bearish confirmed setups with current ATM volume context, without lowering any
 confirmation, freshness, risk or coverage requirement. Option-chart indicators
 are display context; they do not create an additional strategy or independent
 entry/exit score.
-Sources: [AtmOptionCharts.tsx](../src/components/AtmOptionCharts.tsx),
+Sources: [IndexOptionChart.tsx](../src/components/IndexOptionChart.tsx),
 [atmOptionCandles.ts](../src/api/atmOptionCandles.ts),
 [CandleVolume.tsx](../src/components/CandleVolume.tsx),
 [tradingEvidence.ts](../src/analysis/tradingEvidence.ts).

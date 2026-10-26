@@ -802,10 +802,7 @@ button.chart-scale-badge { cursor: pointer; }
 .timeframe-indicator-row > small.agent-text-bullish { color: #15803d; }
 .timeframe-indicator-row > small.agent-text-bearish { color: #b91c1c; }
 
-.atm-option-charts { margin-top: 16px; padding: 12px; border: 1px solid var(--border-color, #e2e8f0); border-radius: 12px; min-width: 0; }
-.atm-option-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
-.atm-option-heading button { min-height: 36px; padding: 6px 14px; border: 1px solid #cbd5e1; background: transparent; color: inherit; cursor: pointer; }
-.atm-option-heading button[aria-pressed="true"] { background: #ede9fe; color: #5b21b6; border-color: #8b5cf6; }
-.atm-option-volumes { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 12px; margin-bottom: 10px; }
 .candle-volume { border-top: 1px solid #e2e8f0; padding-top: 4px; min-width: 0; }
 .candle-volume > small { padding-left: 12px; color: var(--text-secondary); }
+
+.atm-chart-loading { min-height: 360px; display: grid; place-items: center; padding: 20px; text-align: center; color: var(--text-secondary); }

@@ -16,7 +16,8 @@ const controls: Array<{ key: ChartIndicator; label: string; color: string }> = [
 ]
 const number = (value?: number) => value === undefined ? '—' : value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-export default function ChartIndicators({ visibility, onToggle, average, technical, atmVwap, atmVwapError, atmIndexPrice, vwap, hasVwap, spotIndex, showIndexContext = true, showTradeContext = showIndexContext, close, context, trade, indiaVix, indiaVixLoading, now }: {
+export default function ChartIndicators({ onShowAtm, visibility, onToggle, average, technical, atmVwap, atmVwapError, atmIndexPrice, vwap, hasVwap, spotIndex, showIndexContext = true, showTradeContext = showIndexContext, close, context, trade, indiaVix, indiaVixLoading, now }: {
+  onShowAtm?: () => void;
   visibility: ChartIndicatorVisibility; onToggle: (key: ChartIndicator) => void;
   average: MovingAveragePoint; technical: TechnicalIndicatorPoint; vwap?: number;
   atmVwap?: AtmVwapSnapshot; atmVwapError?: string; atmIndexPrice?: number;
@@ -40,7 +41,7 @@ export default function ChartIndicators({ visibility, onToggle, average, technic
     <div className="chart-indicator-controls" role="group" aria-label="Chart indicator visibility">
       <span className="chart-indicator-controls-label">Indicators <small>(tap to show/hide)</small></span>
       {controls.map(control => spotIndex && control.key === 'vwap'
-        ? <button key={control.key} type="button" onClick={() => document.getElementById('atm-option-charts')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} title="View the current ATM CE/PE price, volume and VWAP charts" aria-label="View ATM option VWAP charts"><i aria-hidden="true" style={{ background: control.color }} />VWAP <small>ATM</small></button>
+        ? <button key={control.key} type="button" onClick={onShowAtm} disabled={!onShowAtm} title="View the current ATM CE/PE price, volume and VWAP charts" aria-label="View ATM option VWAP charts"><i aria-hidden="true" style={{ background: control.color }} />VWAP <small>ATM</small></button>
         : <button key={control.key} type="button" aria-pressed={visibility[control.key] && (control.key !== 'vwap' || hasVwap)} disabled={control.key === 'vwap' && !hasVwap}
           onClick={() => onToggle(control.key)} title={control.key === 'vwap' && !hasVwap ? 'VWAP needs traded candle volume. Waiting for historical or observed volume.' : `${visibility[control.key] ? 'Hide' : 'Show'} ${control.label}`}>
           <i aria-hidden="true" style={{ background: control.color }} />{control.label}{control.key === 'vwap' && !hasVwap && <small>N/A</small>}

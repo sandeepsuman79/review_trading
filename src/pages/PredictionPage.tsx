@@ -43,8 +43,7 @@ import { useGapOutlook } from '../hooks/useGapOutlook'
 import GapOutlookCard from '../components/GapOutlookCard'
 import { commoditySpecs, mcxSession, resolveCommodityContracts, validCommodityContract, isCommodity, type CommodityContract } from '../analysis/commodities'
 
-const CandleChart = lazy(() => import('../components/CandleChart'))
-const AtmOptionCharts = lazy(() => import('../components/AtmOptionCharts'))
+const CandleChart = lazy(() => import('../components/IndexOptionChart'))
 
 function isInvalidToken(message: string) {
   return /invalid[\s_-]*token|token[\s_-]*invalid/i.test(message)
@@ -836,9 +835,9 @@ export default function PredictionPage() {
                   ? `Last synced ${new Date(historyUpdates[`${instrument.token}:${chartInterval}`].receivedAt).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false })} IST · Candles through ${new Date(historyUpdates[`${instrument.token}:${chartInterval}`].through).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false })} IST · Auto refresh after candle close`
                   : 'Waiting for broker history sync'}</p>
                 <Suspense fallback={<div role="status" style={{ minHeight: 440, padding: 12 }}>Loading candle chart…</div>}>
-                <CandleChart
+                <CandleChart interval={chartInterval}
                   name={instrument.name}
-                  key={`${instrument.token}-${chartInterval}`}
+                  key={instrument.token}
                   intervalLabel={intervalLabel(chartInterval)}
                   savedCandleCount={chartCandles[instrument.token]?.length || 0}
                   spotIndex={instrument.exchange !== 'MCX'}
@@ -864,9 +863,6 @@ export default function PredictionPage() {
                   candles={chartCandles[instrument.token] || []}
                 />
                 </Suspense>
-                {instrument.exchange !== 'MCX' && <Suspense fallback={<p role="status">Loading ATM option chart…</p>}>
-                  <AtmOptionCharts index={instrument.name} price={streamTicks[instrument.token]?.ltp ?? chartCandles[instrument.token]?.[chartCandles[instrument.token].length - 1]?.[4]} interval={chartInterval} now={heartbeat} />
-                </Suspense>}
               </div>
             ))}
             {monitoredInstruments.map(instrument => (

@@ -448,11 +448,13 @@ Option premiums are compared with their own VWAPs, never with spot-index points.
 enable one-minute strategy analysis. Commodity
 futures use their own traded-volume VWAP instead of equity option context.
 
-The selected index also shows a default ATM option chart with CE/PE tabs. It uses
-the selected 5/15/60-minute interval and the actual contract's OHLC candles,
+The selected index uses one chart area with the existing CE / expiry / PE switch.
+CE shows the current ATM call; PE shows the current ATM put; the expiry button
+returns to the index chart (the default view). There is no extra ATM panel.
+Option views use the selected 5/15/60-minute interval and the actual contract's OHLC candles,
 volume bars, candle-derived VWAP, EMA, RSI and Supertrend. The spot-index chart
 retains index-point prices; ATM premiums use their own rupee axis. The VWAP
-control on the spot chart opens the ATM chart. Session volume for both legs is
+control on the spot chart selects the ATM CE view. Session volume for both legs is
 shown alongside the live VWAP card, separately from historical per-candle volume.
 Only the visible option chart loads history; minute refreshes overlap the last
 broker candle and share in-flight requests. Strike/expiry/login changes cannot
