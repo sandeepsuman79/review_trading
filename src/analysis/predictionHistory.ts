@@ -216,7 +216,7 @@ export function observePredictionCandles(record: PredictionRecord, candles: Ange
         next = updateTradeProtection({ ...next, observedThrough: end, latestPrice: candle[4], latestPriceAt: end, latestPriceSource: 'CANDLE' }, candle[4], end)
         continue
       }
-      if (overlap) return { ...next, status: 'UNVERIFIED', outcomeNote: 'A reconnect bar touched an exit level but its ordering relative to saved quotes is unknown. Recorded entry is preserved; outcome is unverified.' }
+      if (overlap) return { ...next, outcomeNote: 'Recovering saved trade: a reconnect bar touched the saved stop, but its ordering relative to saved quotes is unknown. Entry and TSL are preserved; waiting for an observed exit quote or complete recovery data.' }
       return { ...next, outcomeNote: 'Recovering saved trade: waiting for complete candle history over the disconnected period.' }
     }
     const [, open, high, low, closing] = candle
@@ -341,6 +341,17 @@ export function syncPredictionRecord(record: PredictionRecord, candles: AngelOne
     if (allowEntry) record = { ...record, bullishScore: entryPlan.bullishScore, bearishScore: entryPlan.bearishScore, technicalEvidence: entryPlan.technicalEvidence, newsSummary: entryPlan.newsSummary, newsEvidence: entryPlan.newsEvidence, coverage: entryPlan.coverage, evidenceSummary: entryPlan.evidenceSummary, contextMode: entryPlan.contextMode }
   }
   const continuous = tick && Number.isFinite(time) && time <= now + 1_000 && now - time <= 30_000 && time - record.observedThrough <= 30_000
+  // A fresh observed breach of an already saved stop is an actionable local exit,
+  // even after a quote gap. An overlapping candle cannot erase that observation.
+  // Keep the original quote fill and timestamp; never backdate to an assumed touch.
+  const freshStopExit = record.status === 'ACTIVE' && tick?.ltp !== undefined && Number.isFinite(tick.ltp) && tick.ltp > 0
+    && Number.isFinite(time) && time > record.observedThrough && time <= now + 1_000 && now - time <= 30_000
+    && tradingSession(time).date === tradingSession(record.entryAt!).date
+    && ((tick.ltp - record.stopLoss) * direction(record) <= 0 || protectiveStopTouched(record, tick.ltp))
+  if (freshStopExit) {
+    const exited = observePredictionTick(record, tick!.ltp!, time, allowEntry, protectionAssessment)
+    return continuous ? exited : { ...exited, outcomeNote: `${exited.outcomeNote} Quote monitoring resumed after a gap; no earlier intrabar fill was assumed.` }
+  }
   // Replay gaps before a reconnect quote; a missed stop must not turn into a later win.
   let next = continuous ? record : observePredictionCandles(record, candles, now, allowEntry)
   if (isOpenPrediction(next) && Number.isFinite(time) && time <= now + 1_000 && time - next.observedThrough > 30_000 && next.observedThrough < recordCutoff(next)) {

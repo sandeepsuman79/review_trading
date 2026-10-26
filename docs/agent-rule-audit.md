@@ -280,7 +280,9 @@ Existing positions continue monitoring even while the entry model says WAIT.
   wholly after entry. The price can gap beyond a protective stop.
 - Gaps/missing observations are replayed conservatively. Saved stops are checked
   before each completed close can tighten the trail for the next bar. Unknown
-  entry/stop ordering is AMBIGUOUS or UNVERIFIED, not an invented winning fill.
+  entry/stop ordering is AMBIGUOUS; overlapping recovery bars preserve the active
+  position until an observed exit or sufficient recovery data arrives. A fresh
+  same-session quote breaching the saved SL/TSL records its observed exit directly.
 - Points = (exit − entry) for CALL/LONG, (entry − exit) for PUT/SHORT. These are
   underlying/futures points; no option premium return or broker execution is inferred.
 
@@ -696,6 +698,52 @@ broker data and interactive browser operation were not exercised.
 Sources: [predictionHistory.ts](../src/analysis/predictionHistory.ts),
 [tradeProtection.ts](../src/analysis/tradeProtection.ts),
 [openProfit.test.cjs](../tests/openProfit.test.cjs).
+
+## 21. Persist observed exits and separate quote recovery from settlement
+
+Two paths could incorrectly show Unverified around an SL/TSL exit:
+
+- After a quote gap, replay examined an overlapping candle before the fresh
+  stop-crossing quote. A low/high formed before the saved quote or TSL could
+  retire the active position before that actual exit observation was processed.
+- A newer UNVERIFIED/AMBIGUOUS/ACTIVE snapshot in fallback storage could replace
+  a previously completed exit in IndexedDB during migration or recovery.
+
+Fresh, correctly matched same-session quotes that breach an already saved stop
+now settle immediately at their actual price and timestamp. Stop gaps keep the
+observed price, not a backdated ideal fill. Stale/future/invalid quotes and wrong
+MCX contracts cannot trigger this path. Overnight quotes cannot establish the
+previous session's exit. Without an observed exit, an overlapping bar keeps the
+saved position active under history recovery, blocks replacement trades and
+does not invent P/L. The confirmed card identifies this as Recovering saved trade.
+
+Complete recorded TARGET_HIT/STOP_LOSS_HIT/EARLY_EXIT outcomes take precedence
+over unresolved snapshots in either storage direction. Existing earlier-exit
+ordering remains in force when two actual completed exits conflict.
+
+IndexedDB remains the full persistent ledger. A compact synchronous localStorage
+write-ahead checkpoint stores entry/TSL/exit transitions before database commit,
+and active positions are checkpointed on page hide, hidden visibility and hook
+cleanup. Reopening merges checkpoints with the ledger; cleanup happens after a
+successful commit and preserves newer checkpoints. An available valid fallback
+can recover during database failure; an unreadable database without a backup
+cannot be silently replaced with an empty ledger. Redux is not required for
+durability and would still need a storage backend.
+
+Regression tests exercise immediate stop/TSL exits with missing/overlapping
+history, both directions across all seven instruments, persisted DONE cards and
+booked P/L, conflicting snapshots, interrupted commits, checkpoint recovery,
+unavailable databases and preservation of corrupt data. Previously unobserved
+exit prices cannot be reconstructed exactly from persistence alone.
+All 224 targeted agent/history/storage/evidence/enhancement checks, production
+build, lint and diff checks pass. Card rendering is covered with React server
+rendering; authenticated broker data and interactive browser lifecycle behavior
+were not exercised. Vite retains its existing large-chunk advisory.
+
+Sources: [predictionHistory.ts](../src/analysis/predictionHistory.ts),
+[predictionHistoryStore.ts](../src/storage/predictionHistoryStore.ts),
+[usePredictionHistory.ts](../src/hooks/usePredictionHistory.ts),
+[storageResilience.test.cjs](../tests/storageResilience.test.cjs).
 Sources: [tradeRisk.ts](../src/analysis/tradeRisk.ts),
 [tradeProtection.ts](../src/analysis/tradeProtection.ts),
 [predictionHistory.ts](../src/analysis/predictionHistory.ts).

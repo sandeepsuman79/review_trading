@@ -528,3 +528,15 @@ Saved completed target outcomes are preserved. Recovery checks the saved stop
 before each known candle close can tighten it for subsequent bars. Confirmed
 reversal, manual and session square-off exits remain available. This tracks
 underlying/futures points for CE/PE directions, not actual option premium orders.
+
+An already saved SL/TSL breached by a fresh, matching same-session quote now exits
+at that observed quote before reconnect candle replay. Overlapping candle ranges
+can contain moves before the saved TSL; they keep a position under recovery while
+waiting for an observed exit rather than immediately retiring it as Unverified.
+Unknown exits are never assigned an invented fill or booked profit.
+
+Completed exits with entry/exit times, prices and P/L take precedence over newer
+uncertainty snapshots during storage merge. IndexedDB stores the full ledger;
+synchronous localStorage checkpoints protect entry/TSL/exit transitions before
+database commit and active positions on tab hide/cleanup. Reload replays those
+checkpoints and removes only committed snapshots. No Redux dependency is needed.

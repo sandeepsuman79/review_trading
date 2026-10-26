@@ -46,7 +46,8 @@ test('refresh keeps the saved entry active while reconnect history is loading; a
  const reference=observePredictionCandles(recovered,[[harmless[0],100,125,99,120,0]],time('10:05'))
  assert.equal(reference.status,'ACTIVE');assert.equal(reference.entryAt,active.entryAt);assert.equal(reference.protection.peakPrice,120)
  const touched=observePredictionCandles(recovered,[[harmless[0],100,125,89,120,0]],time('10:05'))
- assert.equal(touched.status,'UNVERIFIED');assert.equal(touched.entryAt,active.entryAt,'a possible missed stop must remain unverified')
+ assert.equal(touched.status,'ACTIVE');assert.equal(touched.entryAt,active.entryAt,'a possible missed stop keeps the saved position in recovery')
+ assert.equal(touched.points,undefined);assert.match(touched.outcomeNote,/Recovering saved trade/)
 })
 
 test('indicator candle changes remain independent of score direction and include Supertrend and shared VIX risk',()=>{

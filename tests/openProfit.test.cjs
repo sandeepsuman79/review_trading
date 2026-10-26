@@ -6,7 +6,7 @@ const compile = (module, filename) => module._compile(ts.transpileModule(fs.read
 }).outputText, filename)
 require.extensions['.ts'] = compile
 require.extensions['.tsx'] = compile
-const { createPredictionRecord, observePredictionTick, observePredictionCandles, readPredictionHistory, writePredictionHistory, registerConfirmedPrediction } = require('../src/analysis/predictionHistory.ts')
+const { createPredictionRecord, observePredictionTick, observePredictionCandles, syncPredictionRecord, readPredictionHistory, writePredictionHistory, registerConfirmedPrediction } = require('../src/analysis/predictionHistory.ts')
 const { predictionEvents } = require('../src/analysis/predictionEvents.ts')
 const { commoditySpecs, mcxSession } = require('../src/analysis/commodities.ts')
 const now = Date.parse('2026-10-16T13:00:00+05:30'), duration = 300000
@@ -58,6 +58,38 @@ test('entry retains the 1.20 minimum and cannot chase a consumed reference move'
   }
 })
 
+test('fresh TSL and initial-stop breaches close immediately after quote gaps instead of becoming unverified', () => {
+  for (const instrument of ['Nifty 50', 'Sensex', 'Bank Nifty', ...commoditySpecs.map(item => item.name)]) for (const side of ['CALL', 'PUT']) for (const trailing of [false, true]) {
+    const d = side === 'CALL' ? 1 : -1, candidate = pending(instrument, side)
+    let active = observePredictionTick(candidate, 1000, now + 1)
+    if (trailing) active = observePredictionTick(active, 1000 + d * 50, now + 2)
+    const exit = 1000 + d * (trailing ? 30 : -15), observedAt = now + 45000
+    const tick = { token: active.contract?.token ?? '99926000', exchangeType: active.contract ? 5 : 1, timestamp: observedAt, ltp: exit }
+    const overlap = [[new Date(now).toISOString(), 1000, 1060, 940, exit, 0]]
+    const waiting = syncPredictionRecord(active, overlap, undefined, now + duration, false, undefined, null)
+    assert.equal(waiting.status, 'ACTIVE', 'history recovery must not permanently retire a saved position before the exit quote arrives')
+    assert.match(waiting.outcomeNote, /Recovering saved trade/); assert.equal(waiting.points, undefined)
+    const later = now + duration + 1000
+    assert.equal(syncPredictionRecord(waiting, overlap, { ...tick, timestamp: later }, later, false, undefined, null).exitPrice, exit)
+    // The forming candle includes prices before the saved quote/TSL. After it
+    // closes, that overlap used to suppress even an observed exit as UNVERIFIED.
+    for (const [time, bars] of [[observedAt, []], [now + duration + 1000, [[new Date(now).toISOString(), 1000, 1060, 940, exit, 0]]]]) {
+      const quote = { ...tick, timestamp: time }
+      const closed = syncPredictionRecord(active, bars, quote, time, false, undefined, null)
+      assert.equal(closed.status, trailing ? 'EARLY_EXIT' : 'STOP_LOSS_HIT', `${instrument} ${side} ${trailing} ${time}`)
+      assert.equal(closed.earlyExitSource, trailing ? 'AGENT_PROTECTION' : undefined)
+      assert.equal(closed.exitPrice, exit); assert.equal(closed.exitAt, time)
+      assert.equal(closed.points, trailing ? 30 : -15)
+      assert.match(closed.outcomeNote, /no earlier intrabar fill was assumed/)
+      assert.deepEqual(reload(closed), JSON.parse(JSON.stringify(closed)))
+      assert.equal(predictionEvents([active], [closed]).length, 1)
+    }
+    for (const changed of [{ ...tick, timestamp: observedAt - 31000 }, { ...tick, timestamp: observedAt + 1001 }, { ...tick, ltp: NaN }, ...(active.contract ? [{ ...tick, token: 'wrong' }] : [])]) {
+      assert.equal(syncPredictionRecord(active, [], changed, observedAt, false, undefined, null).exitPrice, undefined, 'invalid or stale quotes cannot invent an exit')
+    }
+  }
+})
+
 test('recovery uses observed candle closes to trail beyond the reference without inventing intrabar peaks', () => {
   for (const side of ['CALL', 'PUT']) {
     const d = side === 'CALL' ? 1 : -1
@@ -82,6 +114,35 @@ test('saved completed target outcomes stay terminal and readable', () => {
   const active = observePredictionTick(pending(), 1000, now + 1)
   const legacy = reload({ ...active, status: 'TARGET_HIT', exitAt: now + 2, exitPrice: 1012, points: 12, observedThrough: now + 2 })
   assert.equal(observePredictionTick(legacy, 1050, now + 3), legacy)
+})
+
+test('observed stop exits stay DONE with booked P/L after persistence and a conflicting recovery snapshot', async () => {
+  const { createPredictionHistoryStore } = require('../src/storage/predictionHistoryStore.ts')
+  const { predictionHistoryKey } = require('../src/analysis/predictionHistory.ts')
+  const React = require('react'), { renderToStaticMarkup } = require('react-dom/server')
+  const ConfirmedTrades = require('../src/components/ConfirmedTrades.tsx').default
+  for (const instrument of ['Nifty 50', 'Sensex', 'Bank Nifty', ...commoditySpecs.map(item => item.name)]) for (const side of ['CALL', 'PUT']) for (const trailing of [false, true]) {
+    const d = side === 'CALL' ? 1 : -1, values = new Map()
+    const storage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) }
+    let saved
+    const backend = { read: async () => saved, transact: async update => { saved = update(saved); return saved } }
+    const store = createPredictionHistoryStore({ backend, storage })
+    await store.load()
+    let active = observePredictionTick(pending(instrument, side), 1000, now + 1)
+    if (trailing) active = observePredictionTick(active, 1000 + d * 50, now + 2)
+    await store.update(() => [active])
+    const exitPrice = 1000 + d * (trailing ? 30 : -15), time = now + 45000
+    const tick = { token: active.contract?.token ?? '99926000', exchangeType: active.contract ? 5 : 1, timestamp: time, ltp: exitPrice }
+    const closed = await store.update(records => records.map(record => syncPredictionRecord(record, [], tick, time)))
+    assert(closed.durable)
+    storage.setItem(predictionHistoryKey, JSON.stringify({ version: 1, records: [{ ...active, status: 'UNVERIFIED', observedThrough: now + duration }] }))
+    const restored = await createPredictionHistoryStore({ backend, storage }).load()
+    const html = renderToStaticMarkup(React.createElement(ConfirmedTrades, { records: restored, now: time + 1, streamConnected: false, storageError: '' }))
+    assert.match(html, /DONE/); assert.match(html, /Booked P\/L/)
+    assert.match(html, trailing ? /Trailing profit protection/ : /Stop-loss hit/)
+    assert.doesNotMatch(html, /unverified|Unverified|UNVERIFIED|Unrealized/)
+    assert.equal(restored[0].exitPrice, exitPrice); assert.equal(restored[0].points, trailing ? 30 : -15)
+  }
 })
 
 test('both confirmed card views show the saved TSL and open profit beyond the reference', () => {

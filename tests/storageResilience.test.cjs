@@ -85,3 +85,81 @@ test('recovery keeps an earlier observed stop over a later rebound outcome from 
  const recovered=await createPredictionHistoryStore({backend:db,storage:local}).load()
  assert.equal(recovered[0].status,'STOP_LOSS_HIT');assert.equal(recovered[0].exitAt,start+60000)
 })
+
+test('a recorded TSL or stop exit wins over newer uncertainty snapshots in either storage direction',async()=>{
+ for(const status of ['EARLY_EXIT','STOP_LOSS_HIT'])for(const uncertainStatus of ['UNVERIFIED','AMBIGUOUS','ACTIVE'])for(const closedInDatabase of [true,false]){
+  const closed={...trade(),status,earlyExitSource:status==='EARLY_EXIT'?'AGENT_PROTECTION':undefined,exitAt:start+60000,exitPrice:status==='EARLY_EXIT'?125:89,points:status==='EARLY_EXIT'?25:-11,observedThrough:start+60000}
+  const uncertain={...trade(),status:uncertainStatus,observedThrough:start+120000,latestPriceAt:start+120000}
+  const db=backend(encode([closedInDatabase?closed:uncertain])),local=storage([[predictionHistoryKey,encode([closedInDatabase?uncertain:closed])]])
+  const store=createPredictionHistoryStore({backend:db,storage:local})
+  assert.deepEqual((await store.load())[0],JSON.parse(JSON.stringify(closed)))
+  const reload=createPredictionHistoryStore({backend:db,storage:local})
+  assert.deepEqual((await reload.load())[0],JSON.parse(JSON.stringify(closed)))
+ }
+})
+
+test('critical exit is checkpointed before the database commits and survives an abrupt tab close',async()=>{
+ const {predictionCheckpointKey}=require('../src/storage/predictionHistoryStore.ts')
+ const local=storage(),initial=encode([trade()]);let value=initial,hold=false,release,callbackDone
+ const called=new Promise(resolve=>{callbackDone=resolve})
+ const db={read:async()=>value,transact:async update=>{const next=update(value);if(hold){callbackDone();await new Promise(resolve=>{release=resolve})}value=next;return value}}
+ const store=createPredictionHistoryStore({backend:db,storage:local});await store.load();hold=true
+ const pending=store.update(records=>records.map(r=>({...r,status:'EARLY_EXIT',earlyExitSource:'AGENT_PROTECTION',exitAt:start+60000,exitPrice:125,points:25,observedThrough:start+60000})))
+ await called
+ assert.equal(JSON.parse(local.getItem(predictionCheckpointKey)).records[0].status,'EARLY_EXIT')
+ assert.equal(JSON.parse(value).records[0].status,'ACTIVE','database is still on the old snapshot')
+ const recoveredBackend=backend(value),reopened=createPredictionHistoryStore({backend:recoveredBackend,storage:local})
+ const restored=(await reopened.load())[0]
+ assert.equal(restored.status,'EARLY_EXIT');assert.equal(restored.exitPrice,125);assert.equal(restored.points,25)
+ assert.equal(local.getItem(predictionCheckpointKey),null,'checkpoint clears only after a successful recovery commit')
+ hold=false;release();await pending
+})
+
+test('critical entry and TSL checkpoints persist through database unavailability on reload',async()=>{
+ const {predictionCheckpointKey}=require('../src/storage/predictionHistoryStore.ts')
+ const record={...trade(),protection:{version:1,peakPrice:140,peakAt:start+30000,stop:125,armed:true,atr:10,risk:10},observedThrough:start+30000}
+ const local=storage([[predictionCheckpointKey,encode([record])]]),db=backend();db.fail=true
+ const store=createPredictionHistoryStore({backend:db,storage:local})
+ assert.deepEqual((await store.load())[0],record)
+ assert.equal(store.checkpoint(),true)
+ const fresh=createPredictionHistoryStore({backend:db,storage:local})
+ assert.equal((await fresh.load())[0].protection.stop,125)
+})
+
+test('a valid empty local ledger can persist new trades when IndexedDB is unavailable',async()=>{
+ const local=storage([[predictionHistoryKey,encode([])]]),db=backend();db.fail=true
+ const store=createPredictionHistoryStore({backend:db,storage:local})
+ assert.deepEqual(await store.load(),[])
+ const result=await store.update(()=>[trade()]);assert(result.durable)
+ const reopened=createPredictionHistoryStore({backend:db,storage:local})
+ assert.equal((await reopened.load())[0].entryPrice,100)
+})
+
+test('an unreadable database without any backup cannot be replaced by a new empty ledger',async()=>{
+ const local=storage(),db=backend(encode([trade()]));db.fail=true
+ await assert.rejects(createPredictionHistoryStore({backend:db,storage:local}).load(),/Disk unavailable/)
+ assert.equal(local.getItem(predictionHistoryKey),null)
+})
+
+test('corrupt checkpoint data is preserved and cannot overwrite the trade ledger',async()=>{
+ const {predictionCheckpointKey}=require('../src/storage/predictionHistoryStore.ts')
+ const local=storage([[predictionCheckpointKey,'invalid JSON']]),db=backend(encode([trade()]))
+ await assert.rejects(createPredictionHistoryStore({backend:db,storage:local}).load(),/preserved/)
+ assert.equal(local.getItem(predictionCheckpointKey),'invalid JSON');assert.equal(JSON.parse(db.value).records[0].entryPrice,100)
+})
+
+test('a newer protection checkpoint is not deleted when an older database transaction completes',async()=>{
+ const {predictionCheckpointKey}=require('../src/storage/predictionHistoryStore.ts')
+ const local=storage();let value=encode([trade()]),hold=false,release,callbackDone
+ const called=new Promise(resolve=>{callbackDone=resolve})
+ const db={read:async()=>value,transact:async update=>{const next=update(value);if(hold){callbackDone();await new Promise(resolve=>{release=resolve})}value=next;return value}}
+ const store=createPredictionHistoryStore({backend:db,storage:local});await store.load();hold=true
+ const pending=store.update(records=>records.map(r=>({...r,observedThrough:start+2000,protection:{version:1,peakPrice:115,peakAt:start+2000,stop:100,armed:true,atr:10,risk:10}})))
+ await called
+ const newer={...JSON.parse(local.getItem(predictionCheckpointKey)).records[0],observedThrough:start+3000,protection:{version:1,peakPrice:140,peakAt:start+3000,stop:125,armed:true,atr:10,risk:10}}
+ local.setItem(predictionCheckpointKey,encode([newer]))
+ hold=false;release();await pending
+ assert.equal(JSON.parse(local.getItem(predictionCheckpointKey)).records[0].protection.stop,125)
+ const reopened=createPredictionHistoryStore({backend:backend(value),storage:local})
+ assert.equal((await reopened.load())[0].protection.stop,125)
+})

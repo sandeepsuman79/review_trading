@@ -1,4 +1,4 @@
-import { createPredictionHistoryStore, indexedHistoryBackend } from '../storage/predictionHistoryStore'
+import { createPredictionHistoryStore, indexedHistoryBackend, predictionCheckpointKey } from '../storage/predictionHistoryStore'
 import { recordTradeTransitions } from '../analysis/agentMonitoring'
 import type { ProtectionAssessment } from '../analysis/tradeProtection'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -56,10 +56,14 @@ export function usePredictionHistory(onError: (message: string) => void, onEvent
     if (typeof BroadcastChannel !== 'undefined') {
       try { channel.current = new BroadcastChannel('traders_prediction_history'); channel.current.onmessage = load } catch { /* Atomic database writes still prevent overlapping ledger updates. */ }
     }
-    const receive = (event: StorageEvent) => { if (event.storageArea === localStorage && (event.key === predictionHistoryKey || event.key === null)) load() }
+    const receive = (event: StorageEvent) => { if (event.storageArea === localStorage && (event.key === predictionHistoryKey || event.key === predictionCheckpointKey || event.key === null)) load() }
+    const checkpoint = () => { try { store.current?.checkpoint() } catch (error) { report(error) } }
+    const onVisibility = () => { if (document.visibilityState === 'hidden') checkpoint() }
     window.addEventListener('storage', receive)
     window.addEventListener('focus', load)
-    return () => { mounted.current = false; channel.current?.close(); channel.current = undefined; window.removeEventListener('storage', receive); window.removeEventListener('focus', load) }
+    window.addEventListener('pagehide', checkpoint)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => { checkpoint(); mounted.current = false; channel.current?.close(); channel.current = undefined; window.removeEventListener('storage', receive); window.removeEventListener('focus', load); window.removeEventListener('pagehide', checkpoint); document.removeEventListener('visibilitychange', onVisibility) }
   }, [getStore, report])
 
   const recordPrediction = useCallback((plan: PredictionPlan) => {
