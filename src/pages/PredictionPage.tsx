@@ -352,7 +352,7 @@ export default function PredictionPage() {
     return review?.asOf ? { instrument: review.instrument, contractToken: review.contractToken, interval: review.interval, asOf: review.asOf, reviewedAt: review.reviewedAt, atr: review.evidence.atr14 } : undefined
   }, [])
   const chartTradeLevels = useMemo(() => Object.fromEntries(predictionRecords.filter(record => record.status === 'ACTIVE' && (!record.contract || marketInstruments.some(item => item.token === record.contract!.token)))
-    .map(record => [record.instrument, { entry: record.entryPrice!, target: record.target, stopLoss: record.stopLoss }])), [predictionRecords, marketInstruments])
+    .map(record => [record.instrument, { entry: record.entryPrice!, target: record.target, stopLoss: record.stopLoss, trailingStop: record.protection?.armed ? record.protection.stop : undefined }])), [predictionRecords, marketInstruments])
   const [indiaVixInstrument, setIndiaVixInstrument] = useState<IndiaVixInstrument>()
   const { snapshot: indiaVix, loading: indiaVixLoading, refresh: refreshIndiaVix } = useIndiaVix(indiaVixInstrument)
   const chartIntervalRef = useRef(chartInterval)

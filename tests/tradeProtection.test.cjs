@@ -18,10 +18,10 @@ test('CALL/PUT and MCX LONG/SHORT trail observed profit and exit on a quote with
   let saved;writePredictionHistory({setItem:(_,v)=>saved=v},[closed]);assert.deepEqual(readPredictionHistory({getItem:()=>saved}),JSON.parse(saved).records)
  }
 })
-test('ordinary noise before 0.75R does not arm a trail and removed minute-pressure data cannot force an exit',()=>{
+test('TSL is automatic before 0.75R and removed minute-pressure data cannot force an exit',()=>{
  for(const side of ['CALL','PUT']){
   const d=side==='CALL'?1:-1,record=position(side),context=review(record)
-  const unarmed=observePredictionTick(record,1000+d*3,now+1,true,context);assert.equal(unarmed.protection.armed,false)
+  const unarmed=observePredictionTick(record,1000+d*3,now+1,true,context);assert.equal(unarmed.protection.armed,true);assert((unarmed.protection.stop-record.stopLoss)*d>=0)
   const minute={...context,interval:'ONE_MINUTE',asOf:new Date(now-60000).toISOString(),pressure:{side:side==='CALL'?'PUT':'CALL',confirmed:true,reasons:['Price break','RSI weakening','EMA turn']}}
   const closed=syncPredictionRecord(record,[],quote(record,now,1000-d*2),now,false,undefined,null,minute)
   assert.equal(closed.status,'ACTIVE');assert.equal(closed.reversalInterval,undefined);assert.equal(closed.points,undefined)
@@ -34,4 +34,64 @@ test('saved protective stops survive reload and replay cannot turn an ambiguous 
  const bar=[new Date(start).toISOString(),1015,1035,1000,1025,0]
  const replay=observePredictionCandles(record,[bar],start+300000,false);assert.equal(replay.status,'AMBIGUOUS');assert.equal(replay.points,undefined)
  const trailOnly=observePredictionCandles(record,[[bar[0],1015,1016,1000,1005,0]],start+300000,false);assert.equal(trailOnly.status,'EARLY_EXIT');assert.equal(trailOnly.earlyExitSource,'AGENT_PROTECTION')
+})
+
+test('automatic TSL starts at confirmed entry across all seven instruments and both directions',()=>{
+ const {commoditySpecs}=require('../src/analysis/commodities.ts')
+ for(const instrument of ['Nifty 50','Sensex','Bank Nifty',...commoditySpecs.map(spec=>spec.name)])for(const side of ['CALL','PUT']){
+  const d=side==='CALL'?1:-1,spec=commoditySpecs.find(spec=>spec.name===instrument)
+  let base=position(side,Boolean(spec))
+  base={...base,instrument,...(spec?{contract:{...base.contract,name:instrument,root:spec.root,symbol:`${spec.root}20NOV26FUT`}}:{})}
+  const pending={...base,status:'PENDING',entryAt:undefined,entryPrice:undefined,observedThrough:now,target:1000+d*12,riskReward:1.2}
+  const context=review(base)
+  assert.equal(pending.protection,undefined)
+  const entered=observePredictionTick(pending,1000,now+1,true,context)
+  assert.equal(entered.status,'ACTIVE');assert.equal(entered.protection.armed,true)
+  assert.equal(entered.protection.stop,pending.stopLoss,'keep the initial stop at entry')
+  assert.equal(entered.protection.peakPrice,1000)
+  const earlyTrail=observePredictionTick(entered,1000+d*1,now+2,true,context)
+  assert((earlyTrail.protection.stop-pending.stopLoss)*d>0,'trail can tighten before the former 0.75R activation')
+  assert.equal(earlyTrail.stopLoss,pending.stopLoss,'original risk levels remain immutable')
+  let saved;writePredictionHistory({setItem:(_,value)=>saved=value},[earlyTrail])
+  assert.deepEqual(readPredictionHistory({getItem:()=>saved}),JSON.parse(saved).records)
+ }
+})
+test('TSL reaches break-even at 1R, never loosens on larger ATR and exits at the observed gap quote',()=>{
+ for(const side of ['CALL','PUT']){
+  const d=side==='CALL'?1:-1,base=position(side),context={...review(base),atr:10}
+  const record=observePredictionTick(base,1000+d*10,now+1,true,context)
+  assert.equal(record.protection.stop,1000)
+  const held=observePredictionTick(record,1000+d*9,now+2,true,{...context,atr:100})
+  assert.equal(held.protection.stop,1000)
+  const exit=1000-d*3,closed=observePredictionTick(held,exit,now+3,true,context)
+  assert.equal(closed.status,'EARLY_EXIT');assert.equal(closed.earlyExitSource,'AGENT_PROTECTION')
+  assert.equal(closed.exitPrice,exit);assert.equal(closed.points,-3,'a gap can pass a break-even stop; do not invent a fill')
+ }
+})
+test('pending, stale, future and out-of-order quotes cannot move automatic TSL',()=>{
+ const {updateTradeProtection}=require('../src/analysis/tradeProtection.ts')
+ const base=position(),context=review(base)
+ assert.equal(updateTradeProtection({...base,status:'PENDING'},1005,now,context).protection,undefined)
+ const tracked=observePredictionTick(base,1005,now,true,context)
+ assert.equal(updateTradeProtection(tracked,1010,now-1,context),tracked)
+ assert.equal(updateTradeProtection(tracked,1010,NaN,context),tracked)
+ for(const timestamp of [now-31000,now+1001]){
+  const source=timestamp<now?{...tracked,observedThrough:now-40000,latestPriceAt:now-40000,protection:{...tracked.protection,peakAt:now-40000}}:tracked
+  const changed=syncPredictionRecord(source,[],quote(source,timestamp,1020),now,false,undefined,null,context)
+  assert.deepEqual(changed.protection,source.protection)
+  assert.equal(changed.status,'ACTIVE')
+ }
+})
+test('reconstructed entry seeds TSL without using candle extremes; the original stop keeps its classification',()=>{
+ const start=Date.parse('2026-10-16T13:05:00+05:30'),base=position()
+ const record={...base,status:'PENDING',entryAt:undefined,entryPrice:undefined,generatedAt:start,observedThrough:start,expiresAt:start+300000,signalCandleTime:new Date(start-300000).toISOString(),target:1012,riskReward:1.2}
+ const entry=[new Date(start).toISOString(),1000,1008,999,1005,0]
+ const active=observePredictionCandles(record,[entry],start+300000,true)
+ assert.equal(active.status,'ACTIVE');assert.equal(active.protection.armed,true)
+ assert.equal(active.protection.peakPrice,1000,'no intrabar high may become a synthetic trailing peak')
+ assert.equal(active.protection.stop,990)
+ const slipped=observePredictionCandles(record,[[entry[0],1000.01,1008,999,1005,0]],start+300000,true)
+ assert.equal(slipped.status,'EXPIRED','a gapped candle entry must still retain 1.20 reward/risk')
+ const stopped=observePredictionCandles(active,[[new Date(start+300000).toISOString(),1005,1006,989,995,0]],start+600000,false)
+ assert.equal(stopped.status,'STOP_LOSS_HIT');assert.equal(stopped.exitPrice,990)
 })

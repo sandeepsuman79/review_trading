@@ -1,3 +1,4 @@
+import { minimumRewardRisk, meetsMinimumRewardRisk } from './tradeRisk'
 import type { AngelOneStreamTick } from '../api/angelOne'
 import type { PredictionPlan } from './earlyPrediction'
 import { candleIntervalMs, tickTimestamp } from './candleData'
@@ -27,7 +28,7 @@ export function diagnoseTradeEntry(plan: PredictionPlan | undefined, tick: Angel
   add('ENTRY_NOT_REACHED', 'Entry trigger', reached, `Trigger ${plan.entry.toFixed(2)}${price === undefined ? '' : ` · Quote ${price.toFixed(2)}`}`, canCheck)
   const risk = price === undefined ? NaN : d * (price - plan.stopLoss), reward = price === undefined ? NaN : d * (plan.target - price)
   const rr = risk > 0 ? reward / risk : NaN
-  add('RR_BELOW_MINIMUM', 'Reward/risk at entry quote', Number.isFinite(rr) && rr >= 1.5, Number.isFinite(rr) ? `${rr.toFixed(2)}:1 / 1.50:1 required` : 'No eligible entry quote', canCheck && reached)
+  add('RR_BELOW_MINIMUM', 'Reward/risk at entry quote', meetsMinimumRewardRisk(rr), Number.isFinite(rr) ? `${rr.toFixed(2)}:1 / ${minimumRewardRisk.toFixed(2)}:1 required` : 'No eligible entry quote', canCheck && reached)
   const paused = checks.some(check => check.status === 'FAIL' && check.code !== 'ENTRY_NOT_REACHED')
   return { state: paused ? 'ENTRY PAUSED' : reached && canCheck ? 'ELIGIBLE QUOTE' : 'AWAITING ENTRY', checks }
 }

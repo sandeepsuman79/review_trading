@@ -1,3 +1,4 @@
+import { meetsMinimumRewardRisk } from './tradeRisk'
 import type { AngelOneCandle } from '../api/angelOne'
 import type { PriceActionAnalysis, PriceActionInterval } from './priceAction'
 import { candleIntervalMs } from './candleData'
@@ -54,7 +55,7 @@ export function findRiskyLevelSetup({ analysis, candles, checks, bullishScore, b
     const roundedStop = (d === 1 ? Math.floor(stopLoss * 100) : Math.ceil(stopLoss * 100)) / 100
     const roundedTarget = Math.round(target * 100) / 100
     const riskReward = d * (roundedTarget - roundedEntry) / (d * (roundedEntry - roundedStop))
-    if (![roundedEntry, roundedStop, roundedTarget].every(valid) || riskReward < 1.5) continue
+    if (![roundedEntry, roundedStop, roundedTarget].every(valid) || !meetsMinimumRewardRisk(riskReward)) continue
     setups.push({ side: d === 1 ? 'CALL' : 'PUT', entry: roundedEntry, stopLoss: roundedStop, target: roundedTarget, riskReward,
       level, levelType: d === 1 ? 'SUPPORT' : 'RESISTANCE', passedChecks, unmetChecks: checks.filter(check => !check.passed).map(check => check.label),
       alignedIndicators, opposedIndicators: [...votes.filter(([, aligned]) => !aligned).map(([label]) => label), ...analysis.alignment!.routes.filter(route => route.side !== side).map(route => route.name)],

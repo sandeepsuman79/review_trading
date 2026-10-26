@@ -44,9 +44,9 @@ test('opposite pipeline can confirm independently when the original chart select
 })
 
 test('RR-rejected patterns stay visible with actual levels and cannot enter the ledger',()=>{
-  const input=fixture();input.atmVwap=atmVwapFixture('Nifty 50',100,now,1);input.analysis.rsi14=70;input.analysis.rsi14Momentum=8;input.analysis={...input.analysis,side:'WAIT',pattern:'NO_CONFIRMED_PATTERN',detectedSetups:[{side:'CALL',pattern:'BREAKOUT_RETEST',setup:'Detected retest',reason:'Fixture',entry:100,stopLoss:95,target:106,score:80,confluence:[],invalidation:'Fixture'}]}
+  const input=fixture();input.atmVwap=atmVwapFixture('Nifty 50',100,now,1);input.analysis.rsi14=70;input.analysis.rsi14Momentum=8;input.analysis={...input.analysis,side:'WAIT',pattern:'NO_CONFIRMED_PATTERN',detectedSetups:[{side:'CALL',pattern:'BREAKOUT_RETEST',setup:'Detected retest',reason:'Fixture',entry:100,stopLoss:95,target:105.5,score:80,confluence:[],invalidation:'Fixture'}]}
   const evidence=analyzeTradingEvidence(input), decision=evidence.decisions.find(item=>item.side==='CALL')
-  assert.equal(decision.state,'EARLY');assert.equal(decision.riskReward,1.2);assert.equal(decision.entry,100)
+  assert.equal(decision.state,'EARLY');assert.equal(decision.riskReward,1.1);assert.equal(decision.entry,100)
   assert(decision.reasons.includes('RR_BELOW_MINIMUM'));assert.equal(evidence.canConfirm,false)
   const prediction=buildEarlyPrediction(input.analysis,input.instrument,input.interval,now,undefined,undefined,evidence)
   assert.equal(prediction.side,'WAIT');assert(!prediction.plan)
@@ -115,4 +115,31 @@ test('actual tracker rejects stale entry quotes and outside-hour entries while k
   const active={...createPredictionRecord(latePlan),status:'ACTIVE',entryAt:late-1000,entryPrice:100,observedThrough:late-1000}
   const closed=syncPredictionRecord(active,[],{timestamp:late,ltp:120},late,false)
   assert.equal(closed.status,'EARLY_EXIT');assert.equal(closed.earlyExitSource,'SESSION_SQUARE_OFF')
+})
+
+test('1.20 reward/risk is consistent in confirmation, planned levels, diagnostics and the actual entry fill',()=>{
+ const {minimumRewardRisk,meetsMinimumRewardRisk}=require('../src/analysis/tradeRisk.ts')
+ const {observePredictionTick}=require('../src/analysis/predictionHistory.ts')
+ assert.equal(minimumRewardRisk,1.2)
+ for(const value of [1.2,1.2000001,1.5])assert.equal(meetsMinimumRewardRisk(value),true)
+ for(const value of [1.19999,1,0,NaN,Infinity])assert.equal(meetsMinimumRewardRisk(value),false)
+ for(const d of [1,-1]){
+  const input=fixture(d);input.analysis.target=100+d*12
+  const evidence=analyzeTradingEvidence(input)
+  assert.equal(evidence.canConfirm,true,evidence.reason)
+  const decision=evidence.decisions.find(item=>item.side===input.analysis.side)
+  assert.equal(decision.riskReward,1.2)
+  assert.match(decision.checks.find(check=>check.code==='RR_BELOW_MINIMUM').detail,/1\.20:1 required/)
+  const {plan}=buildEarlyPrediction(input.analysis,input.instrument,input.interval,now,undefined,undefined,evidence)
+  assert.equal(plan.target,input.analysis.target,'a lower minimum must not move the original target')
+  const record=createPredictionRecord(plan)
+  const quote=price=>({token:'99926000',exchangeType:1,timestamp:now+1,ltp:price})
+  assert.equal(diagnoseTradeEntry(plan,quote(100),true,now+1,false).state,'ELIGIBLE QUOTE')
+  assert.equal(observePredictionTick(record,100,now+1).status,'ACTIVE')
+  const slipped=100+d*.01
+  assert.equal(diagnoseTradeEntry(plan,quote(slipped),true,now+1,false).state,'ENTRY PAUSED')
+  assert.equal(observePredictionTick(record,slipped,now+1).status,'EXPIRED','slippage cannot consume the new minimum')
+  const below=analyzeTradingEvidence({...input,analysis:{...input.analysis,target:100+d*11.9}})
+  assert.equal(below.canConfirm,false)
+ }
 })

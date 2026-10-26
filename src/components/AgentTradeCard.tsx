@@ -1,3 +1,5 @@
+import { minimumRewardRisk } from '../analysis/tradeRisk'
+import { protectionRules } from '../analysis/tradeProtection'
 import AgentMonitoringPanel from './AgentMonitoringPanel'
 import { contractExpiryNotice } from '../analysis/agentMonitoring'
 import ScoreContributions from './ScoreContributions'
@@ -67,7 +69,9 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
   // This is instrument price movement, not an option premium or a rupee return.
   const movement = activeTrade?.entryPrice !== undefined && quote !== undefined ? (quote - activeTrade.entryPrice) * (activeTrade.side === 'CALL' ? 1 : -1) : undefined
   const points = movement === 0 ? 0 : movement
-  const progress = plan && quote !== undefined && plan.target !== plan.stopLoss ? Math.max(0, Math.min(100, (quote - plan.stopLoss) / (plan.target - plan.stopLoss) * 100)) : undefined
+  const trailingStop = activeTrade?.protection?.armed ? activeTrade.protection.stop : undefined
+  const effectiveStop = trailingStop ?? plan?.stopLoss
+  const progress = plan && quote !== undefined && effectiveStop !== undefined && plan.target !== effectiveStop ? Math.max(0, Math.min(100, (quote - effectiveStop) / (plan.target - effectiveStop) * 100)) : undefined
   const endedSetup = !activeTrade && prediction.side === 'WAIT' && Boolean(evidence?.canConfirm)
   const marketBias = evidence?.bias ?? analysis.earlyBias
   const marketTone = endedSetup ? 'neutral' : marketBias === 'BULLISH' ? 'bullish' : marketBias === 'BEARISH' ? 'bearish' : 'neutral'
@@ -102,25 +106,25 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
         <ul>{setupBlockers.map(check => <li key={check.code}>{check.label}: {check.detail}</li>)}</ul>
         {analysis.setupDiagnostics?.map(detail => <p key={detail}>{detail}</p>)}
       </div>}
-      {risky && plan.risk && <div className="agent-risk-details" role="status"><strong>Elevated-risk setup · {plan.risk.passedChecks}/7 full-confirmation checks passed</strong><p>{plan.risk.levelType === 'SUPPORT' ? 'Support' : 'Resistance'} {price(plan.risk.level)} · Matched route: {plan.risk.alignedIndicators.join(' or ')}</p><p>Still missing: {plan.risk.unmetChecks.join(' · ')}{plan.risk.opposedIndicators.length > 0 && ` · Conflicting indicators: ${plan.risk.opposedIndicators.join(' · ')}`}</p><p>The proposed levels pass ATR and 1.5:1 reward/risk checks. Full confirmation still needs a valid completed setup and a fresh live quote.</p></div>}
+      {risky && plan.risk && <div className="agent-risk-details" role="status"><strong>Elevated-risk setup · {plan.risk.passedChecks}/7 full-confirmation checks passed</strong><p>{plan.risk.levelType === 'SUPPORT' ? 'Support' : 'Resistance'} {price(plan.risk.level)} · Matched route: {plan.risk.alignedIndicators.join(' or ')}</p><p>Still missing: {plan.risk.unmetChecks.join(' · ')}{plan.risk.opposedIndicators.length > 0 && ` · Conflicting indicators: ${plan.risk.opposedIndicators.join(' · ')}`}</p><p>The proposed levels pass ATR and {minimumRewardRisk.toFixed(2)}:1 reward/risk checks. Full confirmation still needs a valid completed setup and a fresh live quote.</p></div>}
       {!plan && current !== undefined && <div className="agent-quote-preview"><span>{quoteLabel}</span><strong>{price(current)}</strong><small>{time(quoteAt ?? (analysis.latestCandleTime ? Date.parse(analysis.latestCandleTime) : undefined))}</small></div>}
       {plan && <dl className="agent-trade-facts">
         <div><dt>{activeTrade ? `Entry (${unit})` : `Entry trigger (${unit})`}</dt><dd>{price(entry)}</dd></div>
         <div><dt>{quoteLabel}</dt><dd className={live ? 'agent-text-bullish' : ''}>{price(current)}</dd><small>{quoteAt !== undefined ? time(quoteAt) : analysis.latestCandleTime ? time(Date.parse(analysis.latestCandleTime)) : 'Waiting for data'}</small></div>
         <div><dt>{activeTrade ? 'Entry time' : 'Setup time'}</dt><dd className="agent-trade-time">{time(activeTrade?.entryAt ?? (pendingTrade?.id === plan?.id ? pendingTrade?.generatedAt : plan?.generatedAt))}</dd></div>
         <div><dt>{activeTrade ? 'Trade timeframe' : 'Analysis timeframe'}</dt><dd className="agent-trade-time">{timeframe(activeTrade?.interval ?? interval)}</dd></div>
-        <div><dt>Stop-loss ({unit})</dt><dd className="agent-text-bearish">{price(plan?.stopLoss)}</dd></div>
+        <div><dt>Initial stop-loss ({unit})</dt><dd className="agent-text-bearish">{price(plan?.stopLoss)}</dd><small>{activeTrade ? trailingStop !== undefined ? `Auto TSL ${price(trailingStop)} · Tightens only` : 'TSL waits for a fresh observed quote' : plan.stage === 'CONFIRMED' ? 'Auto TSL starts after observed entry' : 'TSL starts only after confirmed entry'}</small></div>
         <div><dt>Target ({unit})</dt><dd className="agent-text-bullish">{price(plan?.target)}</dd></div>
       </dl>}
-      {plan && <div className="agent-trade-progress" aria-label="Instrument price between stop-loss and target">
+      {plan && <div className="agent-trade-progress" aria-label="Instrument price between current stop and target">
         <div className="agent-trade-progress-track">{progress !== undefined && <span className="agent-trade-progress-marker" style={{ '--trade-progress': `${progress}%` } as CSSProperties} />}</div>
-        <div className="agent-trade-progress-labels"><span>SL <strong>{price(plan.stopLoss)}</strong></span><span>{quote === undefined ? 'Waiting for quote' : `${live ? 'Now' : 'Last'} ${price(quote)}`}</span><span>TGT <strong>{price(plan.target)}</strong></span></div>
+        <div className="agent-trade-progress-labels"><span>{trailingStop !== undefined ? 'TSL' : 'SL'} <strong>{price(effectiveStop)}</strong></span><span>{quote === undefined ? 'Waiting for quote' : `${live ? 'Now' : 'Last'} ${price(quote)}`}</span><span>TGT <strong>{price(plan.target)}</strong></span></div>
       </div>}
       {plan && <div className="agent-trade-summary">
         <div><span>{activeTrade ? 'Unrealized profit / loss' : 'Trade profit / loss'}</span><strong className={points !== undefined ? points >= 0 ? 'agent-text-bullish' : 'agent-text-bearish' : ''}>{points === undefined ? '—' : `${points > 0 ? '+' : ''}${price(points)} pts`}</strong><small>{activeTrade ? live ? `${unit} points · Live quote` : `${unit} points · Last available quote` : 'Available after confirmed entry'}</small></div>
         <div><span>Reward : risk</span><strong>{plan ? `${plan.riskReward.toFixed(2)} : 1` : '—'}</strong><small>Based on planned {unit} levels</small></div>
       </div>}
-      {plan && <p className="agent-trade-note">{activeTrade ? 'Agent-managed exit · One live trade per instrument' : plan.stage === 'CONFIRMED' ? 'Conditional entry · Current setup must remain confirmed · Trade tracking starts when entry is observed' : risky ? 'Risky conditional setup · Full confirmation incomplete' : 'Early analysis only · Not recorded as a trade'} · {plan.strategyVersion === 'technical-v2' ? 'Technical confirmation · Sentiment is reference only' : 'Recorded under the previous strategy'}<br />{plan.targetBasis}</p>}
+      {plan && <p className="agent-trade-note">{activeTrade ? 'Agent-managed exit · One live trade per instrument' : plan.stage === 'CONFIRMED' ? 'Conditional entry · Current setup must remain confirmed · Trade tracking starts when entry is observed' : risky ? 'Risky conditional setup · Full confirmation incomplete' : 'Early analysis only · Not recorded as a trade'} · {plan.strategyVersion === 'technical-v2' ? 'Technical confirmation · Sentiment is reference only' : 'Recorded under the previous strategy'}<br />{plan.targetBasis}{activeTrade && <><br />Automatic TSL · {protectionRules.atrMultiplier}× completed-frame ATR, at least {protectionRules.minimumTrailR}R and two ticks · Break-even at +{protectionRules.breakEvenR}R · Exit uses an observed quote. {/recovering|waiting for complete candle history/i.test(activeTrade.outcomeNote) ? 'Paused for history recovery' : live ? 'Live monitoring' : 'Waiting for fresh quotes; local protection cannot execute offline'}.</>}</p>}
 
       <div className="agent-market-view">
         <div className="agent-market-view-heading"><strong className={`agent-text-${marketTone}`}>Technical analysis: {marketView}</strong><span>· {strength}</span></div>

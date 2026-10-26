@@ -65,7 +65,7 @@ result discloses them. Today's data must never be injected into a past assessmen
 
 A confirmed setup may enter only at the **immediate next observed bar's open**,
 with its trigger already reached, in the same session and before expiry. The
-actual simulated entry including adverse slippage must retain at least 1.5:1
+actual simulated entry including adverse slippage must retain at least 1.20:1
 reward/risk. The simulation does not infer an intrabar entry from the candle high
 or low and does not assume a same-close fill. The next open is a simulation
 convention, not a live quote proven to have arrived after signal computation.

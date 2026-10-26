@@ -1,3 +1,4 @@
+import { minimumRewardRisk, meetsMinimumRewardRisk } from './tradeRisk'
 import type { PriceActionAnalysis, PriceActionInterval } from './priceAction'
 import { candleIntervalMs } from './candleData'
 import type { MarketArticle, MarketContext, MarketOutlook } from '../api/marketContext'
@@ -87,7 +88,7 @@ export function buildEarlyPrediction(analysis: PriceActionAnalysis, instrument: 
   const snap = (value: number, up: boolean) => tick ? round((up ? Math.ceil(value / tick - 1e-8) : Math.floor(value / tick + 1e-8)) * tick) : round(value)
   const roundedEntry = snap(entry, direction === 1), roundedStop = snap(stopLoss, direction === -1), roundedTarget = snap(target, direction === -1)
   const riskReward = ((roundedTarget - roundedEntry) * direction) / ((roundedEntry - roundedStop) * direction)
-  if (!Number.isFinite(riskReward) || riskReward < 1.5) return wait('The chart target offers less than 1.5:1 reward to risk. Waiting for a better setup.')
+  if (!meetsMinimumRewardRisk(riskReward)) return wait(`The chart target offers less than ${minimumRewardRisk.toFixed(2)}:1 reward to risk. Waiting for a better setup.`)
   const reason = risky ? `Risky conditional ${side} setup: ${risky.passedChecks}/7 checks passed; ${risky.levelType.toLowerCase()} ${risky.level.toFixed(2)} with ${risky.alignedIndicators.join(' or ')}. Missing: ${risky.unmetChecks.join(', ')}. A trigger touch alone is not full confirmation.` : `${confirmed ? 'Confirmed chart setup' : 'Early conditional breakout'}; ${evidence ? `technical evidence ${side === 'CALL' ? evidence.bullishScore : evidence.bearishScore}/100 with ${evidence.coverage}% coverage` : 'technical confirmation; sentiment is reference only'}. Entry must be reached before the call becomes active.`
   return { side, reason, plan: {
     id: `${evidence?.version ?? 'early-v1'}:${risky ? 'risky:' : ''}${instrument}:${contract ? `${contract.token}:` : ''}${interval}:${analysis.latestCandleTime}:${side}`,

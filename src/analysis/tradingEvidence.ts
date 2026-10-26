@@ -1,3 +1,4 @@
+import { minimumRewardRisk, meetsMinimumRewardRisk } from './tradeRisk'
 import { scoreDominates } from './scoreTrajectory'
 import { atmVwapContext, type AtmVwapSnapshot } from '../api/atmVwap'
 import { findRiskyLevelSetup, type RiskyLevelSetup } from './riskyLevelSetup'
@@ -21,7 +22,7 @@ export const tradingEvidenceRules = {
   strongScore: 60, strongGap: 20, elevatedVixGap: 20,
   earlyCandles: 30, earlyCoverage: 60, earlyScore: 55, earlyGap: 15,
   elevatedVixScore: 65, highVixLevel: 25, vixJumpPercent: 10,
-  minimumAtrRisk: 1, minimumRewardRisk: 1.5,
+  minimumAtrRisk: 1, minimumRewardRisk,
 }
 export type EvidenceLayer = { key: string; name: string; weight: number; coverage: number; bullish: number; bearish: number; details: string[] }
 // Score allocation only. Confirmation cutoffs remain in tradingEvidenceRules.
@@ -145,7 +146,7 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
     : `VWAP: ${finite(vwap) ? `${format(vwap)} · price ${price !== undefined && price > vwap ? 'above' : 'below'}` : 'unavailable; zero traded volume'}`)
   if (vwapVote === undefined) missing.push(indexVwap ? 'Current ATM CE/PE VWAP' : 'VWAP (genuine traded volume unavailable)')
   if (atr === undefined) missing.push('ATR(14)')
-  else riskNotes.push(`ATR(14) ${format(atr)} pts · stop distance must cover at least 1 ATR; reward/risk must remain ≥ 1.5`)
+  else riskNotes.push(`ATR(14) ${format(atr)} pts · stop distance must cover at least 1 ATR; reward/risk must remain ≥ ${minimumRewardRisk.toFixed(2)}:1`)
 
   const oiLayer = layer('oi', 'OI / PCR'), pcrLayer = layer('pcr', 'PCR reference'), oi = commodity ? undefined : market?.inputs?.openInterest
   const expiryText = oi?.data?.expiry
@@ -242,7 +243,7 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
   else if (coverage < tradingEvidenceRules.minimumCoverage) reason = `Insufficient technical evidence: ${coverage}% coverage. Need ≥70% technical coverage; missing inputs are not reweighted.`
   else if (!directionalRoute) reason = 'Waiting for an EMA trajectory/crossover, Supertrend trajectory/flip or support/resistance break/reversal in the setup direction.'
   else if (dominant < requiredScore || directionalLead < requiredGap || !scoreDominates(dominant, opposing)) reason = `Evidence is weak or conflicting: ${dominant}/100 support versus ${opposing}/100 opposition. Need positive support ≥1.5× opposition${requiredScore > 0 ? `, ≥${requiredScore} support and ≥${requiredGap} lead for elevated VIX` : ''}.`
-  else if (!finite(stopLoss) || stopLoss <= 0 || !finite(rewardRisk) || rewardRisk < tradingEvidenceRules.minimumRewardRisk) reason = 'Chart target fails the ATR / reward-to-risk check. The stop covers chart invalidation and at least 1 ATR; the target is not stretched to force a trade.'
+  else if (!finite(stopLoss) || stopLoss <= 0 || !finite(rewardRisk) || !meetsMinimumRewardRisk(rewardRisk)) reason = 'Chart target fails the ATR / reward-to-risk check. The stop covers chart invalidation and at least 1 ATR; the target is not stretched to force a trade.'
   const checks = [
     { label: 'Recent completed candles', passed: chartCurrent, detail: chartCurrent ? `Latest completed candle ${analysis.latestCandleTime}` : 'Saved or forming candles cannot create a current entry.' },
     { label: 'Confirmed price pattern', passed: side !== 'WAIT' && analysis.pattern !== 'NO_CONFIRMED_PATTERN', detail: side === 'WAIT' ? analysis.reason : analysis.setup },
@@ -250,7 +251,7 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
     { label: 'ATR risk', passed: Boolean(atr), detail: atr ? `ATR(14) ${atr.toFixed(2)} points · Stop covers at least 1 ATR.` : 'A current, positive ATR estimate is required.' },
     { label: 'Technical coverage', passed: coverage >= tradingEvidenceRules.minimumCoverage, detail: `${coverage}% available / ${tradingEvidenceRules.minimumCoverage}% required. Missing inputs are not reweighted.` },
     { label: 'Directional agreement', passed: side !== 'WAIT' && directionalRoute && dominant >= requiredScore && directionalLead >= requiredGap && scoreDominates(dominant, opposing), detail: `Matched route: ${directionalRoute ? matchingRoutes.map(route => route.name).join(' or ') : 'none'}. Bullish ${bullishScore}/100 · Bearish ${bearishScore}/100 · Need support ≥1.5× opposition; risk floors ${requiredScore} support / ${requiredGap} lead.` },
-    { label: 'Reward/risk on confirmed setup', passed: finite(stopLoss) && stopLoss > 0 && finite(rewardRisk) && rewardRisk >= tradingEvidenceRules.minimumRewardRisk, detail: finite(rewardRisk) ? `${rewardRisk.toFixed(2)} : 1 after ATR stop adjustment / ${tradingEvidenceRules.minimumRewardRisk} : 1 required.` : 'A confirmed price setup and its validated entry, stop and target are required.' },
+    { label: 'Reward/risk on confirmed setup', passed: finite(stopLoss) && stopLoss > 0 && finite(rewardRisk) && meetsMinimumRewardRisk(rewardRisk), detail: finite(rewardRisk) ? `${rewardRisk.toFixed(2)} : 1 after ATR stop adjustment / ${minimumRewardRisk.toFixed(2)} : 1 required.` : 'A confirmed price setup and its validated entry, stop and target are required.' },
   ]
   const canConfirm = reason === `${side} completed chart setup and technical evidence align.`
   const riskySetup = canConfirm ? undefined : findRiskyLevelSetup({ analysis, candles: closed, checks, bullishScore, bearishScore, interval, now, instrument })
@@ -270,7 +271,7 @@ export function analyzeTradingEvidence(input: Parameters<typeof analyzeSetupEvid
         const entry = roundPrice(setup.entry), chartRisk = d * (entry - setup.stopLoss)
         const risk = Math.max(chartRisk, input.analysis.atr14 ?? 0)
         const stop = (d === 1 ? Math.floor((entry - risk) * 100) : Math.ceil((entry + risk) * 100)) / 100
-        return chartRisk > 0 && stop > 0 && d * (roundPrice(setup.target) - entry) / (d * (entry - stop)) >= 1.5
+        return chartRisk > 0 && stop > 0 && meetsMinimumRewardRisk(d * (roundPrice(setup.target) - entry) / (d * (entry - stop)))
       }
       return Number(eligible(b)) - Number(eligible(a)) || b.score - a.score
     })

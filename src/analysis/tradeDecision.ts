@@ -1,3 +1,4 @@
+import { minimumRewardRisk, meetsMinimumRewardRisk } from './tradeRisk'
 import { scoreDominates } from './scoreTrajectory'
 import type { AngelOneCandle } from '../api/angelOne'
 import type { PriceActionAnalysis } from './priceAction'
@@ -47,7 +48,7 @@ export function buildCandidateDecision(analysis: PriceActionAnalysis, evidence: 
   add('SCORE_BELOW_THRESHOLD', 'Supporting score', supportScore >= evidence.requiredScore, `${supportScore}/100 / ${evidence.requiredScore} required`)
   add('DIRECTIONAL_LEAD_TOO_SMALL', 'Directional score ratio', scoreDominates(supportScore, opposingScore) && lead >= evidence.requiredGap, `${supportScore} support / ${opposingScore} opposition; require positive support ≥1.5× opposition and ${evidence.requiredGap} risk-floor lead`)
   add('TRADE_LEVELS_INVALID', 'Trade levels', levels, 'Positive entry, ATR-adjusted stop and target on the correct sides', pattern)
-  add('RR_BELOW_MINIMUM', 'Reward/risk', riskReward !== undefined && riskReward >= 1.5, riskReward !== undefined ? `${riskReward.toFixed(2)}:1 / 1.50:1 required` : 'No validated trade levels', pattern && levels)
+  add('RR_BELOW_MINIMUM', 'Reward/risk', riskReward !== undefined && meetsMinimumRewardRisk(riskReward), riskReward !== undefined ? `${riskReward.toFixed(2)}:1 / ${minimumRewardRisk.toFixed(2)}:1 required` : 'No validated trade levels', pattern && levels)
   const hardReady = fresh && consecutive && withinEntryWindow(now, evidence.instrument) && atr && candles.length >= early.earlyCandles
   const initialIndicators = [analysis.exponentialMovingAverage20, analysis.rsi14, analysis.rsi14Momentum].every(value => value !== undefined && Number.isFinite(value)) && Boolean(analysis.supertrendDirection)
   const earlyReady = hardReady && initialIndicators && routes.length > 0 && evidence.coverage >= early.earlyCoverage && supportScore >= Math.max(early.earlyScore, evidence.requiredScore) && lead >= Math.max(early.earlyGap, evidence.requiredGap)

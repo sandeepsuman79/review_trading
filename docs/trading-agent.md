@@ -89,7 +89,7 @@ Confirmation requires:
 - STRONG classification requires at least 60/100 support and a 20-point lead.
 - Consecutive completed bars from the current IST session and the Mon–Fri 09:15–15:15 IST new-entry window.
 - A stop outside chart invalidation and at least one ATR14 from entry, rounded outward.
-- At least 1.5:1 reward/risk after widening the stop; the chart target stays unchanged.
+- At least 1.20:1 reward/risk after widening the stop; the chart target stays unchanged.
 
 ATR and India VIX are risk checks rather than directional votes.
 [NSE describes India VIX](https://www.nseindia.com/static/products-services/indices-indiavix-index)
@@ -294,7 +294,7 @@ Entry is a proposed break beyond the last two completed candle highs/lows. The
 stop covers the level/candle invalidation and at least one ATR. Observed opposing
 support/resistance caps the target; insufficient room rejects the idea. When no
 observed opposing target exists, the 2R projection is labelled explicitly. Rounded
-prices must still offer at least 1.5:1 reward/risk. Stale data, missing/distant
+prices must still offer at least 1.20:1 reward/risk. Stale data, missing/distant
 levels, absent directional routes, insufficient score/lead, late-session data and
 poor risk/reward remain WAIT even if four arbitrary checks passed.
 
@@ -371,7 +371,7 @@ EMA20/RSI/momentum/Supertrend inputs, and fresh same-session data, valid ATR and
 entry hours. High-VIX score/lead requirements also apply to these early
 candidates. They can be displayed as EARLY while EMA50 warmup or a completed
 pattern/risk check is missing. Fifty bars, full indicator readiness, 70% coverage
-and at least 1.5:1 reward/risk remain mandatory for actual confirmation. The standard 1.5× directional ratio and strong 60/20 classification are
+and at least 1.20:1 reward/risk remain mandatory for actual confirmation. The standard 1.5× directional ratio and strong 60/20 classification are
 experimental thresholds chosen by the user, not calibrated probabilities. Missing weights remain undistributed.
 
 The CALL / PUT decisions disclosure shows each direction's support/opposing
@@ -411,7 +411,8 @@ seconds old. Independent one-minute price-pressure exits have been removed. An
 opposite direction label or forming candle cannot exit a trade by itself.
 
 Actual live quotes also maintain a per-position favourable-price extreme and an
-ATR trailing stop. Protection arms after **0.75R** of observed favourable movement;
+ATR trailing stop. Protection starts automatically at observed confirmed entry,
+initially using the original stop. It tightens after observed favourable movement;
 its distance is the greater of **1.5 × eligible completed-frame ATR**, **0.35R**, and two broker
 ticks. If a current matching timeframe ATR is unavailable, the last known protective ATR, entry ATR or
 initial risk is used. At **1R**, the stop cannot remain behind entry. Stops only
@@ -498,3 +499,19 @@ index momentum detection. A flat Supertrend band can qualify through a held-side
 route with fresh completed price progress. The main trade card explains failed
 checks and applicable price-event blockers. Scoring budgets and confirmation
 thresholds stay as documented above.
+
+
+The requested reward/risk minimum is now **1.20:1**, shared across setup detection,
+ATR adjustment, plan creation and the actual observed entry. A gap/slippage below
+that floor cannot enter, and original targets are not stretched. A full-winner /
+full-loser model needs 45.45% wins before costs at this ratio; TSL changes realized
+outcomes and does not establish profitability. RSI/VWAP allocations, directional
+score requirements, coverage and VIX/ATR checks remain unchanged.
+
+Automatic TSL begins when a confirmed setup actually enters, retaining its
+initial SL at entry. It tightens on favorable quotes with the existing ATR/risk/
+tick distance and reaches break-even at +1R. The main trade card and chart show
+its current level; its breach records a local exit at the observed quote, even
+without an opposite setup. Tracking requires fresh data and an open dashboard;
+no broker-held stop or broker order is created. Reconstructed entries never use
+an unobserved candle high as a trailing peak.

@@ -21,7 +21,7 @@ function fixture(d = 1) {
 test('four checks plus level reaction and indicators produce explicit CALL/PUT risky conditional setups',()=>{
   for(const d of [1,-1]){
     const input=fixture(d),risk=findRiskyLevelSetup(input)
-    assert(risk);assert.equal(risk.side,d===1?'CALL':'PUT');assert.equal(risk.passedChecks,4);assert(risk.riskReward>=1.5)
+    assert(risk);assert.equal(risk.side,d===1?'CALL':'PUT');assert.equal(risk.passedChecks,4);assert(risk.riskReward>=1.2)
     assert.equal(risk.levelType,d===1?'SUPPORT':'RESISTANCE');assert(Math.abs(risk.entry-risk.stopLoss)>=2)
     const evidence={instrument:'Nifty 50',interval,asOf:input.analysis.latestCandleTime,canConfirm:false,reason:'Waiting for price pattern',riskySetup:risk,version:'technical-v2',bullishScore:input.bullishScore,bearishScore:input.bearishScore,coverage:75,layers:[],sentiment:{},bullishEvidence:[],bearishEvidence:[]}
     const prediction=buildEarlyPrediction(input.analysis,'Nifty 50',interval,input.now,undefined,undefined,evidence)

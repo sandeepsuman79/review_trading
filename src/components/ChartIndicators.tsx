@@ -5,7 +5,7 @@ import type { IndiaVixSnapshot } from '../api/marketContext'
 
 export type ChartIndicator = 'supertrend' | 'vwap' | 'ema20' | 'ema50' | 'sma20'
 export type ChartIndicatorVisibility = Record<ChartIndicator, boolean>
-export type ChartTradeLevels = { entry: number; target: number; stopLoss: number }
+export type ChartTradeLevels = { entry: number; target: number; stopLoss: number; trailingStop?: number }
 
 const controls: Array<{ key: ChartIndicator; label: string; color: string }> = [
   { key: 'supertrend', label: 'Supertrend (10,3)', color: '#16A34A' },
@@ -49,6 +49,7 @@ export default function ChartIndicators({ onShowAtm, visibility, onToggle, avera
     </div>
     {showTradeContext && <div className="chart-trade-legend" aria-label="Trade level legend">
       <span><i className="is-entry" />Entry</span><span><i className="is-stop" />Stop-loss</span><span><i className="is-target" />Target</span>
+      {trade?.trailingStop !== undefined && <span><i style={{ background: '#D97706' }} />TSL {number(trade.trailingStop)}</span>}
       <small>{trade ? 'Current live trade' : 'Levels appear when a confirmed trade is live'}</small>
     </div>}
     <div className="chart-indicator-context">{context}</div>

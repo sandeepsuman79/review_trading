@@ -128,7 +128,7 @@ test('OI/PCR contributes to technical confluence and independently to the sentim
 
 test('ATR excludes tight invalidation and insufficient reward without manufacturing new targets', () => {
   const input = fixture()
-  for (const change of [{ atr14: undefined }, { atr14: 15 }, { target: 110 }]) {
+  for (const change of [{ atr14: undefined }, { atr14: 18 }, { target: 110 }]) {
     const result = analyzeTradingEvidence({ ...input, analysis: { ...input.analysis, ...change } })
     assert.equal(result.canConfirm, false)
     assert.match(result.reason, /ATR|risk/)

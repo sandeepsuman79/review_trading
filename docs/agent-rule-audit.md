@@ -202,7 +202,7 @@ Source: [tradingEvidence.ts](../src/analysis/tradingEvidence.ts).
    Missing VIX is disclosed; it does not manufacture a low-volatility reading.
 8. Positive valid entry/stop/target in the correct directional order.
 9. Stop covers structural invalidation and at least 1 ATR14, rounded outward.
-10. Planned reward/risk ≥1.5 after ATR adjustment and broker tick rounding. An observed
+10. Planned reward/risk ≥1.20 after ATR adjustment and broker tick rounding. An observed
     opposing level remains a target cap; it is not moved farther to force approval.
 11. Entry hours: indices weekdays 09:15–15:15 IST (application cutoff); MCX weekdays
     09:00–23:30 or 23:55 IST according to configured US daylight-saving handling.
@@ -219,7 +219,7 @@ A confirmed setup first becomes PENDING. It becomes ACTIVE only on an eligible
 observed quote after issue. Entry requires a connected stream, quote ≤30 seconds
 old, matching instrument/contract, current revalidation checked ≤30 seconds ago,
 identical signal/side/levels, trigger reached, no invalidation and actual-quote
-reward/risk ≥1.5. Revalidation must match the chosen signal's actual timeframe.
+reward/risk ≥1.20. Revalidation must match the chosen signal's actual timeframe.
 One open position per instrument is permitted across all intervals; it must close
 before another can enter. A chart interval change cannot reopen an old signal.
 After an agent-confirmed reversal exit, the exited side cannot reopen from another
@@ -267,7 +267,8 @@ Existing positions continue monitoring even while the entry model says WAIT.
 - Each reversal candidate passes its own full pattern, coverage, score, ATR and
   reward/risk gates. A direction vote, developing candle or disagreement between
   intervals alone cannot close a trade. The one-minute pressure exit is removed.
-- ATR trail: arm at 0.75R observed favourable movement; distance is
+- ATR trail: initialize automatically at observed confirmed entry, keeping the initial
+  stop. Tighten after observed favourable movement; distance is
   max(1.5 × eligible timeframe ATR, 0.35R, two ticks). Use a current matching
   completed-frame assessment, then the saved protective ATR, entry ATR or initial
   risk when unavailable. At 1R the stop cannot stay behind entry.
@@ -280,7 +281,7 @@ Existing positions continue monitoring even while the entry model says WAIT.
 - Points = (exit − entry) for CALL/LONG, (entry − exit) for PUT/SHORT. These are
   underlying/futures points; no option premium return or broker execution is inferred.
 
-The 0.75R/1R/ATR parameters are experimental, not an established optimum.
+The entry-active TSL, 1R break-even and ATR parameters are experimental, not an established optimum.
 Sources: [predictionHistory.ts](../src/analysis/predictionHistory.ts),
 [tradeProtection.ts](../src/analysis/tradeProtection.ts).
 
@@ -612,3 +613,47 @@ negative cases and reversal exits. These are scenario checks, not a replay of th
 user's screenshots or evidence of profitability. The reference photos describe
 price action, indicators and news; news remains separate sentiment context and
 introduces no automatic blackout or entry rule from image text.
+
+
+## 19. Requested 1.20 reward/risk floor and automatic TSL
+
+The minimum planned and actual-entry reward/risk is **1.20:1**, changed from
+1.50:1 at the user's request. One shared constant and comparison are used by
+price-action candidate selection, ATR-adjusted evidence, conditional ideas,
+plan generation, entry diagnostics, live/candle entry and offline replay.
+Targets remain based on the original setup; neither stops nor targets are moved
+to manufacture eligibility. A slipped/gapped entry must independently retain
+1.20:1 at the observed fill. RSI/VWAP weights, the 1.5× directional score ratio,
+70% coverage, ATR minimum risk and VIX floors are unchanged.
+
+TSL initializes on observed entry of a confirmed CALL/PUT or MCX LONG/SHORT,
+with the initial stop unchanged. Favourable observed quotes subsequently tighten
+it using max(1.5 × eligible ATR, 0.35 × initial risk, two ticks), rounded outward
+to the contract tick. It never loosens, even when ATR increases. At +1R observed
+movement the stop is at entry or better. A fresh quote crossing TSL closes the
+local tracked trade automatically, independently of an opposite confirmed setup.
+A gap exits at the received quote, not at an invented stop fill. Quotes older than 30 seconds, more than one second in the future,
+or out of order cannot move it. The original SL remains recorded; the
+main card and index/futures chart show the current TSL separately.
+
+Pending confirmation is not an entry and cannot arm protection. A reconstructed
+candle entry seeds only the fill price as the peak; unobserved highs/lows cannot
+create a profitable trail. Replay retains ambiguous outcomes when ordering is
+unknown. The five-minute offline replay does not model tick-driven TSL and
+cannot validate its profitability. Saved protection remains compatible with
+version-1 records and resumes from verified observations after reload.
+
+The rule parameters are an implementation choice, not a demonstrated optimum.
+For full-target winners and full-stop losers, 1.20:1 needs a 45.45% win rate to
+break even before costs, versus 40% at 1.50:1; trailing exits change that realized
+payoff distribution. Production performance requires separate historical/tick
+validation with costs. This remains dashboard-local tracking while running,
+not a broker-held stop or automatic broker order.
+
+Research: [Fidelity ATR guidance](https://www.fidelity.com/learning-center/trading-investing/technical-analysis/technical-indicator-guide/atr)
+describes adapting stops to volatility using an ATR multiple, including 1.5×.
+[Fidelity trailing stops](https://www.fidelity.com/learning-center/trading-investing/trading/trailing-stops-video/)
+explains the favorable-price trailing mechanism and execution/data risks.
+Sources: [tradeRisk.ts](../src/analysis/tradeRisk.ts),
+[tradeProtection.ts](../src/analysis/tradeProtection.ts),
+[predictionHistory.ts](../src/analysis/predictionHistory.ts).
