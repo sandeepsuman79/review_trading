@@ -141,3 +141,42 @@ test('memory indicator cache reuses immutable snapshots and invalidates on corre
   assert.notEqual(cachedCandleIndicators(corrected, 'FIVE_MINUTE', boundary + 300000), next)
   assert.notEqual(cachedCandleIndicators(candles, 'ONE_HOUR', boundary + 300000), next)
 })
+
+test('automatic sync runs after completed interval boundaries, catches up after focus, and respects exchange hours', () => {
+ const {historyRefreshDue}=require('../src/analysis/historySync.ts')
+ const at=text=>Date.parse(`2026-10-16T${text}+05:30`)
+ for(const [interval,close] of [['FIVE_MINUTE','09:20'],['FIFTEEN_MINUTE','09:30'],['ONE_HOUR','10:15']]) {
+  const boundary=at(`${close}:00`)
+  assert.equal(historyRefreshDue(interval,'Nifty 50',boundary+4999),false)
+  assert.equal(historyRefreshDue(interval,'Nifty 50',boundary+5000),true)
+  assert.equal(historyRefreshDue(interval,'Nifty 50',boundary+5000,boundary),false)
+  assert.equal(historyRefreshDue(interval,'Nifty 50',boundary+65000,boundary-1,boundary+60000),false)
+ }
+ assert.equal(historyRefreshDue('FIVE_MINUTE','Sensex',at('13:02:00'),at('10:00:00')),true)
+ assert.equal(historyRefreshDue('FIVE_MINUTE','Bank Nifty',at('16:00:00')),false)
+ assert.equal(historyRefreshDue('FIVE_MINUTE','Crude Oil',at('16:00:00')),true)
+ assert.equal(historyRefreshDue('ONE_HOUR','Nifty 50',at('15:30:05'),at('15:15:05')),true,'final shortened hourly bar must sync at market close')
+ assert.equal(historyRefreshDue('ONE_HOUR','Gold',at('23:30:05'),at('23:00:05')),true)
+ assert.equal(historyRefreshDue('FIVE_MINUTE','Gold',Date.parse('2026-10-17T12:00:00+05:30')),false)
+ assert.equal(historyRefreshDue('FIVE_MINUTE','Nifty 50',NaN),false)
+})
+test('incremental sync advances only using successful broker progress, never a later live-only candle', () => {
+ const bars=[...previousSessions(300000),historyBar(loginAt-20000)]
+ const through=morningOpen+300000
+ assert.equal(historySyncRange(bars,'FIVE_MINUTE',loginAt).from,morningOpen)
+ assert.equal(historySyncRange(bars,'FIVE_MINUTE',loginAt,555,through).from,through-300000)
+ assert.equal(historySyncRange(bars,'FIVE_MINUTE',loginAt,555,loginAt+86400000).from,morningOpen)
+ const thin=[historyBar(morningOpen),historyBar(morningOpen+300000)]
+ assert(historySyncRange(thin,'FIVE_MINUTE',loginAt).from < morningOpen)
+ assert.equal(historySyncRange(thin,'FIVE_MINUTE',loginAt,555,through).from,morningOpen)
+})
+test('one historical timeout cancels only its request; later queued instruments still succeed', async () => {
+ const {runHistoricalRequest}=require('../src/analysis/historySync.ts')
+ const parent=new AbortController();let child
+ await assert.rejects(runHistoricalRequest(signal=>{child=signal;return new Promise(()=>{})},parent.signal,5),error=>error.status===408)
+ assert.equal(child.aborted,true);assert.equal(parent.signal.aborted,false)
+ assert.equal(await runHistoricalRequest(async signal=>{assert.equal(signal.aborted,false);return 'next instrument'},parent.signal),'next instrument')
+ const pending=runHistoricalRequest(()=>new Promise(()=>{}),parent.signal)
+ parent.abort();await assert.rejects(pending,{name:'AbortError'})
+ await assert.rejects(runHistoricalRequest(async()=>42,parent.signal),{name:'AbortError'})
+})

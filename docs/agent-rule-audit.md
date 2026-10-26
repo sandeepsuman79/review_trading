@@ -286,25 +286,46 @@ Sources: [predictionHistory.ts](../src/analysis/predictionHistory.ts),
 
 ## 9. ATM CE/PE VWAP context
 
-For the three equity indices, resolve actual nearest-expiry ATM CE and PE tokens.
-Each leg uses sum(HLC3 × actual one-minute volume) / sum(volume), from 09:15 to the
-latest completed minute. CE above its own VWAP plus PE below its own VWAP supports
-upward context; the inverse supports downward context; disagreement is mixed.
-Both legs need contiguous coverage from the session open through their latest available
-completed minute, positive volume, current
-expiry, data younger than two minutes and a strike still within one strike interval
-of current spot (Nifty 50: 50; Sensex/Bank Nifty: 100). Partial/stale data supplies
-no directional context. A delayed trailing broker minute does not invalidate the
-contiguous history; the independent two-minute age limit still applies. Chart and
-agent consumers share one ATM request per index/strike/minute. Before open, after
-close and on weekends the display loads the most recent weekday session, with
-strike, expiry, CE/PE prices and data timestamp. Last-session values remain display
-context and cannot earn current-session points. Broker outages, absent contracts
-or zero traded volume still cannot produce an invented VWAP.
-The one-minute option candles are raw volume data for
-this calculation, not a strategy timeframe. This paired direction supplies the technical VWAP allocation on each strategy
-timeframe. It does not supply a one-minute entry/exit trigger.
-Sources: [atmVwap.js](../server/atmVwap.js), [atmVwap.ts](../src/api/atmVwap.ts).
+For Nifty 50, Sensex and Bank Nifty, resolve actual nearest-expiry CE/PE tokens at
+**the current ATM strike** (50-point Nifty steps, 100-point Sensex/Bank Nifty steps).
+Refresh the pair every ten seconds using SmartAPI FULL quotes: each leg's broker
+session average price (`avgPrice`), cumulative traded volume (`tradeVolume`), LTP
+and IST exchange trade timestamp. Polls never count as trades or add volume.
+CE above its own average plus PE below its own average supports upward context;
+the inverse supports downward context; disagreement is mixed.
+
+If a broker average is absent, load sum(HLC3 × actual one-minute volume) /
+sum(volume) separately, from 09:15 through the latest available completed minute.
+Fallback candle requests share the history queue, overlap the last saved minute
+and run at most once per minute for each session/contract pair. They never block
+subsequent quote heartbeats. Live LTP can update against the saved candle VWAP;
+its exchange timestamp is checked independently from the VWAP timestamp.
+
+Both legs need positive volume, current expiry, the exact current ATM strike,
+and current-session data younger than two minutes. A candle-derived average also
+requires contiguous coverage from open. Partial/stale data supplies no points.
+The display identifies the source, strike, expiry, LTPs and timestamps. Before
+open, after close and on weekends, the latest available session can remain visible
+but cannot earn current-session points. Chart and agent consumers share pending
+requests across heartbeat/minute boundaries, scoped by login, index and strike.
+Missing contracts, volume and broker outages cannot produce an invented VWAP.
+Raw one-minute option candles are volume input, not a strategy timeframe. This
+paired direction supplies the existing 25-point technical VWAP allocation on each
+strategy timeframe; confirmation thresholds and the RSI 25-point budget are unchanged.
+Sources: [atmVwap.js](../server/atmVwap.js), [atmVwap.ts](../src/api/atmVwap.ts),
+[SmartAPI market data](https://smartapi.angelone.in/docs).
+
+Historical chart sync now checks every 15 seconds while visible and on focus,
+reconnection and authentication changes. During exchange hours, a completed
+5/15/60-minute candle becomes due after a five-second publication grace; the
+shortened final bar is also reconciled after close. Only successful broker
+responses advance the incremental cursor; live ticks cannot conceal unsynced
+history. An individual request timeout cancels that request and permits retries
+and subsequent instruments to continue. The selected chart shows its latest
+successful historical response time and the returned candle coverage time. Authentication failures pause automatic
+retries until credentials change or a manual refresh is requested.
+Sources: [historySync.ts](../src/analysis/historySync.ts),
+[PredictionPage.tsx](../src/pages/PredictionPage.tsx).
 
 ## 10. Sentiment, early ideas, history and gap outlook
 

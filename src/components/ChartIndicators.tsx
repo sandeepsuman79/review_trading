@@ -25,6 +25,7 @@ export default function ChartIndicators({ visibility, onToggle, average, technic
 }) {
   const atmBias = atmVwapBias(atmVwap, atmVwap?.index ?? '', atmIndexPrice ?? close, now)
   const atmTime = atmVwap?.ce.asOf && atmVwap.pe.asOf ? Math.min(Date.parse(atmVwap.ce.asOf), Date.parse(atmVwap.pe.asOf)) : undefined
+  const priceTime = atmVwap?.ce.priceAsOf && atmVwap.pe.priceAsOf ? Math.min(Date.parse(atmVwap.ce.priceAsOf), Date.parse(atmVwap.pe.priceAsOf)) : undefined
   const vwapPosition = vwap === undefined ? 'neutral' : close > vwap ? 'positive' : close < vwap ? 'negative' : 'neutral'
   const emaDirection = average.ema20 === undefined || average.ema50 === undefined ? 'neutral' : average.ema20 > average.ema50 ? 'positive' : average.ema20 < average.ema50 ? 'negative' : 'neutral'
   const rsiExtreme = technical.rsi14 !== undefined && (technical.rsi14 >= 70 || technical.rsi14 <= 30)
@@ -52,9 +53,12 @@ export default function ChartIndicators({ visibility, onToggle, average, technic
       {spotIndex ? <div className="chart-indicator-metric" aria-label="VWAP indicator">
         <span className="chart-indicator-metric-title">{atmVwap?.index} ATM VWAP · CE / PE</span>
         <strong>{atmVwap ? `${number(atmVwap.ce.vwap ?? undefined)} / ${number(atmVwap.pe.vwap ?? undefined)}` : atmVwapError ? 'Unavailable' : 'Loading…'}</strong>
-        <small>{atmVwap ? `Strike ${atmVwap.strike.toLocaleString('en-IN')} · Expiry ${atmVwap.expiry} · ${atmBias?.toLowerCase() ?? 'Last available / incomplete; excluded from signals'}` : atmVwapError || 'Waiting for ATM option candles'}</small>
-        {atmVwap && <small>CE price {number(atmVwap.ce.close ?? undefined)} · PE price {number(atmVwap.pe.close ?? undefined)}</small>}
-        {atmTime !== undefined && <small>As of {new Date(atmTime).toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} IST</small>}
+        <small>{atmVwap ? `Strike ${atmVwap.strike.toLocaleString('en-IN')} · Expiry ${atmVwap.expiry} · ${atmBias?.toLowerCase() ?? 'Last available / incomplete; excluded from signals'}` : atmVwapError || 'Waiting for ATM option quotes'}</small>
+        {atmVwap && <small>CE LTP {number(atmVwap.ce.close ?? undefined)} · PE LTP {number(atmVwap.pe.close ?? undefined)}</small>}
+        {atmVwap?.message && <small>{atmVwap.message}</small>}
+        {atmVwap && <small>{atmVwap.method === 'BROKER_AVERAGE_PRICE' ? 'Broker session average · Quotes refresh every 10s' : 'Candle VWAP · Completed-minute volume'}</small>}
+        {atmTime !== undefined && <small>As of {new Date(atmTime).toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' })} IST</small>}
+        {priceTime !== undefined && Number.isFinite(priceTime) && <small>LTP as of {new Date(priceTime).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false })} IST</small>}
         {atmVwap && atmVwapError && <small>{atmVwapError}</small>}
       </div> : <div className="chart-indicator-metric" aria-label="VWAP indicator">
         <span className="chart-indicator-metric-title">VWAP</span><strong>{vwap === undefined ? 'Unavailable' : number(vwap)}</strong>

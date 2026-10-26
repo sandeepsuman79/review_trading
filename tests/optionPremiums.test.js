@@ -93,3 +93,25 @@ test('AB1004 is a broker failure, not a documented rate-limit code', async () =>
   const service = createOptionPremiumService({ loadOptions: async () => options, now: () => now, fetcher: async () => response({ status: false, errorcode: 'AB1004', message: 'Something Went Wrong, Please Try After Sometime' }) })
   await assert.rejects(service.get({ index: 'Nifty 50', strikes: [22000] }, headers), error => error.status === 502 && error.errorcode === 'AB1004')
 })
+
+test('FULL quotes preserve broker average, cumulative volume and IST trade timestamps without poll-derived volume', async () => {
+ const {optionQuoteTime}=await import('../server/optionPremiums.js')
+ const options=nearestIndexOptions(master(),now);let calls=0,time=now
+ const service=createOptionPremiumService({loadOptions:async()=>options,now:()=>time,spacing:0,fetcher:async(_url,request)=>{
+  calls++;const body=quotes(options,request)
+  for(const quote of body.data.fetched)Object.assign(quote,{avgPrice:'99.75',tradeVolume:'12345',exchTradeTime:'14-Oct-2026 10:29:58',exchFeedTime:'14-Oct-2026 10:30:00'})
+  return response(body)
+ }})
+ const input={index:'Nifty 50',strikes:[22000]}
+ const ltp=await service.get(input,headers)
+ assert.equal(ltp.rows[0].ce.averagePrice,undefined)
+ const full=await service.get({...input,mode:'FULL'},headers)
+ assert.equal(calls,2,'LTP cache must not mask FULL fields')
+ assert.equal(full.rows[0].ce.averagePrice,99.75);assert.equal(full.rows[0].ce.volume,12345)
+ assert.equal(full.rows[0].ce.asOf,'2026-10-14T04:59:58.000Z')
+ time+=10001
+ assert.equal((await service.get({...input,mode:'FULL'},headers)).rows[0].ce.volume,12345)
+ assert.equal(optionQuoteTime('2026-10-14T10:29:58'),'2026-10-14T04:59:58.000Z')
+ assert.equal(optionQuoteTime('2026-10-14T04:59:58Z'),'2026-10-14T04:59:58.000Z')
+ assert.equal(optionQuoteTime('invalid'),null);assert.equal(optionQuoteTime(null),null)
+})

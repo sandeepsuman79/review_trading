@@ -56,7 +56,7 @@ const angelOneHistoricalUrls = {
   oi: 'https://apiconnect.angelone.in/rest/secure/angelbroking/historical/v1/getOIData',
 }
 const historicalRequest = createHistoricalProxy()
-const atmVwap = createAtmVwapService({ loadOptions: index => instrumentMaster.getOptions(index), history: (headers, input) => historicalRequest(angelOneHistoricalUrls.candles, headers.Authorization, headers, input) })
+const atmVwap = createAtmVwapService({ loadOptions: index => instrumentMaster.getOptions(index), quotes: (input, headers) => optionPremiums.get({ ...input, mode: 'FULL' }, headers), history: (headers, input) => historicalRequest(angelOneHistoricalUrls.candles, headers.Authorization, headers, input) })
 const marketContextService = createMarketContextService()
 const aiCache = createAiCache(resolve('.cache/ai-news.json'))
 const gemini = createGeminiClient({ apiKey: process.env.GEMINI_API_KEY, model: process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite', savedState: aiCache.providerState, saveState: state => { aiCache.providerState = state; aiCache.save() } })

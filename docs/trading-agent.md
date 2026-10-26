@@ -66,7 +66,7 @@ Each group's bullish and bearish contributions remain inside its budget. Missing
 inputs never increase other weights. OI walls, max pain and totals remain reference
 levels; OI alone does not establish writing. A missing option chain (including
 Sensex) can leave a trade eligible when remaining technical evidence is strong.
-Indices use genuine volume from the selected index’s ATM CE/PE candles for VWAP.
+Indices use the selected index’s ATM CE/PE broker session averages and actual traded volume for VWAP context, with a candle-volume fallback.
 Zero-volume spot candles cannot supply VWAP; missing ATM data earns no VWAP points.
 
 The 15-point other-indicator budget comprises SMA20 1, price/EMA20 1, EMA20/50
@@ -421,13 +421,18 @@ and scheduled square-off take precedence. Saved trails survive reload; unobserve
 stop/target ordering remains ambiguous. No unobserved candle high is invented as
 a live peak. These thresholds are experimental, not a backtested optimum.
 
-For Nifty 50, Sensex and Bank Nifty, the nearest-expiry ATM CE and PE each have a
-separate **candle-based session VWAP estimate**: sum(HLC3 × actual candle volume) /
-sum(volume). The service resolves actual broker tokens, shares the historical
-request queue, caches per authenticated session/contract/day, and overlaps the
-last saved minute after initial session sync. Partial sessions, missing volume,
-stale data and options no longer near ATM cannot supply directional context. Paired
-CE-above/PE-below supports upward context; the reverse supports downward context.
+For Nifty 50, Sensex and Bank Nifty, nearest-expiry CE/PE quotes follow the exact
+current ATM strike (50/100/100-point steps). Shared ten-second FULL quote requests
+supply the broker's session average price, cumulative traded volume, LTP and IST
+exchange trade time. These requests use the quote queue independently of chart
+history; heartbeats never add assumed trades or volume. If the average is absent,
+a separate candle-based session VWAP estimate uses sum(HLC3 × actual minute volume)
+/ sum(volume), overlaps the last saved minute and refreshes at most once per
+minute. A slow fallback never blocks later live quotes. LTP timestamps and
+VWAP timestamps remain separate when combining quotes with candle averages.
+Partial sessions, absent volume, stale timestamps and a strike different from
+current ATM cannot supply directional context. Paired CE-above/PE-below supports
+upward context; the reverse supports downward context.
 The paired ATM direction supplies the 25-point technical VWAP
 allocation for indices; mixed legs are neutral and missing data earns no coverage.
 RSI level (8), momentum (7), and confirmed HH/HL/LH/LL RSI swing structure (10)
@@ -446,7 +451,15 @@ futures use their own traded-volume VWAP instead of equity option context.
 ATR describes volatility, and trailing stops are risk controls rather than market
 forecasts; see [TradingView ATR](https://www.tradingview.com/support/solutions/43000501823-average-true-range-atr/)
 and [trailing-stop mechanics](https://www.tradingview.com/support/solutions/43000754965-introduction-to-trailing-stops/).
-ATM volume comes from [Angel One historical candles](https://smartapi.angelone.in/docs).
+ATM averages and volume come from [Angel One market data](https://smartapi.angelone.in/docs),
+with actual minute candles as fallback. No spot-volume or poll-count substitute is used.
+
+Historical candles refresh automatically after each completed strategy bar, with
+a five-second broker publication grace and a 15-second visible-page check. Focus,
+reconnection and changed credentials also trigger a due check. Successful broker
+progress determines the overlapping incremental range; late live ticks cannot
+skip a missing morning session. One request timeout cannot cancel the remaining
+instrument queue. A last-successful-sync timestamp appears above the selected chart.
 Trade exits remain local tracking; the dashboard must be running and no broker
 order is submitted. Profitability requires separate out-of-sample validation.
 
