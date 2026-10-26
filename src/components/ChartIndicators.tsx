@@ -5,7 +5,7 @@ import type { IndiaVixSnapshot } from '../api/marketContext'
 
 export type ChartIndicator = 'supertrend' | 'vwap' | 'ema20' | 'ema50' | 'sma20'
 export type ChartIndicatorVisibility = Record<ChartIndicator, boolean>
-export type ChartTradeLevels = { entry: number; target: number; stopLoss: number }
+export type ChartTradeLevels = { entry: number; target: number; stopLoss: number; trailingStop?: number }
 
 const controls: Array<{ key: ChartIndicator; label: string; color: string }> = [
   { key: 'supertrend', label: 'Supertrend (10,3)', color: '#16A34A' },
@@ -16,7 +16,8 @@ const controls: Array<{ key: ChartIndicator; label: string; color: string }> = [
 ]
 const number = (value?: number) => value === undefined ? '—' : value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-export default function ChartIndicators({ visibility, onToggle, average, technical, atmVwap, atmVwapError, atmIndexPrice, vwap, hasVwap, spotIndex, showIndexContext = true, showTradeContext = showIndexContext, close, context, trade, indiaVix, indiaVixLoading, now }: {
+export default function ChartIndicators({ onShowAtm, visibility, onToggle, average, technical, atmVwap, atmVwapError, atmIndexPrice, vwap, hasVwap, spotIndex, showIndexContext = true, showTradeContext = showIndexContext, close, context, trade, indiaVix, indiaVixLoading, now }: {
+  onShowAtm?: () => void;
   visibility: ChartIndicatorVisibility; onToggle: (key: ChartIndicator) => void;
   average: MovingAveragePoint; technical: TechnicalIndicatorPoint; vwap?: number;
   atmVwap?: AtmVwapSnapshot; atmVwapError?: string; atmIndexPrice?: number;
@@ -25,6 +26,7 @@ export default function ChartIndicators({ visibility, onToggle, average, technic
 }) {
   const atmBias = atmVwapBias(atmVwap, atmVwap?.index ?? '', atmIndexPrice ?? close, now)
   const atmTime = atmVwap?.ce.asOf && atmVwap.pe.asOf ? Math.min(Date.parse(atmVwap.ce.asOf), Date.parse(atmVwap.pe.asOf)) : undefined
+  const priceTime = atmVwap?.ce.priceAsOf && atmVwap.pe.priceAsOf ? Math.min(Date.parse(atmVwap.ce.priceAsOf), Date.parse(atmVwap.pe.priceAsOf)) : undefined
   const vwapPosition = vwap === undefined ? 'neutral' : close > vwap ? 'positive' : close < vwap ? 'negative' : 'neutral'
   const emaDirection = average.ema20 === undefined || average.ema50 === undefined ? 'neutral' : average.ema20 > average.ema50 ? 'positive' : average.ema20 < average.ema50 ? 'negative' : 'neutral'
   const rsiExtreme = technical.rsi14 !== undefined && (technical.rsi14 >= 70 || technical.rsi14 <= 30)
@@ -38,13 +40,16 @@ export default function ChartIndicators({ visibility, onToggle, average, technic
   return <div className="chart-indicator-panel">
     <div className="chart-indicator-controls" role="group" aria-label="Chart indicator visibility">
       <span className="chart-indicator-controls-label">Indicators <small>(tap to show/hide)</small></span>
-      {controls.map(control => <button key={control.key} type="button" aria-pressed={visibility[control.key] && (control.key !== 'vwap' || hasVwap)} disabled={control.key === 'vwap' && !hasVwap}
-        onClick={() => onToggle(control.key)} title={control.key === 'vwap' && !hasVwap ? spotIndex ? 'ATM CE/PE VWAP is shown below in option premium units.' : 'VWAP needs traded candle volume. Waiting for historical or observed volume.' : `${visibility[control.key] ? 'Hide' : 'Show'} ${control.label}`}>
-        <i aria-hidden="true" style={{ background: control.color }} />{control.label}{control.key === 'vwap' && !hasVwap && <small>{spotIndex ? 'ATM' : 'N/A'}</small>}
-      </button>)}
+      {controls.map(control => spotIndex && control.key === 'vwap'
+        ? <button key={control.key} type="button" onClick={onShowAtm} disabled={!onShowAtm} title="View the current ATM CE/PE price, volume and VWAP charts" aria-label="View ATM option VWAP charts"><i aria-hidden="true" style={{ background: control.color }} />VWAP <small>ATM</small></button>
+        : <button key={control.key} type="button" aria-pressed={visibility[control.key] && (control.key !== 'vwap' || hasVwap)} disabled={control.key === 'vwap' && !hasVwap}
+          onClick={() => onToggle(control.key)} title={control.key === 'vwap' && !hasVwap ? 'VWAP needs traded candle volume. Waiting for historical or observed volume.' : `${visibility[control.key] ? 'Hide' : 'Show'} ${control.label}`}>
+          <i aria-hidden="true" style={{ background: control.color }} />{control.label}{control.key === 'vwap' && !hasVwap && <small>N/A</small>}
+        </button>)}
     </div>
     {showTradeContext && <div className="chart-trade-legend" aria-label="Trade level legend">
-      <span><i className="is-entry" />Entry</span><span><i className="is-stop" />Stop-loss</span><span><i className="is-target" />Target</span>
+      <span><i className="is-entry" />Entry</span><span><i className="is-stop" />Initial stop-loss</span><span><i className="is-target" />Reference target · Open profit</span>
+      {trade?.trailingStop !== undefined && <span><i style={{ background: '#D97706' }} />TSL {number(trade.trailingStop)}</span>}
       <small>{trade ? 'Current live trade' : 'Levels appear when a confirmed trade is live'}</small>
     </div>}
     <div className="chart-indicator-context">{context}</div>
@@ -52,9 +57,13 @@ export default function ChartIndicators({ visibility, onToggle, average, technic
       {spotIndex ? <div className="chart-indicator-metric" aria-label="VWAP indicator">
         <span className="chart-indicator-metric-title">{atmVwap?.index} ATM VWAP · CE / PE</span>
         <strong>{atmVwap ? `${number(atmVwap.ce.vwap ?? undefined)} / ${number(atmVwap.pe.vwap ?? undefined)}` : atmVwapError ? 'Unavailable' : 'Loading…'}</strong>
-        <small>{atmVwap ? `Strike ${atmVwap.strike.toLocaleString('en-IN')} · Expiry ${atmVwap.expiry} · ${atmBias?.toLowerCase() ?? 'Last available / incomplete; excluded from signals'}` : atmVwapError || 'Waiting for ATM option candles'}</small>
-        {atmVwap && <small>CE price {number(atmVwap.ce.close ?? undefined)} · PE price {number(atmVwap.pe.close ?? undefined)}</small>}
-        {atmTime !== undefined && <small>As of {new Date(atmTime).toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} IST</small>}
+        <small>{atmVwap ? `Strike ${atmVwap.strike.toLocaleString('en-IN')} · Expiry ${atmVwap.expiry} · ${atmBias?.toLowerCase() ?? 'Last available / incomplete; excluded from signals'}` : atmVwapError || 'Waiting for ATM option quotes'}</small>
+        {atmVwap && <small>CE LTP {number(atmVwap.ce.close ?? undefined)} · PE LTP {number(atmVwap.pe.close ?? undefined)}</small>}
+        {atmVwap && <small>Session volume · CE {atmVwap.ce.volume.toLocaleString('en-IN')} · PE {atmVwap.pe.volume.toLocaleString('en-IN')}</small>}
+        {atmVwap?.message && <small>{atmVwap.message}</small>}
+        {atmVwap && <small>{atmVwap.method === 'BROKER_AVERAGE_PRICE' ? 'Broker session average · Quotes refresh every 10s' : 'Candle VWAP · Completed-minute volume'}</small>}
+        {atmTime !== undefined && <small>As of {new Date(atmTime).toLocaleString('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' })} IST</small>}
+        {priceTime !== undefined && Number.isFinite(priceTime) && <small>LTP as of {new Date(priceTime).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false })} IST</small>}
         {atmVwap && atmVwapError && <small>{atmVwapError}</small>}
       </div> : <div className="chart-indicator-metric" aria-label="VWAP indicator">
         <span className="chart-indicator-metric-title">VWAP</span><strong>{vwap === undefined ? 'Unavailable' : number(vwap)}</strong>
@@ -75,7 +84,7 @@ export default function ChartIndicators({ visibility, onToggle, average, technic
       </div>
       <div className="chart-indicator-metric" aria-label="ATR 14 indicator">
         <span className="chart-indicator-metric-title">ATR (14)</span><strong>{technical.atr14 === undefined ? '—' : `${technical.atr14.toFixed(1)} pts`}</strong>
-        <small>{technical.atr14 === undefined ? 'Needs 14 candles' : trade ? `Trade SL ${Math.abs(trade.entry - trade.stopLoss).toFixed(1)} · TGT ${Math.abs(trade.target - trade.entry).toFixed(1)} pts` : '14-candle volatility'}</small>
+        <small>{technical.atr14 === undefined ? 'Needs 14 candles' : trade ? `Initial SL ${Math.abs(trade.entry - trade.stopLoss).toFixed(1)} · REF ${Math.abs(trade.target - trade.entry).toFixed(1)} pts` : '14-candle volatility'}</small>
       </div>
       <div className="chart-indicator-metric" aria-label="ADX and DMI indicators">
         <span className="chart-indicator-metric-title">ADX / DMI (14)</span><strong>{technical.adx14?.toFixed(1) ?? '—'}</strong>

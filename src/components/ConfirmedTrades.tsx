@@ -11,7 +11,7 @@ const time = (value?: number) => value === undefined ? '—' : new Date(value).t
 const tone = (points?: number) => points === undefined || points === 0 ? 'neutral' : points > 0 ? 'profit' : 'loss'
 const reason = (record: PredictionRecord) => {
   switch (record.status) {
-    case 'ACTIVE': return 'Agent managing trade'
+    case 'ACTIVE': return /recovering|waiting for complete candle history/i.test(record.outcomeNote) ? 'Recovering saved trade' : 'Agent managing trade'
     case 'TARGET_HIT': return 'Target hit'
     case 'STOP_LOSS_HIT': return 'Stop-loss hit'
     case 'EARLY_EXIT': return record.earlyExitSource === 'SESSION_SQUARE_OFF' ? `Square-off · ${squareOffLabel(record.instrument, record.entryAt ?? record.generatedAt)} IST` : record.earlyExitSource === 'AGENT_PROTECTION' ? record.reversalInterval === 'ONE_MINUTE' ? '1-minute trend protection' : 'Trailing profit protection' : record.earlyExitSource === 'AGENT_REVERSAL' ? record.reversalInterval === 'ONE_MINUTE' ? '1-minute reversal' : 'Agent-confirmed reversal' : 'Early exit'
@@ -54,7 +54,7 @@ export default function ConfirmedTrades({ records, now, streamConnected, storage
         </div>
         <div className="confirmed-trade-row">
           <div><span className="confirmed-trade-label">{active ? live ? `Current ${unit}` : `Last ${unit} quote` : `Exit (${unit})`}</span><strong>{price(current)}</strong>{percent !== undefined && <small className={`confirmed-pnl-${tone(points)}`}>{signed(percent)}% price move</small>}{active && record.latestPriceAt !== undefined && <small>As of {time(record.latestPriceAt)} IST</small>}</div>
-          <div className="confirmed-trade-right"><span className="confirmed-trade-label">Stop-loss ({unit})</span><strong className="confirmed-pnl-loss">{price(record.stopLoss)}</strong><small>Target <b className="confirmed-pnl-profit">{price(record.target)}</b></small></div>
+          <div className="confirmed-trade-right"><span className="confirmed-trade-label">{active ? 'Current TSL' : 'Last TSL'} ({unit})</span><strong className="confirmed-pnl-loss">{price(record.protection?.stop ?? record.stopLoss)}</strong><small>Initial SL {price(record.stopLoss)}</small><small>Reference <b className="confirmed-pnl-profit">{price(record.target)}</b>{active && ' · Open profit'}</small></div>
         </div>
         <div className="confirmed-trade-row confirmed-trade-result">
           <div><span className="confirmed-trade-label">{active ? 'Unrealized P/L' : 'Booked P/L'}</span><strong className={`confirmed-trade-pnl confirmed-pnl-${tone(points)}`}>{points === undefined ? '—' : `${signed(points)} pts`}</strong>{!active && !settled && <small>Excluded from totals</small>}</div>

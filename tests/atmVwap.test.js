@@ -64,3 +64,69 @@ test('a delayed minute is backfilled on the next incremental request without los
  assert.equal(second.ce.volume,600)
  assert(calls.slice(2).every(input=>input.fromdate==='2026-10-16 09:16'))
 })
+
+function liveFixture(index, strike, clock, overrides = {}) {
+ const exchange = index === 'Sensex' ? 'BFO' : 'NFO'
+ const contracts = ['ce','pe'].map((side,i)=>({side,strike,exchange,token:String(strike+i),symbol:`${index}-${strike}-${side}`}))
+ const expiryAt = Date.parse('2026-10-20T15:30:00+05:30')
+ const snapshot = () => ({index,expiry:'2026-10-20',fetchedAt:new Date(clock()).toISOString(),rows:[{strike,...Object.fromEntries(contracts.map(c=>[c.side,{...c,ltp:c.side==='ce'?110:90,averagePrice:100,volume:600,asOf:new Date(clock()).toISOString(),...overrides}]))}]})
+ return {contracts,expiryAt,snapshot}
+}
+test('all indices use actual FULL quote average and volume, independent of the historical queue', async () => {
+ for (const [index,strike,step] of [['Nifty 50',22000,50],['Sensex',74000,100],['Bank Nifty',48000,100]]) {
+  let clock = now, calls = 0, historyCalls = 0
+  const fixture = liveFixture(index,strike,()=>clock)
+  const service = createAtmVwapService({now:()=>clock,loadOptions:async()=>({[index]:fixture}),quotes:async input=>{calls++;assert.deepEqual(input,{index,strikes:[strike]});return fixture.snapshot()},history:async()=>{historyCalls++;throw Error('History queue is blocked')}})
+  const first = await service.get({index,price:strike+20},{Authorization:'A'})
+  assert.equal(first.method,'BROKER_AVERAGE_PRICE');assert.equal(first.ce.close,110);assert.equal(first.pe.close,90);assert.equal(first.ce.vwap,100)
+  for (let i=1;i<=8;i++) {
+   clock += 10000
+   const next = await service.get({index,price:strike+20},{Authorization:'A'})
+   assert.equal(next.ce.volume,600,'heartbeats must never add volume')
+   assert.equal(next.ce.asOf,new Date(clock).toISOString())
+  }
+  assert.equal(calls,9);assert.equal(historyCalls,0)
+  await assert.rejects(service.get({index,price:strike+step},{Authorization:'A'}),/ATM CE\/PE contracts are unavailable/)
+ }
+})
+test('pending ATM quotes are shared across many minute boundaries instead of filling the busy queue', async () => {
+ let clock=now,calls=0,release
+ const fixture=liveFixture('Nifty 50',22000,()=>clock)
+ const service=createAtmVwapService({now:()=>clock,loadOptions:async()=>({'Nifty 50':fixture}),quotes:async()=>{calls++;await new Promise(resolve=>{release=resolve});return fixture.snapshot()},history:async()=>{throw Error('Unexpected history')}})
+ const requests=[]
+ for(let i=0;i<20;i++) {requests.push(service.get({index:'Nifty 50',price:22000},{Authorization:'A'}));await new Promise(resolve=>setImmediate(resolve));clock+=60000}
+ assert.equal(calls,1);release()
+ const results=await Promise.all(requests)
+ assert(results.every(result=>result.method==='BROKER_AVERAGE_PRICE'))
+})
+test('a blocked candle fallback never blocks later live quotes or creates duplicate historical jobs', async () => {
+ let clock=now,historyCalls=0,release,averages=false
+ const fixture=liveFixture('Nifty 50',22000,()=>clock)
+ const service=createAtmVwapService({now:()=>clock,loadOptions:async()=>({'Nifty 50':fixture}),quotes:async()=>{const data=fixture.snapshot();if(!averages)for(const side of ['ce','pe'])data.rows[0][side].averagePrice=null;return data},history:async()=>{historyCalls++;if(historyCalls===1)await new Promise(resolve=>{release=resolve});return {status:200,body:{status:true,data:bars()}}}})
+ const first=await service.get({index:'Nifty 50',price:22000},{Authorization:'A'})
+ assert.equal(first.ce.vwap,null);assert.equal(first.ce.close,110)
+ for(let i=0;i<15;i++){clock+=10000;await service.get({index:'Nifty 50',price:22000},{Authorization:'A'})}
+ assert.equal(historyCalls,1)
+ averages=true;clock+=10000
+ assert.equal((await service.get({index:'Nifty 50',price:22000},{Authorization:'A'})).method,'BROKER_AVERAGE_PRICE')
+ release();await new Promise(resolve=>setImmediate(resolve));assert.equal(historyCalls,2)
+})
+test('candle fallback is cached by minute while live LTP and its timestamp update every ten seconds', async () => {
+ let clock=now,historyCalls=0
+ const fixture=liveFixture('Nifty 50',22000,()=>clock,{averagePrice:null})
+ const service=createAtmVwapService({now:()=>clock,loadOptions:async()=>({'Nifty 50':fixture}),quotes:async()=>fixture.snapshot(),history:async()=>{historyCalls++;return{status:200,body:{status:true,data:bars()}}}})
+ await service.get({index:'Nifty 50',price:22000},{Authorization:'A'});await new Promise(resolve=>setImmediate(resolve))
+ clock+=10000
+ const data=await service.get({index:'Nifty 50',price:22000},{Authorization:'A'})
+ assert.equal(data.ce.vwap,102);assert.equal(data.ce.close,110);assert.equal(data.ce.priceAsOf,new Date(clock).toISOString());assert.equal(data.ce.volume,600)
+ clock+=10000;await service.get({index:'Nifty 50',price:22000},{Authorization:'A'});assert.equal(historyCalls,2)
+})
+test('quote authentication and throttling errors never cascade into the historical queue', async () => {
+ const fixture=liveFixture('Nifty 50',22000,()=>now)
+ for(const status of [401,403,429]) {
+  let historyCalls=0
+  const service=createAtmVwapService({now:()=>now,loadOptions:async()=>({'Nifty 50':fixture}),quotes:async()=>{throw Object.assign(Error('broker failure'),{status})},history:async()=>{historyCalls++}})
+  await assert.rejects(service.get({index:'Nifty 50',price:22000},{Authorization:'A'}),error=>error.status===status)
+  assert.equal(historyCalls,0)
+ }
+})

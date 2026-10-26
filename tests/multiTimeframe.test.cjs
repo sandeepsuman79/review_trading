@@ -6,26 +6,12 @@ const { createPredictionRecord } = require('../src/analysis/predictionHistory.ts
 const { mcxSession } = require('../src/analysis/commodities.ts')
 const { timeframeInfo } = require('../src/analysis/timeframes.ts')
 const now = Date.parse('2026-10-16T13:45:00+05:30')
-const markets = [['Nifty 50', 22000, 1], ['Sensex', 74000, 3], ['Bank Nifty', 50000, 2], ['Natural Gas', 300, .2, 'NATURALGAS'], ['Crude Oil', 6000, 2, 'CRUDEOIL'], ['Gold', 110000, 10, 'GOLD'], ['Silver', 90000, 10, 'SILVER']]
+const { markets, fixture: confirmationFixture } = require('./helpers/confirmation.cjs')
 function contractFor(row) {
  const [name,,,root] = row
  return root ? { name, root, token: '12345', symbol: `${root}20NOV26FUT`, exchange: 'MCX', exchangeType: 5, expiry: '2026-11-20', expiresAt: mcxSession(Date.parse('2026-11-20T12:00:00+05:30')).close, tickSize: root === 'NATURALGAS' ? .1 : 1 } : undefined
 }
-function candlesFor(row, d, interval, end = now) {
- const [,base,scale,root] = row, duration = timeframeInfo[interval].milliseconds, timestamps = []
- // Actual weekday session slots: history warmup must not manufacture overnight bars.
- for (let day = 10; day >= 0; day--) {
-  const date = new Date(now - day * 86400000), weekday = date.getUTCDay()
-  if (weekday === 0 || weekday === 6) continue
-  const open = Date.parse(`${date.toISOString().slice(0,10)}T${root ? '09:00' : '09:15'}:00+05:30`)
-  const close = root ? open + 14 * 3600000 : open + 6 * 3600000
-  for (let time = open; time + duration <= Math.min(close, end); time += duration) timestamps.push(time)
- }
- return timestamps.slice(-52).map((time,i) => {
-  const o = base + d * (i * .3 + Math.sin(i / 4) * 6) * scale, c = o + d * 2 * scale
-  return [new Date(time).toISOString(), o, Math.max(o,c) + .7 * scale, Math.min(o,c) - .7 * scale, c, root ? 100 : 0]
- })
-}
+function candlesFor(row, d, interval, end = now) { return confirmationFixture(row, d, interval, end).candles }
 function input(row = markets[0], d = 1) {
  return { instrument: row[0], contract: contractFor(row), now, atmVwap: atmVwapFixture(row[0], candlesFor(row,d,'FIVE_MINUTE').at(-1)[4], now, d), candlesByInterval: Object.fromEntries(['FIVE_MINUTE','FIFTEEN_MINUTE','ONE_HOUR'].map(interval => [interval, candlesFor(row,d,interval)])) }
 }
@@ -38,13 +24,13 @@ test('all seven instruments independently evaluate both directions with actual c
    assert(review.analysis.rsi14 !== undefined && review.analysis.atr14 > 0)
    assert.equal(review.evidence.interval,review.interval)
    assert.equal(review.evidence.bias,d===1?'BULLISH':'BEARISH')
-   if (review.plan) { assert.equal(review.plan.side,d===1?'CALL':'PUT'); assert.equal(review.plan.stage,'CONFIRMED'); assert.equal(review.evidence.canConfirm,true); assert(review.plan.riskReward>=1.5) }
+   if (review.plan) { assert.equal(review.plan.side,d===1?'CALL':'PUT'); assert.equal(review.plan.stage,'CONFIRMED'); assert.equal(review.evidence.canConfirm,true); assert(review.plan.riskReward>=1.2) }
   }
   assert(result.selectedPlan,`${row[0]} ${d}: ${result.reviews.map(r=>r.reason).join(' / ')}`)
   assert.equal(result.selectedPlan.side,d===1?'CALL':'PUT')
  }
 })
-test('freshest eligible close wins, simultaneous closes prefer 5-minute, and an opposing timeframe is context rather than a veto', () => {
+test('freshest qualified close wins and lower-timeframe entries cannot oppose their completed trend context', () => {
  const source=input(),base=analyzeMultiTimeframe(source)
  const five=base.reviews.find(r=>r.interval==='FIVE_MINUTE'), fifteen=base.reviews.find(r=>r.interval==='FIFTEEN_MINUTE')
  assert(five.plan && fifteen.plan)
@@ -52,7 +38,7 @@ test('freshest eligible close wins, simultaneous closes prefer 5-minute, and an 
  assert.equal(base.selectedPlan.interval,'FIVE_MINUTE')
  const opposing=input(markets[0],-1)
  const conflict=analyzeMultiTimeframe({...source,candlesByInterval:{...source.candlesByInterval,FIVE_MINUTE:opposing.candlesByInterval.FIVE_MINUTE}})
- assert.equal(conflict.conflicts,true);assert.equal(conflict.selectedPlan.interval,'FIVE_MINUTE');assert.equal(conflict.selectedPlan.side,'PUT')
+ assert.equal(conflict.conflicts,true);assert.equal(conflict.reviews[0].plan,undefined);assert.equal(conflict.selectedPlan.interval,'FIFTEEN_MINUTE');assert.equal(conflict.selectedPlan.side,'CALL')
  const lateNow=now+5*60000
  const newerFive=candlesFor(markets[0],1,'FIVE_MINUTE',lateNow)
  const newer=analyzeMultiTimeframe({...source,now:lateNow,atmVwap:atmVwapFixture(source.instrument,newerFive.at(-1)[4],lateNow,1),candlesByInterval:{...source.candlesByInterval,FIVE_MINUTE:newerFive}})
@@ -62,7 +48,7 @@ test('missing, gapped, stale and forming-only views cannot borrow warmup or conf
  const source=input(), stale=source.candlesByInterval.FIFTEEN_MINUTE.slice(0,-2)
  const result=analyzeMultiTimeframe({...source,candlesByInterval:{FIVE_MINUTE:source.candlesByInterval.FIVE_MINUTE,FIFTEEN_MINUTE:stale,ONE_HOUR:[]}})
  assert.equal(result.reviews[1].status,'STALE');assert.equal(result.reviews[1].plan,undefined);assert.equal(result.reviews[2].status,'WARMING_UP');assert.equal(result.reviews[2].plan,undefined)
- assert.equal(result.selectedPlan.interval,'FIVE_MINUTE')
+ assert.equal(result.selectedPlan,undefined);assert.equal(result.reviews[0].evidence.confirmation.checks.find(check=>check.code==='HIGHER_TREND').passed,false)
  const gapped=source.candlesByInterval.FIVE_MINUTE.filter((_,i)=>i!==50)
  const gap=analyzeMultiTimeframe({...source,candlesByInterval:{FIVE_MINUTE:gapped}})
  assert.equal(gap.reviews[0].plan,undefined)

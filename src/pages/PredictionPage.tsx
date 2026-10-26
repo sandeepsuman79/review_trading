@@ -1,6 +1,7 @@
 import { writeChartCache } from '../storage/chartCache'
 import { useTimeframeTrajectories } from '../hooks/useTimeframeTrajectories'
 import SessionReview from '../components/SessionReview'
+import TradeQualityAudit from '../components/TradeQualityAudit'
 import { useAtmVwap } from '../hooks/useAtmVwap'
 import { contractExpiryNotice } from '../analysis/agentMonitoring'
 import { recordIntrabarTick } from '../analysis/intrabarContext'
@@ -17,7 +18,7 @@ import type { AngelOneCandle, AngelOneProfile, AngelOneInstrument } from '../api
 import { getAiPriceAction, type AiPriceAction } from '../api/ai'
 import { type PriceActionAnalysis, type PriceActionInterval } from '../analysis/priceAction'
 import { candleBucketTime, isFreshTick, normalizeCandles, tickTimestamp } from '../analysis/candleData'
-import { abortableWait, formatHistoricalDate, historyRetryDelay, historySyncRange, prioritizeHistoryJobs } from '../analysis/historySync'
+import { abortableWait, formatHistoricalDate, historyRefreshDue, historyRetryDelay, historySyncRange, prioritizeHistoryJobs, runHistoricalRequest } from '../analysis/historySync'
 import { useCompletedCandles } from '../hooks/useCompletedCandles'
 import { LiveCandleBook } from '../analysis/liveCandleBook'
 import { defaultChartInterval, historyIntervals, timeframeInfo } from '../analysis/timeframes'
@@ -27,6 +28,7 @@ import { useNewsAssessment } from '../hooks/useNewsAssessment'
 import { useMarketContext } from '../hooks/useMarketContext'
 import { useIndiaVix } from '../hooks/useIndiaVix'
 import ErrorToast from '../components/ErrorToast'
+import { atmVwapContext } from '../api/atmVwap'
 import AgentTradeCard from '../components/AgentTradeCard'
 import ConfirmedTrades from '../components/ConfirmedTrades'
 import { type EarlyPrediction, type PredictionPlan } from '../analysis/earlyPrediction'
@@ -35,14 +37,13 @@ import PredictionHeader from '../components/PredictionHeader'
 import PredictionNotifications from '../components/PredictionNotifications'
 import type { PredictionEvent } from '../analysis/predictionEvents'
 import { canEnterConfirmedPrediction, type PredictionRecord } from '../analysis/predictionHistory'
-import { analyzeTradingEvidence } from '../analysis/tradingEvidence'
 import type { IndiaVixSnapshot } from '../api/marketContext'
 import { useInstitutionalFlows } from '../hooks/useInstitutionalFlows'
 import { useGapOutlook } from '../hooks/useGapOutlook'
 import GapOutlookCard from '../components/GapOutlookCard'
 import { commoditySpecs, mcxSession, resolveCommodityContracts, validCommodityContract, isCommodity, type CommodityContract } from '../analysis/commodities'
 
-const CandleChart = lazy(() => import('../components/CandleChart'))
+const CandleChart = lazy(() => import('../components/IndexOptionChart'))
 
 function isInvalidToken(message: string) {
   return /invalid[\s_-]*token|token[\s_-]*invalid/i.test(message)
@@ -161,6 +162,7 @@ function PriceActionAgent({ candlesByInterval, chartInterval, trackLevels, onAss
   const base = useMemo(() => analyzeMultiTimeframe({ candlesByInterval: { FIVE_MINUTE: five, FIFTEEN_MINUTE: fifteen, ONE_HOUR: hourly }, instrument, now: Math.max(assessmentMinute * 60_000, Date.now()), contract, context: market.context, outlook: news.outlook, indiaVix, flowHistory, atmVwap: atm.data }), [five, fifteen, hourly, instrument, contract, market.context, news.outlook, indiaVix, flowHistory, assessmentMinute, atm.data])
   const assessment = revalidateMultiTimeframeAssessment(base, { candlesByInterval, records: setupRecords, now })
   const review = assessment.displayReview, interval = review.interval
+  const atmContext = atmVwapContext(atm.data, instrument, tick?.ltp ?? five[five.length - 1]?.[4], now)
   const snapshot = interval === 'FIVE_MINUTE' ? five : interval === 'FIFTEEN_MINUTE' ? fifteen : hourly
   const analysis: PriceActionAnalysis = review.analysis
   const evidence = { ...review.evidence, historicalOutcomes: visible ? cachedHistoricalOutcomes(snapshot, interval, now, instrument) : undefined }
@@ -188,7 +190,7 @@ function PriceActionAgent({ candlesByInterval, chartInterval, trackLevels, onAss
     setAiLoading(true)
     setAiError('')
     try {
-      const preliminaryEvidence = analyzeTradingEvidence({ analysis, candles: snapshot, interval, instrument, context: market.context, indiaVix, flowHistory, atmVwap: atm.data, now })
+      const preliminaryEvidence = evidence
       const result = await getAiPriceAction(instrument, interval, snapshot, analysis, controller.signal, false, preliminaryEvidence)
       if (result.asOf !== analysis.latestCandleTime) throw new Error('AI analysis returned a different chart timestamp. Using the current chart only.')
       if (!controller.signal.aborted) { setAiAnalysis(result); setAssessedSnapshot(assessmentKey); setAiError('') }
@@ -235,6 +237,10 @@ function PriceActionAgent({ candlesByInterval, chartInterval, trackLevels, onAss
     <section aria-label="Candle price-action agent" className="price-action-agent">
       <MultiTimeframePanel trajectories={trajectories} assessment={assessment} activeTrade={activeTrade} connected={streamConnected} now={now} />
       <SessionReview instrument={instrument} records={setupRecords} candles={five} now={now} contractToken={contract?.token} />
+      {visible && <TradeQualityAudit instrument={instrument} records={setupRecords} candlesByInterval={candlesByInterval} contract={contract} now={now} />}
+      {!commodity && <p className="agent-score-note" role="status">ATM CE/PE VWAP · {atmContext.bias === undefined
+        ? `${atm.error || atmContext.reason} VWAP’s 25-point input is unavailable; technical coverage is ${evidence.coverage}% / 70% required.`
+        : `Strike ${atm.data!.strike} · CE volume ${atm.data!.ce.volume.toLocaleString('en-IN')} / PE volume ${atm.data!.pe.volume.toLocaleString('en-IN')} · ${atmContext.reason} ${evidence.canConfirm ? 'Technical setup confirmed.' : evidence.reason}`}</p>}
       <AgentTradeCard replayCandles={five} records={setupRecords} frontContract={contract} analysis={evidence.selectedAnalysis ?? analysis} evidence={evidence} prediction={prediction} activeTrade={activeTrade} pendingTrade={pendingTrade} instrument={instrument} interval={interval} now={now} tick={activeTrade?.contract ? activeTick : tick} streamConnected={streamConnected} />
       {!commodity && <GapOutlookCard instrument={instrument} outlook={gapOutlook.outlook} error={gapOutlook.error} now={now} />}
       <MarketContextPanel instrument={instrument} context={displayContext} loading={market.loading} refresh={() => void market.refresh()} outlook={news.outlook} chartCurrent={chartCurrent} analysis={evidence.selectedAnalysis ?? analysis} candles={snapshot} openingCandles={openingCandles} now={now}>
@@ -304,6 +310,7 @@ export default function PredictionPage() {
   }, [])
   const [chartLoading, setChartLoading] = useState(false)
   const [syncProgress, setSyncProgress] = useState('')
+  const [historyUpdates, setHistoryUpdates] = useState<Record<string, { receivedAt: number; through: number }>>({})
   const [chartError, setChartError] = useState('')
   const [chartCacheError, setChartCacheError] = useState('')
   const [streamStatus, setStreamStatus] = useState('Disconnected')
@@ -346,7 +353,7 @@ export default function PredictionPage() {
     return review?.asOf ? { instrument: review.instrument, contractToken: review.contractToken, interval: review.interval, asOf: review.asOf, reviewedAt: review.reviewedAt, atr: review.evidence.atr14 } : undefined
   }, [])
   const chartTradeLevels = useMemo(() => Object.fromEntries(predictionRecords.filter(record => record.status === 'ACTIVE' && (!record.contract || marketInstruments.some(item => item.token === record.contract!.token)))
-    .map(record => [record.instrument, { entry: record.entryPrice!, target: record.target, stopLoss: record.stopLoss }])), [predictionRecords, marketInstruments])
+    .map(record => [record.instrument, { entry: record.entryPrice!, target: record.target, stopLoss: record.stopLoss, trailingStop: record.protection?.armed ? record.protection.stop : undefined }])), [predictionRecords, marketInstruments])
   const [indiaVixInstrument, setIndiaVixInstrument] = useState<IndiaVixInstrument>()
   const { snapshot: indiaVix, loading: indiaVixLoading, refresh: refreshIndiaVix } = useIndiaVix(indiaVixInstrument)
   const chartIntervalRef = useRef(chartInterval)
@@ -357,6 +364,10 @@ export default function PredictionPage() {
   const historyController = useRef<AbortController | null>(null)
   const historyQueue = useRef<HistoryQueue | null>(null)
   const historyStarted = useRef(false)
+  const historySyncedThrough = useRef(new Map<string, number>())
+  const historyAttemptedAt = useRef(new Map<string, number>())
+  const historyAuthBlocked = useRef(false)
+  const synchronizeHistoryRef = useRef<(instruments?: MarketInstrument[], jobs?: ChartHistoryJob[]) => Promise<void>>(async () => {})
   const commodityHistoryRef = useRef<(instruments: MarketInstrument[]) => void>(() => {})
   commodityHistoryRef.current = instruments => {
     if (!historyStarted.current) return // The initial pass will include cached contracts.
@@ -412,8 +423,8 @@ export default function PredictionPage() {
     await profile
   }
 
-  // Login/page refresh and the refresh button synchronize all saved timeframes once.
-  // Chart selection and socket reconnects only read/update the local candle book.
+  // Initial/manual sync warms saved history. The periodic scheduler below then
+  // reconciles completed candles without resetting the live candle book.
   useEffect(() => {
     let active = true
     void loadSessionRef.current(() => active)
@@ -526,12 +537,14 @@ export default function PredictionPage() {
     setChartCandles(Object.fromEntries(instrumentsRef.current.map(instrument => [instrument.token, candleBook.get(instrument.token, interval)])))
   }
 
-  async function synchronizeChartHistory(requestedInstruments = instrumentsRef.current) {
+  synchronizeHistoryRef.current = synchronizeChartHistory
+  async function synchronizeChartHistory(requestedInstruments = instrumentsRef.current, requestedJobs?: ChartHistoryJob[]) {
+    if (!requestedJobs) historyAuthBlocked.current = false
     historyController.current?.abort()
     const controller = new AbortController()
     historyController.current = controller
     const request = ++chartRequestRef.current
-    const queue: HistoryQueue = { jobs: historyIntervals.flatMap(interval => requestedInstruments.map(instrument => ({ interval, token: instrument.token }))), scheduled: new Set() }
+    const queue: HistoryQueue = { jobs: requestedJobs ?? historyIntervals.flatMap(interval => requestedInstruments.map(instrument => ({ interval, token: instrument.token }))), scheduled: new Set() }
     for (const job of queue.jobs) queue.scheduled.add(`${job.token}:${job.interval}`)
     historyQueue.current = queue
     historyStarted.current = true
@@ -542,8 +555,7 @@ export default function PredictionPage() {
       let token = localStorage.getItem('angelone_jwt_token')
       if (!token && localStorage.getItem('angelone_refresh_token')) token = await recoverAngelOneSession('')
       if (!current()) return
-      if (!token) { setChartError('Showing saved chart data. Log in to synchronize the latest candles.'); return }
-      const end = Date.now()
+      if (!token) { historyAuthBlocked.current = true; setChartError('Showing saved chart data. Log in to synchronize the latest candles.'); return }
       const errors: string[] = []
       const jobs = queue.jobs
       let completed = 0
@@ -552,8 +564,10 @@ export default function PredictionPage() {
         jobs.splice(jobs.indexOf(job), 1)
         const instrument = instrumentsRef.current.find(item => item.token === job.token)
         if (!instrument) { completed++; continue } // An expired commodity contract rolled over while queued.
+        const end = Date.now(), jobKey = `${job.token}:${job.interval}`
+        historyAttemptedAt.current.set(jobKey, end)
         const cached = candleBook.get(job.token, job.interval)
-        const range = historySyncRange(cached, job.interval, end, instrument.exchange === 'MCX' ? 540 : 555)
+        const range = historySyncRange(cached, job.interval, end, instrument.exchange === 'MCX' ? 540 : 555, historySyncedThrough.current.get(jobKey))
         if (job.cursor !== undefined) {
           range.from = job.cursor
           const limit = timeframeInfo[job.interval].requestDays
@@ -563,16 +577,18 @@ export default function PredictionPage() {
         if (range.from >= range.to) { completed++; continue }
         let loaded = false, renewedSession = false
         for (let attempt = 0; attempt < 3 && current(); attempt++) {
-          const timeout = window.setTimeout(() => controller.abort(), 60_000)
           try {
             token = localStorage.getItem('angelone_jwt_token') || token
-            const result = await getHistoricalCandles(token, {
+            const result = await runHistoricalRequest(signal => getHistoricalCandles(token!, {
               exchange: instrument.exchange, symboltoken: job.token, interval: job.interval,
               fromdate: formatHistoricalDate(range.from), todate: formatHistoricalDate(range.to),
-            }, controller.signal)
+            }, signal), controller.signal)
             if (!current()) return
             const candles = normalizeCandles(result.data || [])
             if (candles.length) {
+              const through = Math.min(range.to, Date.parse(candles[candles.length - 1][0]) + intervalMilliseconds(job.interval))
+              historySyncedThrough.current.set(jobKey, through)
+              setHistoryUpdates(previous => ({ ...previous, [jobKey]: { receivedAt: Date.now(), through } }))
               const merged = candleBook.mergeHistory(job.token, job.interval, candles, Math.floor(range.to / 60_000) * 60_000)
               if (chartIntervalRef.current === job.interval) setChartCandles(existing => ({ ...existing, [instrument.token]: merged }))
             } else if (!cached.length) {
@@ -582,7 +598,6 @@ export default function PredictionPage() {
             break
           } catch (error) {
             if (!current()) {
-              if (request === chartRequestRef.current) setChartError('History sync timed out. Saved candles and live updates remain available; refresh to retry.')
               return
             }
             if (error instanceof Error && isAngelOneAuthError(error) && !renewedSession) {
@@ -596,27 +611,55 @@ export default function PredictionPage() {
             const delay = historyRetryDelay(error, attempt)
             if (delay !== undefined && attempt < 2) {
               setSyncProgress(`Retrying ${instrument.name} · ${intervalLabel(job.interval)} in ${Math.ceil(delay / 1000)}s · Showing saved candles`)
-              window.clearTimeout(timeout)
               await abortableWait(delay, controller.signal)
             } else {
               errors.push(`${instrument.name} (${intervalLabel(job.interval)}): ${error instanceof Error ? error.message : 'request failed'}`)
               // Expired credentials cannot succeed for the remaining jobs.
-              if ([401, 403].includes((error as { status?: number }).status ?? 0) || error instanceof Error && isAngelOneAuthError(error)) jobs.length = 0
+              if ([401, 403].includes((error as { status?: number }).status ?? 0) || error instanceof Error && isAngelOneAuthError(error)) { historyAuthBlocked.current = true; jobs.length = 0 }
               break
             }
-          } finally { window.clearTimeout(timeout) }
+          }
         }
+        historyAttemptedAt.current.set(jobKey, Date.now())
         if (loaded && range.to < end) jobs.push({ ...job, cursor: range.to - intervalMilliseconds(job.interval) })
         else completed++
         if (jobs.length && current()) await abortableWait(1200, controller.signal)
       }
       if (current() && errors.length) setChartError(`Historical sync incomplete. ${errors.join(' ')}`)
     } catch (error) {
-      if (current()) setChartError(error instanceof Error ? error.message : 'Unable to synchronize chart data.')
+      if (current()) {
+        if (error instanceof Error && isAngelOneAuthError(error)) historyAuthBlocked.current = true
+        setChartError(error instanceof Error ? error.message : 'Unable to synchronize chart data.')
+      }
     } finally {
       if (request === chartRequestRef.current) { historyQueue.current = null; setChartLoading(false); setSyncProgress('') }
     }
   }
+
+  useEffect(() => {
+    const refresh = () => {
+      if (document.hidden || !historyStarted.current || historyQueue.current || historyAuthBlocked.current) return
+      const now = Date.now(), instruments = instrumentsRef.current
+      const jobs = historyIntervals.flatMap(interval => instruments.filter(instrument => {
+        const key = `${instrument.token}:${interval}`
+        return historyRefreshDue(interval, instrument.name, now, historySyncedThrough.current.get(key), historyAttemptedAt.current.get(key))
+      }).map(instrument => ({ token: instrument.token, interval })))
+      if (jobs.length) void synchronizeHistoryRef.current(instruments, jobs)
+    }
+    const authChanged = () => { historyAuthBlocked.current = false; refresh() }
+    const timer = window.setInterval(refresh, 15_000)
+    window.addEventListener('online', refresh)
+    window.addEventListener('focus', refresh)
+    window.addEventListener('angelone-auth-changed', authChanged)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('online', refresh)
+      window.removeEventListener('focus', refresh)
+      window.removeEventListener('angelone-auth-changed', authChanged)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [])
 
   useEffect(() => {
     // Save one dirty timeframe per idle turn, away from chart gestures and tick processing.
@@ -789,10 +832,13 @@ export default function PredictionPage() {
             {marketInstruments.filter((instrument) => instrument.token === selectedIndexToken).map((instrument) => (
               <div key={instrument.token}>
                 {instrument.exchange === 'MCX' && <CommodityContractInfo instrument={instrument} tick={streamTicks[instrument.token]} lastQuote={restQuotes[instrument.token]} connected={streamStatus === 'Connected'} now={heartbeat} />}
+                <p className="agent-score-note" role="status">Historical candles · {historyUpdates[`${instrument.token}:${chartInterval}`]
+                  ? `Last synced ${new Date(historyUpdates[`${instrument.token}:${chartInterval}`].receivedAt).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false })} IST · Candles through ${new Date(historyUpdates[`${instrument.token}:${chartInterval}`].through).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false })} IST · Auto refresh after candle close`
+                  : 'Waiting for broker history sync'}</p>
                 <Suspense fallback={<div role="status" style={{ minHeight: 440, padding: 12 }}>Loading candle chart…</div>}>
-                <CandleChart
+                <CandleChart interval={chartInterval}
                   name={instrument.name}
-                  key={`${instrument.token}-${chartInterval}`}
+                  key={instrument.token}
                   intervalLabel={intervalLabel(chartInterval)}
                   savedCandleCount={chartCandles[instrument.token]?.length || 0}
                   spotIndex={instrument.exchange !== 'MCX'}

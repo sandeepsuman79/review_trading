@@ -20,6 +20,8 @@ const analysis = (side = 'CALL') => ({
 })
 const plan = (side = 'CALL', instrument = 'Nifty 50') => buildEarlyPrediction(analysis(side), instrument, interval, now).plan
 const record = (side = 'CALL') => createPredictionRecord(plan(side))
+// Observe a favourable peak, then a pullback to the trailing stop at the requested price.
+const trailingExit = (active, price, time) => observePredictionTick(observePredictionTick(active, price + (active.side === 'CALL' ? 15 : -15), time - 1), price, time)
 const bar = (time, open, high, low, close = open) => [new Date(time).toISOString(), open, high, low, close, 100]
 const context = {
   instrument: 'Nifty 50', revision: 'fixture', retrievedAt: new Date(now).toISOString(),
@@ -45,7 +47,7 @@ test('today cards use IST entry date and retain confirmed trades across all indi
 
 test('today totals count only booked outcomes by index and preserve directional live points', () => {
   const active = observePredictionTick(record(), 100, now + 1000)
-  const win = observePredictionTick(active, 120, now + 2000)
+  const win = trailingExit(active, 120, now + 2000)
   const loss = { ...observePredictionTick(active, 88, now + 2000), id: 'loss' }
   const bank = { ...win, id: 'bank', instrument: 'Bank Nifty' }
   const unknown = { ...active, id: 'unknown', instrument: 'Sensex', status: 'UNVERIFIED', points: 999 }
@@ -97,12 +99,14 @@ test('insufficient, stale, future, wrong-sided and low reward setups cannot issu
   }
 })
 
-test('CALL and PUT activate at entry and settle directional points correctly', () => {
+test('CALL and PUT pass the reference target and settle actual directional points at TSL', () => {
   for (const side of ['CALL', 'PUT']) {
     let item = observePredictionTick(record(side), 100, now + 1000)
     assert.equal(item.status, 'ACTIVE'); assert.equal(item.entryPrice, 100)
     item = observePredictionTick(item, side === 'CALL' ? 122 : 78, now + 2000)
-    assert.equal(item.status, 'TARGET_HIT'); assert.equal(item.points, 20)
+    assert.equal(item.status, 'ACTIVE'); assert.equal(item.points, undefined)
+    item = trailingExit(item, side === 'CALL' ? 122 : 78, now + 2500)
+    assert.equal(item.status, 'EARLY_EXIT'); assert.equal(item.points, 22)
     assert.equal(observePredictionTick(item, 1, now + 3000), item)
   }
 })
@@ -145,16 +149,16 @@ test('completed candle replay respects timeframe and never consumes forming or p
   const active = observePredictionCandles(initial, candles, now + duration)
   assert.equal(active.status, 'ACTIVE'); assert.equal(active.entryPrice, 100)
   const settled = observePredictionCandles(active, [...candles, bar(now + duration, 110, 122, 105)], now + 2 * duration)
-  assert.equal(settled.status, 'TARGET_HIT'); assert.equal(settled.points, 20)
+  assert.equal(settled.status, 'ACTIVE'); assert.equal(settled.points, undefined)
 })
 
-test('same-bar entry/stop and target/stop ambiguity is excluded from success', () => {
+test('same-bar entry/stop remains ambiguous; a reference target cannot cancel a known stop', () => {
   const entryStop = observePredictionCandles(record(), [bar(now, 99, 110, 85)], now + duration)
   assert.equal(entryStop.status, 'AMBIGUOUS')
   const active = { ...record(), status: 'ACTIVE', entryPrice: 100, entryAt: now }
   const both = observePredictionCandles(active, [bar(now, 105, 125, 85)], now + duration)
-  assert.equal(both.status, 'AMBIGUOUS'); assert.equal(both.points, undefined)
-  assert.equal(predictionHistoryStats([entryStop, both]).successRate, null)
+  assert.equal(both.status, 'STOP_LOSS_HIT'); assert.equal(both.points, -10)
+  assert.equal(predictionHistoryStats([entryStop, both]).successRate, 0)
 })
 
 test('known opening gap resolves before later ambiguous high/low', () => {
@@ -178,19 +182,19 @@ test('reconnect quote cannot hide a missing stop even when no candle coverage is
   const result = syncPredictionRecord(active, [], late, now + 40000)
   assert.equal(result.status, 'ACTIVE'); assert.equal(result.points, undefined)
   const current = syncPredictionRecord(active, [], { timestamp: now + 2000, ltp: 120 }, now + 2000)
-  assert.equal(current.status, 'TARGET_HIT')
+  assert.equal(current.status, 'ACTIVE'); assert(current.protection.stop >= 100)
 })
 
 test('continuous quotes skip overlapping bars; complete consecutive replay can verify offline results', () => {
   const active = observePredictionTick(record(), 100, now + 1000)
   assert.equal(syncPredictionRecord(active, [bar(now, 100, 125, 85)], { timestamp: now + 2000, ltp: 101 }, now + 2000).status, 'ACTIVE')
   const result = syncPredictionRecord(record(), [bar(now, 99, 110, 95), bar(now + duration, 110, 122, 105)], { timestamp: now + 2 * duration, ltp: 119 }, now + 2 * duration)
-  assert.equal(result.status, 'TARGET_HIT'); assert.equal(result.points, 20)
+  assert.equal(result.status, 'ACTIVE'); assert.equal(result.points, undefined)
   assert.equal(syncPredictionRecord(record(), [], { timestamp: now + 10000, ltp: 100 }, now).status, 'PENDING')
 })
 
 test('legacy target/stop results keep their scores and exclude unresolved calls', () => {
-  const win = observePredictionTick(observePredictionTick(record(), 100, now + 1), 120, now + 2)
+  const win = { ...observePredictionTick(record(), 100, now + 1), status: 'TARGET_HIT', exitPrice: 120, exitAt: now + 2, points: 20, observedThrough: now + 2 }
   const loss = observePredictionTick(observePredictionTick(record('PUT'), 100, now + 1), 110, now + 2)
   const stats = predictionHistoryStats([win, loss, record(), { ...record(), status: 'AMBIGUOUS' }, { ...record(), status: 'EXPIRED' }])
   assert.equal(stats.successRate, 50); assert.equal(stats.netPoints, 10)
@@ -241,10 +245,10 @@ test('per-call and overall success scores include profitable, losing and break-e
   const profitable = closeAt(105), losing = closeAt(95), flat = closeAt(100)
   assert.equal(predictionSuccessScore(profitable), 100); assert.equal(predictionSuccessScore(losing), 0); assert.equal(predictionSuccessScore(flat), 0)
   assert.equal(predictionSuccessScore(record()), null)
-  const target = observePredictionTick(observePredictionTick(record(), 100, now + 1000), 120, now + 2000)
+  const target = trailingExit(observePredictionTick(record(), 100, now + 1000), 120, now + 2000)
   const stop = observePredictionTick(observePredictionTick(record(), 100, now + 1000), 90, now + 2000)
   const stats = predictionHistoryStats([profitable, losing, flat, target, stop, record(), { ...record(), status: 'UNVERIFIED' }])
-  assert.equal(stats.successRate, 40); assert.equal(stats.resolved, 5); assert.equal(stats.earlyExits, 3)
+  assert.equal(stats.successRate, 40); assert.equal(stats.resolved, 5); assert.equal(stats.earlyExits, 4)
   assert.equal(stats.wins, 2); assert.equal(stats.losses, 2); assert.equal(stats.breakEven, 1); assert.equal(stats.netPoints, 10)
 })
 
@@ -284,14 +288,14 @@ test('reversal checking excludes forming/pre-entry bars, stale quotes and unveri
   assert.equal(result.status, 'ACTIVE')
 })
 
-test('live target and stop events take priority over a simultaneous confirmed reversal', () => {
+test('live stops take priority; confirmed reversals may close beyond the reference target', () => {
   const candles = reversalFixture(-1)
   const active = { ...record(), status: 'ACTIVE', generatedAt: now - 3 * duration, entry: 2000, entryPrice: 2000, entryAt: now - 2 * duration,
     stopLoss: 1900, target: 2200, latestPrice: 2000, latestPriceAt: now - 1000, latestPriceSource: 'LIVE', observedThrough: now - 1000 }
-  for (const [quote, status, points] of [[1810, 'STOP_LOSS_HIT', -190], [2210, 'TARGET_HIT', 200]]) {
+  for (const [quote, status, points] of [[1810, 'STOP_LOSS_HIT', -190], [2210, 'EARLY_EXIT', 210]]) {
     const result = syncPredictionRecord(active, candles, { timestamp: now, ltp: quote }, now)
     assert.equal(result.status, status); assert.equal(result.points, points)
-    assert.equal(result.earlyExitSource, undefined)
+    assert.equal(result.earlyExitSource, status === 'EARLY_EXIT' ? 'AGENT_REVERSAL' : undefined)
   }
 })
 
@@ -318,11 +322,11 @@ test('early picks and unentered confirmed setups emit no trade notifications', (
   assert.deepEqual(predictionEvents([active], [observePredictionTick(active, 101, now + 2000)]), [])
 })
 
-test('target, stop and agent exit events carry index, direction and booked result exactly once', () => {
+test('trailing, stop and agent exit events carry index, direction and booked result exactly once', () => {
   const pending = record('PUT')
   const active = observePredictionTick(pending, 100, now + 1000)
   for (const [terminal, reason] of [
-    [observePredictionTick(active, 80, now + 2000), 'Target achieved · Exit'],
+    [trailingExit(active, 80, now + 2000), 'Protective exit'],
     [observePredictionTick(active, 112, now + 2000), 'Stop loss · Exit'],
     [exitPredictionEarly(active, now + 2000, 'AGENT_REVERSAL', 'Confirmed opposite completed-candle setup'), 'Agent reversal · Exit'],
   ]) {
@@ -339,10 +343,10 @@ test('target, stop and agent exit events carry index, direction and booked resul
 
 test('candle replay that enters and exits in one sync announces only its recorded outcome', () => {
   const pending = record()
-  const terminal = observePredictionCandles(pending, [bar(now, 100, 121, 99)], now + duration)
-  assert.equal(terminal.status, 'TARGET_HIT')
+  const terminal = observePredictionCandles(pending, [bar(now, 100, 121, 89)], now + duration)
+  assert.equal(terminal.status, 'STOP_LOSS_HIT')
   assert.equal(terminal.entrySource, 'CANDLE')
-  assert.deepEqual(predictionEvents([pending], [terminal]).map(event => event.reason), ['Recorded outcome · Target achieved · Exit'])
+  assert.deepEqual(predictionEvents([pending], [terminal]).map(event => event.reason), ['Recorded outcome · Stop loss · Exit'])
 })
 
 test('Live and Done status include pending calls and all terminal outcomes', () => {
@@ -375,7 +379,7 @@ test('only entered chart-confirmed trades qualify for History, exports and total
   const early = createPredictionRecord({ ...plan(), stage: 'EARLY' })
   const confirmed = record()
   const active = observePredictionTick(confirmed, 100, now + 1000)
-  const settled = observePredictionTick(active, 120, now + 2000)
+  const settled = trailingExit(active, 120, now + 2000)
   const legacyEarlyWin = observePredictionTick(observePredictionTick(early, 100, now + 1000), 120, now + 2000)
   assert.deepEqual([early, confirmed, active, settled, legacyEarlyWin].filter(isConfirmedTrade), [active, settled])
   assert.equal(predictionHistoryStats([legacyEarlyWin, settled].filter(isConfirmedTrade)).resolved, 1)
@@ -420,7 +424,7 @@ test('a newer confirmed candidate replaces an unentered candidate without showin
 })
 
 test('candidate issue time excludes the quote that just settled the preceding trade', () => {
-  const settled = observePredictionTick(observePredictionTick(record(), 100, now + 1000), 120, now + 2000)
+  const settled = trailingExit(observePredictionTick(record(), 100, now + 1000), 120, now + 2000)
   const current = registerConfirmedPrediction([settled], { ...plan('PUT'), id: 'after-exit' }, now + 2500)
   assert.equal(current[1].generatedAt, now + 2500)
   assert.equal(observePredictionTick(current[1], 100, now + 2000).status, 'PENDING')
@@ -429,22 +433,22 @@ test('candidate issue time excludes the quote that just settled the preceding tr
 })
 
 test('exchange clock skew cannot date a replacement before the preceding index exit', () => {
-  const settled = observePredictionTick(observePredictionTick(record(), 100, now + 1000), 120, now + 2500)
+  const settled = trailingExit(observePredictionTick(record(), 100, now + 1000), 120, now + 2500)
   const next = registerConfirmedPrediction([settled], { ...plan('PUT'), id: 'clock-skew-replacement' }, now + 2000)[1]
   assert.equal(next.generatedAt, settled.exitAt)
   assert.equal(observePredictionTick(next, 100, settled.exitAt).status, 'PENDING')
   assert.equal(observePredictionTick(next, 100, settled.exitAt + 1).status, 'ACTIVE')
 })
 
-test('targets and stops settle first and allow a distinct subsequent confirmed trade', () => {
-  for (const [quote, outcome] of [[120, 'TARGET_HIT'], [88, 'STOP_LOSS_HIT']]) {
+test('trailing and initial stops settle first and allow a distinct subsequent confirmed trade', () => {
+  for (const [quote, outcome] of [[120, 'EARLY_EXIT'], [88, 'STOP_LOSS_HIT']]) {
     const active = observePredictionTick(record(), 100, now + 1000)
     assert.equal(registerConfirmedPrediction([active], plan('PUT')).length, 1)
-    const settled = observePredictionTick(active, quote, now + 2000)
+    const settled = outcome === 'EARLY_EXIT' ? trailingExit(active, quote, now + 2000) : observePredictionTick(active, quote, now + 2000)
     assert.equal(settled.status, outcome)
     const current = registerConfirmedPrediction([settled], { ...plan('PUT'), generatedAt: now + 2000 })
     assert.equal(current.length, 2)
-    assert.equal(current[0].points, outcome === 'TARGET_HIT' ? 20 : -12)
+    assert.equal(current[0].points, outcome === 'EARLY_EXIT' ? 20 : -12)
     assert.equal(current[1].status, 'PENDING')
   }
 })

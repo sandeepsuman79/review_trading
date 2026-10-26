@@ -30,7 +30,7 @@ export function predictionEvents(previous: PredictionRecord[], next: PredictionR
     const liveEntry = record.status === 'ACTIVE' && (record.entrySource === 'LIVE' || record.entrySource === undefined && record.latestPriceSource === 'LIVE')
       && (now === undefined || now - record.entryAt! >= -1_000 && now - record.entryAt! <= 30_000)
     if (newEntry && liveEntry) {
-      add('entry', isCommodity(record.instrument) ? 'Confirmed trade · Entry reached' : 'Confirm call · Entry reached', `Entry ${record.entryPrice!.toFixed(2)}. Target ${record.target.toFixed(2)} · Stop loss ${record.stopLoss.toFixed(2)}.`)
+      add('entry', isCommodity(record.instrument) ? 'Confirmed trade · Entry reached' : 'Confirm call · Entry reached', `Entry ${record.entryPrice!.toFixed(2)}. Initial stop ${record.stopLoss.toFixed(2)} · TSL ${(record.protection?.stop ?? record.stopLoss).toFixed(2)}. Open profit · Reference ${record.target.toFixed(2)} does not trigger an exit.`)
     }
     if ((!old || old.status !== record.status) && record.status !== 'PENDING' && record.status !== 'ACTIVE') {
       const reason = record.status === 'TARGET_HIT' ? 'Target achieved · Exit'

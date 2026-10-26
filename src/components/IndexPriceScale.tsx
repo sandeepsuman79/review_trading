@@ -9,7 +9,7 @@ export default function IndexPriceScale({ geometry, min, max, levels, name, view
   const scroll = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => { if (scroll.current) scroll.current.scrollLeft = geometry.width * scaleViews.indexOf(view) }, [view, geometry.width])
   const y = (value: number) => Math.max(7, Math.min(geometry.height - 7, priceScalePosition(value, min, max, geometry.height)))
-  return <div ref={scroll} className="chart-scale-ladder" style={{ left: geometry.left, top: geometry.top, width: geometry.width, height: geometry.height }} tabIndex={0} role="region" aria-label="Scroll left for CE premiums, center for index values, right for PE premiums" onPointerEnter={onInteract} onFocus={onInteract} onPointerDown={event => { event.stopPropagation(); onInteract() }} onPointerMove={event => event.stopPropagation()} onScroll={event => {
+  return <div ref={scroll} className="chart-scale-ladder" style={{ left: geometry.left, top: geometry.top, width: geometry.width, height: geometry.height }} tabIndex={0} role="region" aria-label="Swipe left for the ATM CE chart, center for index values, right for the ATM PE chart" onPointerEnter={onInteract} onFocus={onInteract} onPointerDown={event => { event.stopPropagation(); onInteract() }} onPointerMove={event => event.stopPropagation()} onScroll={event => {
     const selected = Math.max(0, Math.min(2, Math.round(event.currentTarget.scrollLeft / geometry.width)))
     if (scaleViews[selected] !== view) onView(scaleViews[selected])
   }}>

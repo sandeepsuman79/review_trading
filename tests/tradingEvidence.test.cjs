@@ -116,19 +116,21 @@ test('opposing sentiment warns without changing technical scores, confirmation o
   }
 })
 
-test('OI/PCR contributes to technical confluence and independently to the sentiment reference', () => {
+test('legacy technical OI/PCR is separate from the four market-context budgets', () => {
   const input = fixture(), initial = analyzeTradingEvidence(input)
   const changed = analyzeTradingEvidence({ ...input, context: { ...input.context, inputs: { ...input.context.inputs, openInterest: fixture(-1).context.inputs.openInterest } } })
   assert(changed.bullishScore < initial.bullishScore)
   assert(changed.bearishScore > initial.bearishScore)
   assert.deepEqual(initial.layers.map(layer => layer.key), ['chart', 'indicators', 'rsiVwap', 'oi'])
   assert.equal(initial.sentiment.layers.reduce((sum, layer) => sum + layer.weight, 0), 100)
-  assert.equal(initial.sentiment.layers.find(layer => layer.key === 'pcr').bullish, 10)
+  assert.equal(initial.sentiment.layers.find(layer => layer.key === 'pcr'), undefined)
+  assert.equal(changed.sentiment.bullishScore, initial.sentiment.bullishScore)
+  assert.equal(changed.sentiment.bearishScore, initial.sentiment.bearishScore)
 })
 
 test('ATR excludes tight invalidation and insufficient reward without manufacturing new targets', () => {
   const input = fixture()
-  for (const change of [{ atr14: undefined }, { atr14: 15 }, { target: 110 }]) {
+  for (const change of [{ atr14: undefined }, { atr14: 18 }, { target: 110 }]) {
     const result = analyzeTradingEvidence({ ...input, analysis: { ...input.analysis, ...change } })
     assert.equal(result.canConfirm, false)
     assert.match(result.reason, /ATR|risk/)
@@ -212,7 +214,9 @@ test('entry pauses during reassessment, continues observing stops and resumes on
   assert.equal(stopped.status, 'EXPIRED')
   record = observePredictionTick(record, 100, now + 2000, true)
   assert.equal(record.status, 'ACTIVE')
-  assert.equal(observePredictionTick(record, 120, now + 3000, false).status, 'TARGET_HIT', 'reassessment never suspends exit tracking')
+  const beyond = observePredictionTick(record, 120, now + 3000, false)
+  assert.equal(beyond.status, 'ACTIVE', 'reference target does not cap profit during reassessment')
+  assert.equal(observePredictionTick(beyond, beyond.protection.stop, now + 4000, false).earlyExitSource, 'AGENT_PROTECTION', 'reassessment never suspends trailing exits')
   const candle = [new Date(now).toISOString(), 99, 102, 98, 101, 0]
   const waiting = observePredictionCandles(createPredictionRecord(prediction.plan), [candle], now + duration, false)
   assert.equal(waiting.status, 'PENDING')

@@ -1,4 +1,6 @@
 import type { AtmVwapSnapshot } from '../api/atmVwap'
+import { higherConfirmationInterval, type ConfirmationIndicator } from './confirmationQuality'
+import type { ThresholdMode } from './adaptiveConfirmation'
 import type { AngelOneCandle } from '../api/angelOne'
 import type { IndiaVixSnapshot, InstitutionalFlow, MarketContext, MarketOutlook } from '../api/marketContext'
 import { candleIntervalMs } from './candleData'
@@ -46,12 +48,14 @@ const tieOrder: Record<AgentTimeframe, number> = { FIFTEEN_MINUTE: 1, FIVE_MINUT
 const newestFirst = (a: TimeframeReview, b: TimeframeReview) => (b.closedAt ?? -Infinity) - (a.closedAt ?? -Infinity) || tieOrder[a.interval] - tieOrder[b.interval]
 const sameContract = (a?: CommodityContract, b?: CommodityContract) => a?.token === b?.token && a?.symbol === b?.symbol && a?.expiry === b?.expiry && a?.exchange === b?.exchange
 
-/** Each timeframe keeps its own candles, indicator warmup, scores and risk gates.
- * Scores are never combined and a slower view cannot veto a fresh qualified setup.
+/** Each timeframe keeps its own scores. Continuations cannot oppose completed
+ * 15m/1h context; proven structure reversals may, with stricter score/lead floors.
  */
-export function analyzeMultiTimeframe({ candlesByInterval, instrument, now, contract, context, outlook, indiaVix, flowHistory, atmVwap, records = [] }: {
+export function analyzeMultiTimeframe({ candlesByInterval, instrument, now, contract, context, outlook, indiaVix, flowHistory, atmVwap, records = [], confirmationIndicator, thresholdMode }: {
   candlesByInterval: Partial<Record<AgentTimeframe, AngelOneCandle[]>>
   instrument: string
+  confirmationIndicator?: ConfirmationIndicator
+  thresholdMode?: ThresholdMode
   now: number
   contract?: CommodityContract
   context?: MarketContext | null
@@ -64,7 +68,10 @@ export function analyzeMultiTimeframe({ candlesByInterval, instrument, now, cont
   const reviews = chartIntervals.map((interval): TimeframeReview => {
     const candles = candlesByInterval[interval] ?? []
     const rawAnalysis = analyzePriceAction(candles, interval, now, instrument)
-    const evidence = analyzeTradingEvidence({ analysis: rawAnalysis, candles, interval, instrument, now, context, outlook, indiaVix, flowHistory, atmVwap })
+    const higher = higherConfirmationInterval(interval)
+    const evidence = analyzeTradingEvidence({ analysis: rawAnalysis, candles, interval, instrument, now, context, outlook, indiaVix, flowHistory, atmVwap,
+      confirmationContext: { higherCandles: higher ? candlesByInterval[higher as AgentTimeframe] ?? [] : undefined, indicator: confirmationIndicator,
+        regimeCandles: candlesByInterval.FIFTEEN_MINUTE ?? [], thresholdMode } })
     const analysis = evidence.selectedAnalysis ?? rawAnalysis
     const candidate = buildEarlyPrediction(analysis, instrument, interval, now, context, outlook, evidence, contract)
     const prediction = currentSetupPrediction(candidate, records, candles, now)
@@ -84,7 +91,7 @@ export function analyzeMultiTimeframe({ candlesByInterval, instrument, now, cont
 
 function assembledAssessment(instrument: string, contractToken: string | undefined, now: number, reviews: TimeframeReview[]): MultiTimeframeAssessment {
   const selectedReview = reviews.filter(review => review.plan).sort(newestFirst)[0]
-  const directional = reviews.filter(review => review.current && review.status !== 'WARMING_UP').map(review => review.plan?.side ?? (review.evidence.bias === 'BULLISH' ? 'CALL' : review.evidence.bias === 'BEARISH' ? 'PUT' : undefined))
+  const directional = reviews.filter(review => review.current && review.status !== 'WARMING_UP').map(review => review.plan?.side ?? (review.analysis.side !== 'WAIT' ? review.analysis.side : review.evidence.bias === 'BULLISH' ? 'CALL' : review.evidence.bias === 'BEARISH' ? 'PUT' : undefined))
   return { instrument, contractToken, reviewedAt: now, reviews, selectedReview, selectedPlan: selectedReview?.plan,
     displayReview: selectedReview ?? reviews.find(review => review.interval === 'FIVE_MINUTE')!, conflicts: directional.includes('CALL') && directional.includes('PUT') }
 }

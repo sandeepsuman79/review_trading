@@ -18,7 +18,7 @@ export default function MultiTimeframePanel({ assessment, activeTrade, connected
 }) {
   return <details open className="agent-multi-timeframe" aria-label="Multi-timeframe technical analysis">
     <summary className="agent-market-view-heading"><strong>Timeframe analysis · {assessment.instrument}</strong><span>{assessment.selectedPlan ? `${timeframeInfo[assessment.selectedPlan.interval].label} · ${tradeDirection(assessment.instrument, assessment.selectedPlan.side)}` : 'Waiting for a qualified setup'}</span></summary>
-    <p className="agent-score-note">Any one timeframe can confirm a setup after passing its own checks; all three do not need to agree. The newest fully qualified setup takes priority; ties prefer 5-minute, then 15-minute, then 1-hour. Forming candles cannot confirm an entry.</p>
+    <p className="agent-score-note">Continuation: accepted breakout or pullback with ADX strength, the selected indicator and no opposing higher trend (5m → 15m; 15m → 1h). Reversal: proven opposing-structure break, a momentum turn and stricter scores; EMA crossover may lag. Hourly entries use their own context. Scores stay separate. Newest qualified setup wins; ties prefer 5-minute. Forming candles cannot confirm.</p>
     <div className="agent-timeframe-row" tabIndex={0} aria-label="Scroll timeframe assessments horizontally">
       {assessment.reviews.map(review => {
         const fresh = review.current && now >= review.reviewedAt && now - review.reviewedAt <= 30_000
@@ -49,7 +49,7 @@ export default function MultiTimeframePanel({ assessment, activeTrade, connected
       })}
     </div>
     <p className="agent-score-note">Indicator changes update on each completed candle of their own timeframe. India VIX is a shared risk quote sampled at those observations.</p>
-    {assessment.conflicts && <p className="agent-score-note" role="status">Timeframes currently disagree. Each keeps its own score and confirmation requirements; opposing views remain visible as context.</p>}
+    {assessment.conflicts && <p className="agent-score-note" role="status">Timeframes currently disagree. Scores stay separate; continuations cannot oppose their required higher trend. Reversals need a proven structure break, a momentum turn and stricter scores; missing higher history always blocks.</p>}
     {activeTrade && <p className="agent-score-note">Open trade: {tradeDirection(activeTrade.instrument, activeTrade.side)} · Entry timeframe {timeframeInfo[activeTrade.interval].label}. A fresh fully confirmed opposite setup can close it before any replacement trade.</p>}
     {!connected && <p className="agent-score-note" role="status">Stream disconnected · Entries and live exits wait for a fresh matching quote.</p>}
   </details>

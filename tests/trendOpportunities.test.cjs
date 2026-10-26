@@ -110,7 +110,7 @@ for(const kind of ['continuation','impulse'])for(const date of ['2026-10-14','20
    assert.equal(evidence.canConfirm,true,label)
    assert.equal(prediction.plan?.stage,'CONFIRMED',`${label}; ${prediction.reason}`)
    assert.equal(prediction.side,d===1?'CALL':'PUT',label)
-   assert(prediction.plan.riskReward>=1.5);assert(evidence.coverage>=70)
+   assert(prediction.plan.riskReward>=1.2);assert(evidence.coverage>=70)
    assert.equal(evidence.layers.find(layer=>layer.key==='rsiVwap').weight,50)
    assert.equal(evidence.requiredScore,0);assert.equal(evidence.requiredGap,0)
    if(interval==='ONE_HOUR'&&!input.root){
@@ -133,7 +133,7 @@ test('a forming move, stale assessment, absent ATM data or nearby target cannot 
  const rejected=analyzeTradingEvidence({...input,analysis:capped,atmVwap:atmVwapFixture(input.instrument,base.analysis.currentPrice,input.now,1)})
  assert.equal(rejected.canConfirm,false)
  assert(rejected.decisions.find(item=>item.side==='CALL').reasons.includes('RR_BELOW_MINIMUM'))
- assert.equal(tradingEvidenceRules.minimumCoverage,70);assert.equal(tradingEvidenceRules.minimumRewardRisk,1.5)
+ assert.equal(tradingEvidenceRules.minimumCoverage,70);assert.equal(tradingEvidenceRules.minimumRewardRisk,1.2)
 })
 
 test('newly detected opposite setups use the existing fresh post-entry reversal exit checks',()=>{
@@ -146,5 +146,23 @@ test('newly detected opposite setups use the existing fresh post-entry reversal 
   assert.equal(exited.status,'EARLY_EXIT');assert.equal(exited.earlyExitSource,'AGENT_REVERSAL')
   assert.equal(observeConfirmedAgentReversal({...record,entryAt:input.now-1000},plan,input.now).status,'ACTIVE')
   assert.equal(observeConfirmedAgentReversal({...record,latestPriceAt:input.now-31000},plan,input.now).status,'ACTIVE')
+ }
+})
+
+test('zero-volume spot indices can confirm both directions with real ATM volume context, without changing thresholds',()=>{
+ for(const market of markets.slice(0,3))for(const direction of [1,-1]){
+  const input=scenario(market,direction,'FIVE_MINUTE')
+  assert(input.candles.every(bar=>bar[5]===0))
+  const analysis=analyzePriceAction(input.candles,input.interval,input.now,input.instrument)
+  const missing=analyzeTradingEvidence({...input,analysis})
+  assert.equal(missing.canConfirm,false)
+  assert(missing.coverage<70)
+  const atm=atmVwapFixture(input.instrument,analysis.currentPrice,input.now,direction)
+  atm.method='BROKER_AVERAGE_PRICE'
+  const ready=analyzeTradingEvidence({...input,analysis,atmVwap:atm})
+  assert.equal(ready.canConfirm,true,`${input.instrument}: ${ready.reason}`)
+  assert.equal(ready.requiredScore,missing.requiredScore);assert.equal(ready.requiredGap,missing.requiredGap)
+  assert.equal(Math.round((ready.coverage-missing.coverage)*10)/10,25)
+  assert(input.candles.every(bar=>bar[5]===0),'option volume must not alter spot candles')
  }
 })

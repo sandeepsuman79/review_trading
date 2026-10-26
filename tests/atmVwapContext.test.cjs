@@ -39,3 +39,42 @@ test('chart and agent requests share ATM candles and isolate strikes, indices an
   auth='B';await getSharedAtmVwap('Nifty 50',22001,now);assert.equal(calls,4)
  } finally { global.fetch=originalFetch;global.localStorage=originalStorage }
 })
+
+test('ATM context requires the exact current strike and fresh valid broker timestamps', () => {
+ const leg={symbol:'fixture',token:'1',exchange:'NFO',close:110,vwap:100,volume:600,asOf:new Date(now).toISOString(),coverage:'FULL_SESSION'}
+ const snapshot={index:'Nifty 50',strike:22000,expiry:'2026-10-20',fetchedAt:new Date(now).toISOString(),method:'BROKER_AVERAGE_PRICE',referenceIndexPrice:22000,ce:leg,pe:{...leg,close:90}}
+ assert.equal(atmVwapBias(snapshot,'Nifty 50',22020,now),'BULLISH')
+ assert.equal(atmVwapBias(snapshot,'Nifty 50',22030,now),undefined)
+ for(const patch of [{fetchedAt:'invalid'},{expiry:'invalid'},{ce:{...leg,asOf:null}},{ce:{...leg,volume:0}},{ce:{...leg,vwap:NaN}},{ce:{...leg,priceAsOf:null}},{ce:{...leg,priceAsOf:new Date(now-120000).toISOString()}}])assert.equal(atmVwapBias({...snapshot,...patch},'Nifty 50',22000,now),undefined)
+})
+test('frontend shares pending ATM requests across heartbeat/minute boundaries and refreshes completed results', async () => {
+ const {getSharedAtmVwap}=require('../src/api/atmVwap.ts')
+ const oldFetch=global.fetch,oldStorage=global.localStorage
+ let calls=0,release
+ global.localStorage={getItem:()=> 'pending-regression'}
+ global.fetch=async()=>{
+  calls++;if(calls===1)await new Promise(resolve=>{release=resolve})
+  const leg={symbol:'fixture',token:'1',exchange:'NFO',close:110,vwap:100,volume:600,asOf:new Date(now).toISOString(),coverage:'FULL_SESSION'}
+  return {ok:true,status:200,json:async()=>({index:'Nifty 50',strike:23000,expiry:'2026-10-20',fetchedAt:new Date(now).toISOString(),method:'BROKER_AVERAGE_PRICE',referenceIndexPrice:23000,ce:leg,pe:{...leg,close:90}})}
+ }
+ try {
+  const first=getSharedAtmVwap('Nifty 50',23000,now)
+  const later=getSharedAtmVwap('Nifty 50',23000,now+60000)
+  assert.equal(first,later);assert.equal(calls,1)
+  release();await Promise.all([first,later])
+  await getSharedAtmVwap('Nifty 50',23000,now+60000)
+  assert.equal(calls,2)
+  await getSharedAtmVwap('Nifty 50',23000,now+60001)
+  assert.equal(calls,2)
+ } finally {global.fetch=oldFetch;global.localStorage=oldStorage}
+})
+
+test('ATM availability exposes specific blockers instead of silently losing the index VWAP input', () => {
+ const {atmVwapContext}=require('../src/api/atmVwap.ts')
+ const snapshot=require('./helpers/atmVwap.cjs')('Nifty 50',22000,now)
+ assert.equal(atmVwapContext(snapshot,'Nifty 50',22000,now).bias,'BULLISH')
+ assert.match(atmVwapContext(undefined,'Nifty 50',22000,now).reason,/Waiting for ATM CE\/PE/)
+ assert.match(atmVwapContext({...snapshot,pe:{...snapshot.pe,volume:0}},'Nifty 50',22000,now).reason,/PE.*no reported traded volume/)
+ assert.match(atmVwapContext({...snapshot,ce:{...snapshot.ce,asOf:null}},'Nifty 50',22000,now).reason,/CE.*timestamp/)
+ assert.match(atmVwapContext(snapshot,'Nifty 50',22050,now).reason,/current index ATM strike/)
+})

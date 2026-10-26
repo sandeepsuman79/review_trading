@@ -801,3 +801,8 @@ button.chart-scale-badge { cursor: pointer; }
 .trajectory-title-scores { display: block; font-size: 10px; font-variant-numeric: tabular-nums; }
 .timeframe-indicator-row > small.agent-text-bullish { color: #15803d; }
 .timeframe-indicator-row > small.agent-text-bearish { color: #b91c1c; }
+
+.candle-volume { border-top: 1px solid #e2e8f0; padding-top: 4px; min-width: 0; }
+.candle-volume > small { padding-left: 12px; color: var(--text-secondary); }
+
+.atm-chart-loading { min-height: 360px; display: grid; place-items: center; padding: 20px; text-align: center; color: var(--text-secondary); }

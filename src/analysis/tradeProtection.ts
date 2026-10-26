@@ -1,7 +1,7 @@
 import type { PredictionRecord } from './predictionHistory'
 import { chartIntervals, timeframeInfo } from './timeframes'
 
-export const protectionRules = { activationR: .75, breakEvenR: 1, atrMultiplier: 1.5, minimumTrailR: .35 }
+export const protectionRules = { activationR: 0, breakEvenR: 1, atrMultiplier: 1.5, minimumTrailR: .35 }
 export type TradeProtection = { version: 1; peakPrice: number; peakAt: number; stop: number; armed: boolean; atr: number; risk: number }
 export type ProtectionAssessment = {
   instrument: string
@@ -20,19 +20,19 @@ export function matchingProtectionAssessment(record: PredictionRecord, review: P
     && Number.isFinite(start) && now >= review.reviewedAt && now - review.reviewedAt <= 30_000
     && now >= start + duration && now < start + 2 * duration
 }
-/** Trail only actual observed quotes. Never loosen the stop or infer an unobserved peak. */
+/** Seed the recorded entry, then trail observed quotes; never loosen or infer candle peaks. */
 export function updateTradeProtection(record: PredictionRecord, price: number, time: number, review?: ProtectionAssessment): PredictionRecord {
-  if (record.status !== 'ACTIVE' || record.entryPrice === undefined || !Number.isFinite(price) || price <= 0 || time < record.entryAt!) return record
+  if (record.status !== 'ACTIVE' || record.entryPrice === undefined || !Number.isFinite(price) || price <= 0 || !Number.isFinite(time) || !Number.isFinite(record.entryAt) || time < record.entryAt! || time < record.observedThrough || time < (record.protection?.peakAt ?? record.entryAt!)) return record
   const d = direction(record), risk = Math.abs(record.entryPrice - record.stopLoss)
   const atr = matchingProtectionAssessment(record, review, time) && typeof review?.atr === 'number' && Number.isFinite(review.atr) && review.atr > 0 ? review.atr : record.protection?.atr ?? record.evidenceSummary?.atr14 ?? risk
-  if (!(risk > 0) || !(atr > 0)) return record
+  if (!Number.isFinite(risk) || !(risk > 0) || !Number.isFinite(atr) || !(atr > 0)) return record
   const previous = record.protection
   const higher = !previous || (price - previous.peakPrice) * d > 0
   const peakPrice = higher ? (price - record.entryPrice) * d > 0 ? price : record.entryPrice : previous.peakPrice
   const gain = (peakPrice - record.entryPrice) * d
   const armed = previous?.armed || gain >= protectionRules.activationR * risk
   let stop = previous?.stop ?? record.stopLoss
-  if (armed) {
+  if (armed && gain > 0) {
     const distance = Math.max(protectionRules.atrMultiplier * atr, protectionRules.minimumTrailR * risk, 2 * (record.contract?.tickSize ?? .01))
     let candidate = peakPrice - d * distance
     if (gain >= protectionRules.breakEvenR * risk) candidate = d === 1 ? Math.max(candidate, record.entryPrice) : Math.min(candidate, record.entryPrice)

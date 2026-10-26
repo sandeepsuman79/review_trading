@@ -1,8 +1,8 @@
+import CandleVolume from './CandleVolume'
 import { useAtmVwap } from '../hooks/useAtmVwap'
 import IndexPriceScale, { type ScaleBadge, type ScaleGeometry } from './IndexPriceScale'
-import { useOptionPremiums } from '../hooks/useOptionPremiums'
 import { indexPriceDomain, indexPriceLevels, type ScaleView } from '../analysis/indexPriceScale'
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from 'react'
 import ReactApexChart from 'react-apexcharts'
 import type { ApexOptions } from 'apexcharts'
 import type { AngelOneCandle, AngelOneStreamTick } from '../api/angelOne'
@@ -17,11 +17,16 @@ import ChartIndicators, { type ChartIndicator, type ChartIndicatorVisibility, ty
 const ApexPlot = memo(ReactApexChart)
 
 type Range = { min: number; max: number }
-type Props = {
+export type CandleChartProps = {
+  chartControls?: ReactNode
+  onViewChange?: (view: ScaleView) => void
   candles: AngelOneCandle[]
   name: string
   intervalLabel: string
   tick?: AngelOneStreamTick
+  quotePrice?: number
+  historyLabel?: string
+  priceStatusLabel?: string
   isLive: boolean
   savedCandleCount: number
   marketHeartbeat: string
@@ -115,8 +120,8 @@ function readIndicatorPreferences(): ChartIndicatorVisibility {
   } catch { return defaultIndicators }
 }
 
-export default function CandleChart({ candles: inputCandles, name, intervalLabel, tick, isLive, savedCandleCount, marketHeartbeat, spotIndex = false, showIndexContext = true, showTradeContext = showIndexContext, optionExpiry, trade, levels, indiaVix, indiaVixLoading, now }: Props) {
-  const [scaleView, setScaleView] = useState<ScaleView>('INDEX')
+export default function CandleChart({ candles: inputCandles, name, intervalLabel, tick, quotePrice, historyLabel = 'Saved locally', priceStatusLabel, isLive, savedCandleCount, marketHeartbeat, spotIndex = false, showIndexContext = true, showTradeContext = showIndexContext, trade, levels, indiaVix, indiaVixLoading, now, chartControls, onViewChange }: CandleChartProps) {
+  const latestPrice = tick?.ltp ?? quotePrice
   const [scaleGeometry, setScaleGeometry] = useState<ScaleGeometry>()
   const candles = useMemo(() => normalizeCandles(inputCandles), [inputCandles])
   const [indicatorVisibility, setIndicatorVisibility] = useState(readIndicatorPreferences)
@@ -253,7 +258,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
 
   const averages = useMemo(() => calculateMovingAverageSeries(candles.map(candle => candle[4])), [candles])
   const indicators = useMemo(() => calculateTechnicalIndicatorSeries(candles.map(candle => candle[2]), candles.map(candle => candle[3]), candles.map(candle => candle[4])), [candles])
-  const atm = useAtmVwap(name, tick?.ltp ?? candles[candles.length - 1]?.[4], now, spotIndex)
+  const atm = useAtmVwap(name, latestPrice ?? candles[candles.length - 1]?.[4], now, spotIndex)
   const vwap = useMemo(() => calculateSessionVwap(candles), [candles])
   const hasVwap = vwap.some(value => value !== undefined)
 
@@ -281,7 +286,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
       const candle = index === undefined ? undefined : candles[index]
       const element = document.createElement('div')
       element.className = 'candle-chart-tooltip'
-      if (candle) element.textContent = `${candleDate(candle[0])} IST\nOpen: ${price(candle[1])}\nHigh: ${price(candle[2])}\nLow: ${price(candle[3])}\nClose: ${price(candle[4])}\nVolume: ${candle[5].toLocaleString('en-IN')}`
+      if (candle) element.textContent = `${candleDate(candle[0])} IST\nOpen: ${price(candle[1])}\nHigh: ${price(candle[2])}\nLow: ${price(candle[3])}\nClose: ${price(candle[4])}\n${spotIndex ? 'Spot volume: unavailable; see ATM options below' : `Volume: ${candle[5].toLocaleString('en-IN')}`}`
       return element
     }
     const visible = candles.slice(Math.max(0, Math.ceil(min)), Math.min(candles.length, Math.floor(max) + 1))
@@ -290,7 +295,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
       if (point.x >= min && point.x <= max && typeof point.y === 'number') values.push(point.y)
     }))
     if (max >= candles.length - 1) {
-      if (tick?.ltp !== undefined) values.push(tick.ltp)
+      if (latestPrice !== undefined) values.push(latestPrice)
       if (trade) values.push(trade.entry, trade.stopLoss, trade.target)
     }
     const low = values.reduce((result, value) => Math.min(result, value), Infinity)
@@ -299,7 +304,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
     const shift = (high - low + padding * 2) * priceShift
     const domain = spotIndex ? indexPriceDomain(low - padding + shift, high + padding + shift, name) : { min: low - padding + shift, max: high + padding + shift }
     // Reserve only the width of the full prices, including the bold live marker.
-    const axisLabelWidth = Math.max(spotIndex ? 70 : 0, measureScale([domain.min, domain.max, tick?.ltp ?? high, ...horizontalLines.map(line => line.price)]), trade || levels ? priceScaleReserve : 0)
+    const axisLabelWidth = Math.max(spotIndex ? 70 : 0, measureScale([domain.min, domain.max, latestPrice ?? high, ...horizontalLines.map(line => line.price)]), trade || levels ? priceScaleReserve : 0)
     return {
       chart: {
         type: 'candlestick', background: 'transparent', foreColor: '#6B7280',
@@ -337,20 +342,21 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
           label: { text: `${level.label} ${price(level.value)}`, position: 'right', textAnchor: 'start', offsetX: 4, offsetY: level.id.endsWith('support') ? 7 : -7, borderColor: level.color,
             style: { background: level.color, color: '#fff', fontSize: '10px', fontWeight: 600, padding: { left: 2, right: 2, top: 2, bottom: 2 } } },
         }))),
-        ...(tick?.ltp !== undefined ? [{
-          id: 'live-index-price', y: tick.ltp, borderColor: '#6C63FF', strokeDashArray: 4,
+        ...(latestPrice !== undefined ? [{
+          id: 'live-index-price', y: latestPrice, borderColor: '#6C63FF', strokeDashArray: 4,
           label: {
-            text: price(tick.ltp), position: 'right', textAnchor: 'start', offsetX: 4, offsetY: 7, borderColor: '#6C63FF',
+            text: price(latestPrice), position: 'right', textAnchor: 'start', offsetX: 4, offsetY: 7, borderColor: '#6C63FF',
             style: { background: '#6C63FF', color: '#fff', fontSize: '10px', fontWeight: 600, padding: { left: 2, right: 2, top: 2, bottom: 2 } },
           },
         }] : []),
         ...(trade ? [
           { id: 'trade-level-entry', label: 'ENTRY', value: trade.entry, color: '#64748B', background: '#F1F5F9', textColor: '#334155' },
-          { id: 'trade-level-stop', label: 'SL', value: trade.stopLoss, color: '#EF4444', background: '#FEE2E2', textColor: '#B91C1C' },
-          { id: 'trade-level-target', label: 'TGT', value: trade.target, color: '#22C55E', background: '#DCFCE7', textColor: '#166534' },
+          { id: 'trade-level-stop', label: trade.trailingStop === trade.stopLoss ? 'SL / TSL' : 'SL', value: trade.stopLoss, color: '#EF4444', background: '#FEE2E2', textColor: '#B91C1C' },
+          { id: 'trade-level-target', label: 'REF', value: trade.target, color: '#22C55E', background: '#DCFCE7', textColor: '#166534' },
+          ...(trade.trailingStop !== undefined && trade.trailingStop !== trade.stopLoss ? [{ id: 'trade-level-trailing', label: 'TSL', value: trade.trailingStop, color: '#D97706', background: '#FEF3C7', textColor: '#92400E' }] : []),
         ].map(level => ({
           id: level.id, y: level.value, borderColor: level.color, strokeDashArray: 5,
-          label: { text: `${level.label} ${price(level.value)}`, position: 'right', textAnchor: 'start', offsetX: 4, offsetY: 7, borderColor: level.color,
+          label: { text: `${level.label} ${price(level.value)}`, position: 'right', textAnchor: 'start', offsetX: 4, offsetY: level.id === 'trade-level-trailing' ? -11 : 7, borderColor: level.color,
             style: { background: level.background, color: level.textColor, fontSize: '10px', fontWeight: 600, padding: { left: 2, right: 2, top: 2, bottom: 2 } } },
         })) : []),
         ...horizontalLines.map(line => ({
@@ -368,18 +374,16 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
         })),
       ] },
     }
-  }, [candles, min, max, series, tick?.ltp, priceShift, horizontalLines, compact, trade, levels, priceScaleReserve, name, spotIndex, syncChartScale])
+  }, [candles, min, max, series, latestPrice, priceShift, horizontalLines, compact, trade, levels, priceScaleReserve, name, spotIndex, syncChartScale])
 
   const axis = options.yaxis as { min?: number; max?: number }
   const scaleMin = axis.min ?? 0, scaleMax = axis.max ?? 0
   const scaleLevels = useMemo(() => indexPriceLevels(scaleMin, scaleMax, name), [scaleMin, scaleMax, name])
-  const premiums = useOptionPremiums(name, scaleLevels, spotIndex && hasCandles && scaleView !== 'INDEX')
-  const expiry = [premiums.data?.expiry, optionExpiry].find(value => value && /^\d{4}-\d{2}-\d{2}$/.test(value) && Date.parse(`${value}T15:30:00+05:30`) > now)
-  const expiryLabel = expiry ? `${expiry.slice(8, 10)}/${expiry.slice(5, 7)} E` : '— E'
   const scaleBadges: ScaleBadge[] = [
-    ...(tick?.ltp !== undefined ? [{ id: 'live', value: tick.ltp, text: price(tick.ltp), background: '#6C63FF' }] : []),
+    ...(latestPrice !== undefined ? [{ id: 'live', value: latestPrice, text: price(latestPrice), background: '#6C63FF' }] : []),
     ...([{ id: 'support', value: levels?.support, prefix: 'S', background: '#15803D' }, { id: 'resistance', value: levels?.resistance, prefix: 'R', background: '#B91C1C' }].filter((level): level is typeof level & { value: number } => level.value !== undefined).map(level => ({ ...level, text: `${level.prefix} ${price(level.value)}` }))),
-    ...(trade ? [{ id: 'entry', value: trade.entry, text: `ENTRY ${price(trade.entry)}`, background: '#F1F5F9', color: '#334155' }, { id: 'stop', value: trade.stopLoss, text: `SL ${price(trade.stopLoss)}`, background: '#FEE2E2', color: '#B91C1C' }, { id: 'target', value: trade.target, text: `TGT ${price(trade.target)}`, background: '#DCFCE7', color: '#166534' }] : []),
+    ...(trade ? [{ id: 'entry', value: trade.entry, text: `ENTRY ${price(trade.entry)}`, background: '#F1F5F9', color: '#334155' }, { id: 'stop', value: trade.stopLoss, text: `SL ${price(trade.stopLoss)}`, background: '#FEE2E2', color: '#B91C1C' }, { id: 'target', value: trade.target, text: `REF ${price(trade.target)}`, background: '#DCFCE7', color: '#166534' }] : []),
+    ...(trade?.trailingStop !== undefined ? [{ id: 'trailing', value: trade.trailingStop, text: `${trade.trailingStop === trade.stopLoss ? 'SL / TSL' : trade.trailingStop === trade.entry ? 'ENTRY / TSL' : 'TSL'} ${price(trade.trailingStop)}`, background: '#FEF3C7', color: '#92400E' }] : []),
     ...horizontalLines.map(line => ({ id: `line-${line.id}`, value: line.price, text: price(line.price), background: '#2563EB', remove: () => { setMarker(null); setHorizontalLines(current => current.filter(item => item.id !== line.id)) } })),
   ]
 
@@ -425,7 +429,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
     inspectCandle(event)
   }
 
-  if (!candles.length) return <section ref={chartRef} className="candle-chart" aria-label={`${name} ${intervalLabel} chart`} style={{ padding: 12 }}><div className="candle-chart-title"><strong>{name}</strong><span aria-hidden="true">·</span><strong>{intervalLabel}</strong></div><span className="candle-market-heartbeat">{marketHeartbeat}</span><p style={{ color: 'var(--text-secondary)' }}>No candle data returned.</p></section>
+  if (!candles.length) return <section ref={chartRef} className="candle-chart" aria-label={`${name} ${intervalLabel} chart`} style={{ padding: 12 }}><div className="candle-chart-title"><strong>{name}</strong><span aria-hidden="true">·</span><strong>{intervalLabel}</strong></div><span className="candle-market-heartbeat">{marketHeartbeat}</span><p style={{ color: 'var(--text-secondary)' }}>No candle data returned.</p>{chartControls}</section>
 
   return (
     <section ref={chartRef} className={`candle-chart${spotIndex && scaleGeometry ? ' has-strike-scale' : ''}`} aria-label={`${name} ${intervalLabel} chart`}>
@@ -438,7 +442,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
           <div className="candle-chart-identity">
             <span className="candle-market-heartbeat" aria-label={`${name} market heartbeat`}>{marketHeartbeat}</span>
             <span className="candle-chart-history">
-              {savedCandleCount} candles · {isLive ? 'Live' : 'Waiting for live tick'}{savedCandleCount ? ' · Saved locally' : ''}
+              {savedCandleCount} candles · {priceStatusLabel ?? (isLive ? 'Live' : 'Waiting for live tick')}{savedCandleCount ? ` · ${historyLabel}` : ''}
             </span>
           </div>
           <div className="candle-chart-details" role="status" aria-label="Candle OHLC and volume">
@@ -447,7 +451,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
             <span>High <b>{price(selected[2])}</b></span>
             <span>Low <b>{price(selected[3])}</b></span>
             <span>Close <b>{price(selected[4])}</b></span>
-            <span>Volume <b>{selected[5].toLocaleString('en-IN')}</b></span>
+            {spotIndex ? <span>ATM session volume · CE <b>{atm.data?.ce.volume.toLocaleString('en-IN') ?? '—'}</b> / PE <b>{atm.data?.pe.volume.toLocaleString('en-IN') ?? '—'}</b></span> : <span>Volume <b>{selected[5].toLocaleString('en-IN')}</b></span>}
           </div>
           <div className="candle-chart-zoom" aria-label="Chart zoom controls">
             <button type="button" onClick={() => zoom(1.5)} aria-label="Zoom out">−</button>
@@ -460,7 +464,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
       <div className="candle-price-viewport">
         <div ref={plotRef} className="apex-candle-plot" onPointerDown={startDrag} onPointerMove={movePointer} onPointerUp={() => { dragRef.current = null }} onPointerCancel={() => { dragRef.current = null }} onLostPointerCapture={() => { dragRef.current = null }} onPointerLeave={(event) => { if (event.pointerType === 'mouse' && !dragRef.current) { setSelectedTime(null); setMarker(null) } }}>
           <ApexPlot options={options} series={series} type="candlestick" height={360} width="100%" />
-          {spotIndex && scaleGeometry && <IndexPriceScale geometry={scaleGeometry} min={scaleMin} max={scaleMax} levels={scaleLevels} name={name} view={scaleView} onView={setScaleView} data={premiums.data} badges={scaleBadges} onInteract={() => { setMarker(null); setSelectedTime(null) }} />}
+          {spotIndex && scaleGeometry && <IndexPriceScale geometry={scaleGeometry} min={scaleMin} max={scaleMax} levels={scaleLevels} name={name} view="INDEX" onView={view => onViewChange?.(view)} badges={scaleBadges} onInteract={() => { setMarker(null); setSelectedTime(null) }} />}
           {marker && <div className="candle-crosshair">
             <div className="candle-crosshair-vertical" aria-hidden="true" style={{ left: marker.x, top: marker.top, height: marker.height }} />
             <div className="candle-crosshair-horizontal" aria-hidden="true" style={{ left: marker.left, top: marker.y, width: marker.width }} />
@@ -483,6 +487,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
           if (Math.abs(shift - priceShift) > 0.01) scheduleInteraction(() => { setMarker(null); setPriceShift(shift) })
         }}><div style={{ height: '500%', width: 1 }} /></div>
       </div>
+      {!spotIndex && <CandleVolume candles={candles} min={min} max={max} name={name} />}
       <div ref={horizontalScrollRef} className="candle-time-scroll" tabIndex={0} role="region" aria-label="Scroll chart history horizontally" onScroll={(event) => {
         const scroll = event.currentTarget
         const available = scroll.scrollWidth - scroll.clientWidth
@@ -490,10 +495,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
         const start = -0.5 + scroll.scrollLeft / available * (totalSpan - span)
         if (Math.abs(start - min) > 0.05) scheduleInteraction(() => panTo(start, span))
       }}><div style={{ width: `${100 * totalSpan / span}%`, height: 1 }} /></div>
-      {spotIndex && <div className="chart-scale-controls" aria-label="Index and option price scale controls">
-        <span role="status" title={premiums.data ? `Latest premiums received ${new Date(premiums.data.fetchedAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST; not historical candle premiums` : undefined}>{scaleView === 'INDEX' ? 'Swipe price scale ← CE · PE →' : premiums.error || (premiums.loading ? 'Loading premiums…' : premiums.data ? `${premiums.data.rows.some(row => (scaleView === 'CE' ? row.ce : row.pe).ltp !== null) ? 'Latest ₹ premiums' : `${scaleView} quotes unavailable`} · Expiry ${premiums.data.expiry} · Received ${new Date(premiums.data.fetchedAt).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false })}` : 'Option premiums unavailable')}</span>
-        <div><button type="button" className={scaleView === 'CE' ? 'is-selected' : ''} onClick={() => { setMarker(null); setScaleView('CE') }} aria-label="Show CE premiums">← CE</button><button type="button" className={scaleView === 'INDEX' ? 'is-selected' : ''} onClick={() => { setMarker(null); setScaleView('INDEX') }} aria-label="Show index price levels" title={expiry ? `Nearest option expiry: ${expiry}` : 'Option expiry unavailable'}>{expiryLabel}</button><button type="button" className={scaleView === 'PE' ? 'is-selected' : ''} onClick={() => { setMarker(null); setScaleView('PE') }} aria-label="Show PE premiums">PE →</button></div>
-      </div>}
+      {chartControls}
       <details className="chart-indicator-disclosure" open={spotIndex || undefined}>
         <summary aria-label={showTradeContext ? 'Support, resistance and chart indicators' : 'Chart indicators'}>
           {showTradeContext ? <span className="chart-indicator-summary-levels">
@@ -502,8 +504,8 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
           </span> : <span>Chart indicators</span>}
           <svg className="card-disclosure-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
         </summary>
-        <ChartIndicators visibility={indicatorVisibility} onToggle={key => { setMarker(null); setIndicatorVisibility(current => ({ ...current, [key]: !current[key] })) }}
-          average={averages[selectedIndex] || {}} technical={indicators[selectedIndex] || {}} atmVwap={atm.data} atmVwapError={atm.error} atmIndexPrice={tick?.ltp ?? candles[latest]?.[4]} vwap={vwap[selectedIndex]} hasVwap={hasVwap} spotIndex={spotIndex} showIndexContext={showIndexContext} showTradeContext={showTradeContext}
+        <ChartIndicators onShowAtm={onViewChange ? () => onViewChange('CE') : undefined} visibility={indicatorVisibility} onToggle={key => { setMarker(null); setIndicatorVisibility(current => ({ ...current, [key]: !current[key] })) }}
+          average={averages[selectedIndex] || {}} technical={indicators[selectedIndex] || {}} atmVwap={atm.data} atmVwapError={atm.error} atmIndexPrice={latestPrice ?? candles[latest]?.[4]} vwap={vwap[selectedIndex]} hasVwap={hasVwap} spotIndex={spotIndex} showIndexContext={showIndexContext} showTradeContext={showTradeContext}
           close={selected[4]} trade={trade} indiaVix={indiaVix} indiaVixLoading={indiaVixLoading} now={now} context={`${inspectedIndex >= 0 ? 'Selected candle' : 'Latest candle'} · ${candleDate(selected[0])} IST`} />
       </details>
     </section>

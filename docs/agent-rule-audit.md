@@ -2,9 +2,18 @@
 
 This describes the implementation in this checkout, including the late-entry
 fixes, the multi-timeframe update from 16 October 2026 and the RSI/VWAP weighting
-and ATM display fixes from 22 October 2026. It applies to Nifty 50, Sensex, Bank Nifty, Natural Gas,
+and ATM display fixes from 22 October 2026, and the revised confirmation policy
+from 26 October 2026 ([full algorithm and sources](chart-confirmation.md), section 22).
+It applies to Nifty 50, Sensex, Bank Nifty, Natural Gas,
 Crude Oil, Silver and Gold. It does not certify the version currently deployed on
 Render or establish prediction accuracy.
+
+Current confirmation is **adaptive-confirmation-v3** (section 25 and
+[adaptive rules](adaptive-confirmation.md)). Price/indicator rules retain
+**structure-confirmation-v2** (section 23 and
+[full rules](chart-confirmation.md)). It supersedes section 22's mandatory
+EMA/RSI/DMI agreement and matching-higher-trend policy. Older dated sections
+describe previous revisions where explicitly identified.
 
 ## 1. What the agent actually does
 
@@ -18,9 +27,14 @@ bearish scores are evidence ratings, not probabilities.
   candles** for each instrument. Either direction can confirm automatically on any
   eligible interval; scores are not added across intervals and agreement from all
   three is not required.
+  Five-minute confirmation needs completed 15-minute context; 15-minute needs
+  hourly context, each with 50-bar warmup. Continuations cannot oppose it;
+  proven price-structure reversals may, with stricter score/lead floors.
+  Missing/stale higher data always blocks. Hourly entries use their own context.
 - There is no one-minute strategy analysis, background candle sync or one-minute
   signal-based protective exit. Old one-minute ledger records remain readable.
-- Actual stream quotes check entries, stops, targets and trailing protection.
+- Actual stream quotes check entry eligibility, stops and trailing protection.
+  Targets remain entry reward/risk references; open trades have no fixed profit cap.
 - Forming candle extremes can cancel an invalid/finished entry idea. A forming
   candle cannot confirm a new entry.
 - The dashboard must remain running. Trade tracking is browser-local and sends no
@@ -55,7 +69,8 @@ pivot's own timestamp.
 
 Both directions are evaluated independently. An eligible original chart selection
 retains priority; otherwise an eligible alternate candidate can be selected. All
-families still need the technical gates in section 6.
+families still need the technical gates in section 6 and the accepted-break or
+pullback quality event in section 22. A pattern name alone cannot confirm.
 
 | Family | Bullish event | Bearish event |
 | --- | --- | --- |
@@ -136,9 +151,9 @@ no coverage or points and its weight is not redistributed. Scores round to one d
 
 | Technical input | Maximum points out of 100 | Vote |
 | --- | ---: | --- |
-| Completed price setup | 11.25 | CALL +1; PUT -1; WAIT 0 |
-| Non-indicator chart evidence | 8.75 | Split proportionally between bullish/bearish evidence counts |
-| Price market structure | 5 | Uptrend +1; downtrend -1; other 0 |
+| Completed price setup | 15.75 | CALL +1; PUT -1; WAIT 0 |
+| Non-indicator chart evidence | 12.25 | Split proportionally between bullish/bearish evidence counts |
+| Price market structure | 7 | Uptrend +1; downtrend -1; other 0 |
 | Price vs SMA20 | 1 | Sign of price minus SMA20 |
 | Price vs EMA20 | 1 | Sign of price minus EMA20 |
 | EMA20/50 alignment and EMA20 slope | 5 | Mean of alignment and latest slope signs |
@@ -149,8 +164,8 @@ no coverage or points and its weight is not redistributed. Scores round to one d
 | RSI swing structure | 10 | HH/HL +1; LH/LL −1; mixed 0; confirmed break overrides prior trend |
 | Supertrend(10,3) | 5 | UP +1; DOWN -1 |
 | Session VWAP | 25 | Indices: paired default ATM CE/PE direction; MCX: sign of price minus futures VWAP |
-| PCR | 6 | (PCR − 1) / 0.5 |
-| Call/put OI change balance | 4 | (put change − call change) / (absolute changes total), using 1 if that total is zero |
+| PCR | 0 technical | Context only; positioning heuristic |
+| Call/put OI change balance | 0 technical | Context only; writing unverified |
 
 **RSI including its swing structure is 25%; VWAP is 25%: together exactly 50%.**
 
@@ -160,19 +175,19 @@ It does not set confirmation to 50 points, lower a score/lead cutoff, or award
 actual support/opposition depends on their observed signals. The other inputs
 share the remaining 50 points, and all existing confirmation checks still apply.
 For example, if a rule requires support ≥55 and lead ≥15, those cutoffs remain
-55 and 15 after increasing RSI/VWAP weights. In this checkout, STANDARD confirmed
-setups already use positive support ≥1.5× opposition; EARLY ideas retain 55/15,
-and elevated India VIX retains 65/20. The weighting change does not alter any of
-these rules.
+55 and 15 after increasing RSI/VWAP weights. The later v2 policy separately
+changes the gates to continuation 55/15 and reversal 65/20; elevated India VIX
+retains 65/20. The old 1.5× gate remains only in the explicit legacy baseline.
 
-The four group budgets are **chart 25, other indicators 15, RSI structure + VWAP 50,
-OI/PCR 10**. Index ATM validation uses the fresh request’s reference index quote,
+Current budgets are **chart 35, other indicators 15, RSI structure + VWAP 50**.
+OI/PCR is context only. The legacy baseline retains 25/15/50/10.
+Index ATM validation uses the fresh request’s reference index quote,
 so an older 15-minute/hourly close cannot reject the current ATM strike. RSI swings use the existing same-session confirmed indicator pivots
 (up to 32 completed bars; one-point RSI noise). Missing pivots earn no structure
 coverage or points. A break below the last HL votes bearish; a break above the
 last LH votes bullish. Forming candles cannot change this vote. The same fixed
 weights apply on 5/15/60-minute setups and fully confirmed opposite setups used
-for reversal exits. Stops, targets, ATR trailing protection and scheduled exits
+for reversal exits. Stops, ATR trailing protection and scheduled exits
 continue independently of directional scores.
 
 OI must be fresh, match the underlying and have an unexpired expiry. OI totals,
@@ -191,27 +206,33 @@ Source: [tradingEvidence.ts](../src/analysis/tradingEvidence.ts).
 
 ## 6. All requirements for a fully confirmed setup
 
-1. Completed price pattern and a matching alignment route.
+1. Completed price pattern/event and the explicitly selected confirmation indicator.
 2. At least 50 completed bars, warmed EMA20/50, RSI/momentum and Supertrend.
-3. Latest completed candle is current; final two bars are consecutive in the current
+3. Latest completed candle is current; final three bars are consecutive in the current
    IST session. New setups cannot be produced from an old saved chart.
 4. Technical coverage ≥70%.
-5. STANDARD: positive supporting score ≥1.5× the opposing score. This replaces the normal 55-score / 15-point lead floors; 15 versus 10 qualifies directionally. Zero versus zero never qualifies.
+5. CONTINUATION: support ≥55 and lead ≥15. REVERSAL: support ≥65 and lead ≥20.
+   These v2 floors replace the old 1.5× ratio gate. Zero versus zero never qualifies.
 6. STRONG classification: support ≥60 and lead ≥20; it does not bypass other gates.
 7. If equity India VIX ≥25 or its daily change ≥+10%, require support ≥65 and lead ≥20.
    Missing VIX is disclosed; it does not manufacture a low-volatility reading.
 8. Positive valid entry/stop/target in the correct directional order.
 9. Stop covers structural invalidation and at least 1 ATR14, rounded outward.
-10. Planned reward/risk ≥1.5 after ATR adjustment and broker tick rounding. An observed
+10. Planned reward/risk ≥1.20 after ATR adjustment and broker tick rounding. An observed
     opposing level remains a target cap; it is not moved farther to force approval.
 11. Entry hours: indices weekdays 09:15–15:15 IST (application cutoff); MCX weekdays
     09:00–23:30 or 23:55 IST according to configured US daylight-saving handling.
 12. Valid exact, unexpired MCX futures contract for a commodity.
+13. Revised price/regime checks: three consecutive current-session bars,
+    fresh higher context, exactly one selected indicator, bounded entry extension,
+    accepted continuation or proven opposing-structure reversal, genuine
+    participation and matching VWAP (section 23).
 
 These requirements apply independently to each of the three analysis intervals.
 There must be at least 50 completed bars on that interval; 50 five-minute bars do
-not warm up the hourly model. The visible seven-check count groups these
-conditions. Four out of seven cannot create a fully confirmed trade by itself.
+not warm up the hourly model. The revised view adds price-quality and VWAP
+diagnostics to the original seven check groups. Partial checks cannot create a
+fully confirmed trade.
 
 ## 7. Entry is separate from setup confirmation
 
@@ -219,7 +240,7 @@ A confirmed setup first becomes PENDING. It becomes ACTIVE only on an eligible
 observed quote after issue. Entry requires a connected stream, quote ≤30 seconds
 old, matching instrument/contract, current revalidation checked ≤30 seconds ago,
 identical signal/side/levels, trigger reached, no invalidation and actual-quote
-reward/risk ≥1.5. Revalidation must match the chosen signal's actual timeframe.
+reward/risk ≥1.20. Revalidation must match the chosen signal's actual timeframe.
 One open position per instrument is permitted across all intervals; it must close
 before another can enter. A chart interval change cannot reopen an old signal.
 After an agent-confirmed reversal exit, the exited side cannot reopen from another
@@ -259,15 +280,17 @@ Sources: [setupTiming.ts](../src/analysis/setupTiming.ts),
 
 Existing positions continue monitoring even while the entry model says WAIT.
 
-- Original stop/target and scheduled square-off take priority. Crossed stops use
-  actual observed quotes; targets conservatively use the planned target.
+- Original stop and scheduled square-off take priority. Crossed stops use
+  actual observed quotes. The setup target remains an entry reward/risk reference;
+  reaching it after entry never closes the trade or caps booked points.
 - A current fully confirmed opposite 5-minute, 15-minute or 1-hour plan can exit,
   without first opening its replacement. A full candle formed after entry,
   correct contract and fresh live quote after its close are required.
 - Each reversal candidate passes its own full pattern, coverage, score, ATR and
   reward/risk gates. A direction vote, developing candle or disagreement between
   intervals alone cannot close a trade. The one-minute pressure exit is removed.
-- ATR trail: arm at 0.75R observed favourable movement; distance is
+- ATR trail: initialize automatically at observed confirmed entry, keeping the initial
+  stop. Tighten after observed favourable movement; distance is
   max(1.5 × eligible timeframe ATR, 0.35R, two ticks). Use a current matching
   completed-frame assessment, then the saved protective ATR, entry ATR or initial
   risk when unavailable. At 1R the stop cannot stay behind entry.
@@ -275,41 +298,99 @@ Existing positions continue monitoring even while the entry model says WAIT.
 - Reversal revalidation and the matching live quote must be current (≤30 seconds
   old). The confirmed candle must remain current for its own interval and be
   wholly after entry. The price can gap beyond a protective stop.
-- Gaps/missing observations are replayed conservatively. Unknown intrabar ordering
-  is AMBIGUOUS or UNVERIFIED, not an invented winning fill.
+- Gaps/missing observations are replayed conservatively. Saved stops are checked
+  before each completed close can tighten the trail for the next bar. Unknown
+  entry/stop ordering is AMBIGUOUS; overlapping recovery bars preserve the active
+  position until an observed exit or sufficient recovery data arrives. A fresh
+  same-session quote breaching the saved SL/TSL records its observed exit directly.
 - Points = (exit − entry) for CALL/LONG, (entry − exit) for PUT/SHORT. These are
   underlying/futures points; no option premium return or broker execution is inferred.
 
-The 0.75R/1R/ATR parameters are experimental, not an established optimum.
+The entry-active TSL, 1R break-even and ATR parameters are experimental, not an established optimum.
 Sources: [predictionHistory.ts](../src/analysis/predictionHistory.ts),
 [tradeProtection.ts](../src/analysis/tradeProtection.ts).
 
 ## 9. ATM CE/PE VWAP context
 
-For the three equity indices, resolve actual nearest-expiry ATM CE and PE tokens.
-Each leg uses sum(HLC3 × actual one-minute volume) / sum(volume), from 09:15 to the
-latest completed minute. CE above its own VWAP plus PE below its own VWAP supports
-upward context; the inverse supports downward context; disagreement is mixed.
-Both legs need contiguous coverage from the session open through their latest available
-completed minute, positive volume, current
-expiry, data younger than two minutes and a strike still within one strike interval
-of current spot (Nifty 50: 50; Sensex/Bank Nifty: 100). Partial/stale data supplies
-no directional context. A delayed trailing broker minute does not invalidate the
-contiguous history; the independent two-minute age limit still applies. Chart and
-agent consumers share one ATM request per index/strike/minute. Before open, after
-close and on weekends the display loads the most recent weekday session, with
-strike, expiry, CE/PE prices and data timestamp. Last-session values remain display
-context and cannot earn current-session points. Broker outages, absent contracts
-or zero traded volume still cannot produce an invented VWAP.
-The one-minute option candles are raw volume data for
-this calculation, not a strategy timeframe. This paired direction supplies the technical VWAP allocation on each strategy
-timeframe. It does not supply a one-minute entry/exit trigger.
-Sources: [atmVwap.js](../server/atmVwap.js), [atmVwap.ts](../src/api/atmVwap.ts).
+For Nifty 50, Sensex and Bank Nifty, resolve actual nearest-expiry CE/PE tokens at
+**the current ATM strike** (50-point Nifty steps, 100-point Sensex/Bank Nifty steps).
+Refresh the pair every ten seconds using SmartAPI FULL quotes: each leg's broker
+session average price (`avgPrice`), cumulative traded volume (`tradeVolume`), LTP
+and IST exchange trade timestamp. Polls never count as trades or add volume.
+CE above its own average plus PE below its own average supports upward context;
+the inverse supports downward context; disagreement is mixed.
+
+If a broker average is absent, load sum(HLC3 × actual one-minute volume) /
+sum(volume) separately, from 09:15 through the latest available completed minute.
+Fallback candle requests share the history queue, overlap the last saved minute
+and run at most once per minute for each session/contract pair. They never block
+subsequent quote heartbeats. Live LTP can update against the saved candle VWAP;
+its exchange timestamp is checked independently from the VWAP timestamp.
+
+Both legs need positive volume, current expiry, the exact current ATM strike,
+and current-session data younger than two minutes. A candle-derived average also
+requires contiguous coverage from open. Partial/stale data supplies no points.
+The display identifies the source, strike, expiry, LTPs and timestamps. Before
+open, after close and on weekends, the latest available session can remain visible
+but cannot earn current-session points. Chart and agent consumers share pending
+requests across heartbeat/minute boundaries, scoped by login, index and strike.
+Missing contracts, volume and broker outages cannot produce an invented VWAP.
+Raw one-minute option candles are volume input, not a strategy timeframe. This
+paired direction supplies the existing 25-point technical VWAP allocation on each
+strategy timeframe; confirmation thresholds and the RSI 25-point budget are unchanged.
+Sources: [atmVwap.js](../server/atmVwap.js), [atmVwap.ts](../src/api/atmVwap.ts),
+[SmartAPI market data](https://smartapi.angelone.in/docs).
+
+Index spot candles report no traded volume, so option-premium prices and VWAP
+must use their own price axis. A single chart area uses the existing
+**CE / expiry / PE** switch: CE shows the current ATM call; PE shows the current
+ATM put; the expiry button returns to the index chart (the initial view). There
+is no separate ATM panel. Option views use the selected 5/15/60-minute interval,
+actual option candles, per-candle volume bars, candle-volume VWAP and
+EMA/RSI/Supertrend metrics. The index VWAP control selects the ATM CE view. The ATM card
+and chart header show the separate CE and PE cumulative session volumes.
+The displayed option VWAP line is the HLC3 candle estimate, while the live card
+can use the broker session average; these sources are labeled separately.
+
+Only the visible ATM chart requests option history, once per minute with a
+publication grace. Requests share pending work across minute boundaries, scope
+caches by login/index/strike/expiry/token/interval, overlap the last broker bar,
+and accept corrections without adding the same volume twice. Switching ATM
+strike loads that contract's actual history; charts never splice different
+strikes together. History reads cannot block the ten-second live quote feed.
+Chart warmup uses only available history for that actual contract.
+
+An unavailable ATM feed removes the 25-point VWAP input from evidence coverage;
+with missing OI/PCR or RSI structure this can prevent reaching 70% coverage even
+in a strong price trend. The agent now shows specific missing/old CE/PE values,
+volume, expiry or timestamp reasons alongside its existing setup diagnostics.
+Tests confirm that all three zero-volume spot indices can produce bullish and
+bearish confirmed setups with current ATM volume context, without lowering any
+confirmation, freshness, risk or coverage requirement. Option-chart indicators
+are display context; they do not create an additional strategy or independent
+entry/exit score.
+Sources: [IndexOptionChart.tsx](../src/components/IndexOptionChart.tsx),
+[atmOptionCandles.ts](../src/api/atmOptionCandles.ts),
+[CandleVolume.tsx](../src/components/CandleVolume.tsx),
+[tradingEvidence.ts](../src/analysis/tradingEvidence.ts).
+
+Historical chart sync now checks every 15 seconds while visible and on focus,
+reconnection and authentication changes. During exchange hours, a completed
+5/15/60-minute candle becomes due after a five-second publication grace; the
+shortened final bar is also reconciled after close. Only successful broker
+responses advance the incremental cursor; live ticks cannot conceal unsynced
+history. An individual request timeout cancels that request and permits retries
+and subsequent instruments to continue. The selected chart shows its latest
+successful historical response time and the returned candle coverage time. Authentication failures pause automatic
+retries until credentials change or a manual refresh is requested.
+Sources: [historySync.ts](../src/analysis/historySync.ts),
+[PredictionPage.tsx](../src/pages/PredictionPage.tsx).
 
 ## 10. Sentiment, early ideas, history and gap outlook
 
-Sentiment remains separate: flows 30%, news 30%, global 30%, PCR reference 10%.
-It requires ≥40% coverage and a sufficiently observed non-PCR group; a lead below
+Equity sentiment remains separate: FII/DII 40%, GIFT Nifty 30%, global markets 15%
+and news 15%. GIFT is excluded from global markets and PCR has zero weight.
+It requires ≥40% coverage and a sufficiently observed positive-budget group; a lead below
 15 is neutral. It cannot create, veto or close a technical trade. Sources retain
 publication times; polling each minute does not mean new news/flow reports exist.
 MCX uses commodity-specific news/global benchmarks and excludes equity flows.
@@ -327,8 +408,10 @@ override a missing current pattern, expired setup or invalid risk/quote. They do
 not establish real-time trade accuracy.
 
 The separate equity-index next-session gap outlook is available any time after
-15:00 IST and updates from current external sentiment: FII/DII, news, global
-markets including GIFT Nifty, and available PCR reference. No completed index
+15:00 IST and updates from the same four equity context inputs: FII/DII 40,
+GIFT Nifty 30, global markets 15 and news 15. PCR has no gap-outlook score,
+coverage or displayed row. Full coverage can reach 100%; missing inputs are not
+redistributed. No completed index
 chart is required. It refreshes overnight until the next weekday open, uses
 publication-age and coverage checks, and cannot enter, veto or close an intraday trade. Full sentiment component formulas, freshness windows, historical
 sampling and gap-outlook rules are in [trading-agent.md](trading-agent.md).
@@ -346,8 +429,9 @@ Multi-timeframe tests cover independent indicator warmup, missing/stale/gapped
 history, completed-candle exclusion and 5/15/60-minute signal selection and
 reversals. MCX hourly bars release at their 09:00-aligned close; index hourly
 bars retain the 09:15 alignment. Equal closes now prefer 5 minutes; a newer eligible
-close can select another interval, and an opposite view does not borrow or veto
-another timeframe's confirmation. Reversal checks retain full post-entry candle,
+close can select another interval. The original opposite-view behaviour was
+superseded by section 22: a required opposing higher trend now blocks entry;
+scores remain separate. Reversal checks retain full post-entry candle,
 freshness and exact-contract requirements; old other-frame signals cannot reopen
 the exited side immediately after an agent reversal.
 
@@ -433,9 +517,9 @@ browser closed, and no unseen broker history is claimed.
 ## 14. Compact next-session outlook display
 
 The card shows a prediction for its index, relative up/down evidence percentages,
-and one colored summary row per external input group. Global markets and GIFT
-Nifty share their existing group; FII/DII, news and PCR reference have separate
-rows. Detailed source explanations remain in the saved background assessment.
+and one colored summary row per external input group. GIFT Nifty and global
+markets now have separate rows, alongside FII/DII and news; PCR is excluded.
+Detailed source explanations remain in the saved background assessment.
 Relative percentages are bullish / (bullish + bearish) and bearish /
 (bullish + bearish), not calibrated opening-gap probabilities. Zero total evidence
 shows no percentage. A directional bias requires availability ≥60% and signed
@@ -558,3 +642,325 @@ negative cases and reversal exits. These are scenario checks, not a replay of th
 user's screenshots or evidence of profitability. The reference photos describe
 price action, indicators and news; news remains separate sentiment context and
 introduces no automatic blackout or entry rule from image text.
+
+
+## 19. Requested 1.20 reward/risk floor and automatic TSL
+
+The minimum planned and actual-entry reward/risk is **1.20:1**, changed from
+1.50:1 at the user's request. One shared constant and comparison are used by
+price-action candidate selection, ATR-adjusted evidence, conditional ideas,
+plan generation, entry diagnostics, live/candle entry and offline replay.
+Targets remain based on the original setup; neither stops nor targets are moved
+to manufacture eligibility. A slipped/gapped entry must independently retain
+1.20:1 at the observed fill. RSI/VWAP weights, the 1.5× directional score ratio,
+70% coverage, ATR minimum risk and VIX floors are unchanged.
+
+TSL initializes on observed entry of a confirmed CALL/PUT or MCX LONG/SHORT,
+with the initial stop unchanged. Favourable observed quotes subsequently tighten
+it using max(1.5 × eligible ATR, 0.35 × initial risk, two ticks), rounded outward
+to the contract tick. It never loosens, even when ATR increases. At +1R observed
+movement the stop is at entry or better. A fresh quote crossing TSL closes the
+local tracked trade automatically, independently of an opposite confirmed setup.
+A gap exits at the received quote, not at an invented stop fill. Quotes older than 30 seconds, more than one second in the future,
+or out of order cannot move it. The original SL remains recorded; the
+main card and index/futures chart show the current TSL separately.
+
+Pending confirmation is not an entry and cannot arm protection. A reconstructed
+candle entry seeds only the fill price as the peak; unobserved highs/lows cannot
+create a profitable trail. Replay retains ambiguous outcomes when ordering is
+unknown. The five-minute offline replay does not model tick-driven TSL and
+cannot validate its profitability. Saved protection remains compatible with
+version-1 records and resumes from verified observations after reload.
+
+The rule parameters are an implementation choice, not a demonstrated optimum.
+The 1.20:1 minimum measures room at entry, not the realised winner size. Trailing
+exits produce variable rewards and losses. Production performance requires separate historical/tick
+validation with costs. This remains dashboard-local tracking while running,
+not a broker-held stop or automatic broker order.
+
+Research: [Fidelity ATR guidance](https://www.fidelity.com/learning-center/trading-investing/technical-analysis/technical-indicator-guide/atr)
+describes adapting stops to volatility using an ATR multiple, including 1.5×.
+[Fidelity trailing stops](https://www.fidelity.com/learning-center/trading-investing/trading/trailing-stops-video/)
+explains the favorable-price trailing mechanism and execution/data risks.
+
+## 20. Open profit with trailing protection
+
+Confirmed CALL/CE and PUT/PE trades, and MCX LONG/SHORT trades, remain active when
+the original reference target is reached. There is no fixed take-profit boundary
+at 1.2R, 2R, 3R or higher. The reference is still required before entry: both the
+setup and actual observed entry must provide at least 1.20:1, and an already
+consumed setup cannot be entered late. RSI/VWAP weights and confirmation gates
+are unchanged.
+
+TSL starts with the initial stop and follows favourable observed prices using
+the existing max(1.5 × eligible ATR, 0.35R, two ticks) distance. It tightens in the
+correct direction for CE and PE, reaches entry or better at +1R, and never loosens.
+It can move beyond the reference target. A live stop breach books the actual
+observed quote and uncapped directional points. Initial SL remains the denominator
+for R. Existing confirmed reversal, manual exit and session/contract square-off
+rules still apply.
+
+Both the main agent card and today's confirmed-trade cards show the current TSL
+separately from initial SL. The main card shows current return in R and removes
+the bounded target-progress meter for active trades. Chart target labels are REF.
+
+Saved trails beyond the reference survive version-1 history validation and reload.
+Existing completed TARGET_HIT results remain terminal. Reconnect recovery ignores
+reference crossings and checks the saved stop first. Only known completed closes
+may tighten the trail for subsequent bars; unobserved high/low ordering cannot
+create a synthetic same-bar trailing win. The separate offline five-minute replay
+remains a fixed-target comparison model and cannot validate this live exit policy.
+
+Regression coverage includes all seven instruments in both directions through
+1.2R/2R/3R/5R, observed gap exits, persistence past the reference, one-position
+enforcement, recovery, entry reward/risk checks and rendered CE/PE cards.
+The 258 targeted tests pass across agent, analysis, history/open-profit,
+commodities, storage, replay and enhancement suites. Production build, lint and
+diff checks pass; Vite retains its existing large-chunk advisory. Authenticated
+broker data and interactive browser operation were not exercised.
+
+Sources: [predictionHistory.ts](../src/analysis/predictionHistory.ts),
+[tradeProtection.ts](../src/analysis/tradeProtection.ts),
+[openProfit.test.cjs](../tests/openProfit.test.cjs).
+
+## 21. Persist observed exits and separate quote recovery from settlement
+
+Two paths could incorrectly show Unverified around an SL/TSL exit:
+
+- After a quote gap, replay examined an overlapping candle before the fresh
+  stop-crossing quote. A low/high formed before the saved quote or TSL could
+  retire the active position before that actual exit observation was processed.
+- A newer UNVERIFIED/AMBIGUOUS/ACTIVE snapshot in fallback storage could replace
+  a previously completed exit in IndexedDB during migration or recovery.
+
+Fresh, correctly matched same-session quotes that breach an already saved stop
+now settle immediately at their actual price and timestamp. Stop gaps keep the
+observed price, not a backdated ideal fill. Stale/future/invalid quotes and wrong
+MCX contracts cannot trigger this path. Overnight quotes cannot establish the
+previous session's exit. Without an observed exit, an overlapping bar keeps the
+saved position active under history recovery, blocks replacement trades and
+does not invent P/L. The confirmed card identifies this as Recovering saved trade.
+
+Complete recorded TARGET_HIT/STOP_LOSS_HIT/EARLY_EXIT outcomes take precedence
+over unresolved snapshots in either storage direction. Existing earlier-exit
+ordering remains in force when two actual completed exits conflict.
+
+IndexedDB remains the full persistent ledger. A compact synchronous localStorage
+write-ahead checkpoint stores entry/TSL/exit transitions before database commit,
+and active positions are checkpointed on page hide, hidden visibility and hook
+cleanup. Reopening merges checkpoints with the ledger; cleanup happens after a
+successful commit and preserves newer checkpoints. An available valid fallback
+can recover during database failure; an unreadable database without a backup
+cannot be silently replaced with an empty ledger. Redux is not required for
+durability and would still need a storage backend.
+
+Regression tests exercise immediate stop/TSL exits with missing/overlapping
+history, both directions across all seven instruments, persisted DONE cards and
+booked P/L, conflicting snapshots, interrupted commits, checkpoint recovery,
+unavailable databases and preservation of corrupt data. Previously unobserved
+exit prices cannot be reconstructed exactly from persistence alone.
+All 224 targeted agent/history/storage/evidence/enhancement checks, production
+build, lint and diff checks pass. Card rendering is covered with React server
+rendering; authenticated broker data and interactive browser lifecycle behavior
+were not exercised. Vite retains its existing large-chunk advisory.
+
+Sources: [predictionHistory.ts](../src/analysis/predictionHistory.ts),
+[predictionHistoryStore.ts](../src/storage/predictionHistoryStore.ts),
+[usePredictionHistory.ts](../src/hooks/usePredictionHistory.ts),
+[storageResilience.test.cjs](../tests/storageResilience.test.cjs).
+Sources: [tradeRisk.ts](../src/analysis/tradeRisk.ts),
+[tradeProtection.ts](../src/analysis/tradeProtection.ts),
+[predictionHistory.ts](../src/analysis/predictionHistory.ts).
+
+## 22. Trend, accepted price action and entry quality
+
+The 26 October revision adds `chart-confirmation-v1` to the live confirmation
+path for all seven instruments. See [the full algorithm and ChartSchool
+references](chart-confirmation.md) for the rationale and exact parameters. This
+supersedes earlier descriptions of a slower opposing view as context only.
+
+Five-minute setups require a supporting completed 15-minute EMA20/50 trend;
+15-minute setups require a supporting hourly trend. Each needs 50 bars on its
+own interval. Hourly setups use their own trend. Scores stay separate. Every
+candidate also needs ADX14 >=20, directional DI and EMA slope, RSI continuation,
+three consecutive current-session bars, an accepted two-close range break or
+actual EMA pullback/reclaim, and bounded candle range, gap and EMA extension.
+Missing/forming higher candles cannot supply confirmation.
+
+MCX checks genuine relative futures volume. Index spot volume is never invented;
+paired ATM CE/PE VWAP must support the direction. MCX needs matching session VWAP.
+RSI with structure remains 25%, VWAP 25%, chart 25%, other indicators 15%, OI 10%.
+Missing weights are not redistributed. The ordinary score floors, 1.5-times
+support/opposition test, elevated-VIX floors and 1.20:1 entry reward/risk remain.
+RISKY context cannot bypass these live checks. Reversal signals pass the same
+qualification. Existing positions retain their uncapped profit, SL/TSL, manual
+and session exits while new setups wait.
+
+New confirmations persist their policy and observed price/VWAP checks; earlier
+records remain readable. Today's trade quality audit reads actual browser
+entries, booked outcomes and initial-risk R. It diagnoses historical price
+checks only, using candles closed by the original signal time. Missing history
+or a different MCX contract is UNAVAILABLE; historical ATM/OI and unobserved
+fills are not reconstructed. Blocking a historical loss does not prove it would
+have been avoided. Today's browser ledger was not accessible from this workspace.
+
+`npm run agent:compare -- candles.json --output comparison.json` compares the
+explicit legacy baseline and revised entries chronologically with identical
+supplied costs. Both use the existing fixed-target comparison model, not live
+open-profit tick TSL. Archived ATM snapshots are exposed only after their fetch
+time. Parameters are intraday design choices, not validated ChartSchool rules;
+unseen-session testing with costs is still required before claiming improvement.
+
+Regression checks cover both directions on all seven instruments through the
+live selector, incomplete/conflicting higher context, weak/extended/first-impulse
+entries, genuine volume/VWAP, snapshot persistence, actual-history diagnosis
+and chronological replay. Authenticated broker feeds and interactive browser
+operation were not exercised. No broker-order placement was added.
+All 289 targeted confirmation, agent, history, evidence, commodity, resilience,
+enhancement and replay tests pass. Production build, lint and diff checks pass;
+Vite retains its existing large-chunk advisory. The offline comparison CLI was
+also smoke-tested with identical supplied costs; that synthetic check is not
+market-performance evidence.
+
+Sources: [confirmationQuality.ts](../src/analysis/confirmationQuality.ts),
+[multiTimeframe.ts](../src/analysis/multiTimeframe.ts),
+[tradeQualityAudit.ts](../src/analysis/tradeQualityAudit.ts),
+[strategyReplay.ts](../src/analysis/strategyReplay.ts).
+
+## 23. Separate continuation, early reversal and transition
+
+The attached proposals are implemented as `structure-confirmation-v2`. The
+[complete current algorithm](chart-confirmation.md) supersedes section 22's
+mandatory EMA/RSI/DMI and aligned-higher-trend checks for new setups.
+
+- CONTINUATION requires accepted price action, ADX14 >=20, matching VWAP and
+  the selected indicator, with no opposing higher trend; score >=55 / lead >=15.
+- REVERSAL requires prior opposing confirmed swings, a fresh two-close break
+  and retest acceptance, explicit momentum confirmation and a structural stop;
+  score >=65 / lead >=20. EMA crossover and ADX20 may lag; a fresh, warmed higher
+  view may still oppose it. Missing higher history cannot be bypassed.
+- TRANSITION returns WAIT. A changing slope, isolated impulse or wick is not a
+  confirmed structure reversal.
+
+EMA20/50 is the explicit default. RSI14 and Supertrend are configured alternatives,
+not automatic fallbacks. The same selected mode applies across instruments and
+is saved with confirmed plans. Other indicators retain their score contributions
+without each becoming an additional mandatory directional confirmation.
+
+New technical weights are chart/price action 35, RSI structure 25, VWAP 25,
+other indicators 15. OI/PCR is context only; its former ten points are explicitly
+assigned to chart evidence, not redistributed on feed failure. The old 1.5x
+ratio is replaced by the new score/lead gates in live decisions. The explicit
+legacy replay retains its original weights and ratio for honest comparison.
+
+Context retains dated/freshness-adjusted news, global, FII/DII and PCR/OI evidence.
+It displays SUPPORTIVE_BULLISH, SUPPORTIVE_BEARISH, MIXED or HIGH_RISK. Fresh
+high/rising equity VIX enforces at least 65/20; it contributes no directional
+points. No spread feed, monetary risk-budget engine or live fee estimate was
+invented. Index VWAP remains labelled ATM option context, not fabricated spot
+volume. MCX uses actual volume/VWAP from its exact futures contract.
+
+Both setup types keep >=70% technical coverage, >=1.20 entry reward/risk after
+structural/ATR/tick adjustment and actual entry recheck. A wider reversal stop
+must not cause the target to be extended. SL/TSL, open profit, post-entry
+confirmed-opposite exits and one-position enforcement remain in effect.
+V1 and pre-snapshot history remains readable; new snapshots record v2 mode,
+indicator, structure/invalidation levels and base score requirements. Actual
+context state is retained in saved evidence summaries.
+
+The added tests distinguish a real reversal from a slope-only transition, cover
+both price directions across all seven markets, exercise real index selection
+and reversal exits before EMA crossover/ADX20, confirm selected-indicator
+behaviour, reject inadequate MCX reward/risk and retain history compatibility.
+Qualified price events can create candidates when older combined-indicator
+routes detect none; they cannot replace an existing rejected target with a
+looser projection.
+These are deterministic regressions; real-session out-of-sample performance,
+broker feeds and interactive browser operation have not been validated.
+Production build, lint and diff checks pass; Vite retains its existing large-chunk
+advisory. The comparison CLI also passes a synthetic smoke check with identical
+cost assumptions and distinctly labelled current/legacy entry policies.
+All 301 targeted tests pass across confirmation/audit (27), agent (118), history
+(50), technical analysis (42), commodities (25), resilience (19), enhancements
+(9) and replay (11). These checks validate implementation behaviour, not returns.
+
+## 24. Equity market-context weights: 40 / 30 / 15 / 15
+
+The 27 October context update uses FII/DII 40%, GIFT Nifty 30%, global markets
+15% and news 15% for Nifty 50, Sensex and Bank Nifty. GIFT has a distinct layer
+and is excluded from the global-market denominator, so its quote is never
+counted twice. PCR has zero market-context weight; raw OI information remains
+reference data. These settings supersede earlier dated context budgets.
+
+Next-session gap outlook uses the same four inputs and can now reach 100%
+coverage. Missing inputs are not redistributed. For example, missing GIFT
+removes exactly 30 coverage points; complete FII/DII coverage still requires
+published cash flows, futures positions and the saved multi-session report trend.
+Publication/observation age continues to reduce directional contributions without
+pretending the data is missing solely because it is older. No refresh resets age.
+Commodity context keeps its prior news/benchmark budgets and excludes equity
+flows and GIFT; this equity-specific change does not alter MCX confirmation.
+
+Technical weights remain price action 35%, RSI with structure 25%, VWAP 25% and
+other indicators 15%. Context never creates, vetoes or closes a technical trade.
+The confirmation/entry separation is unchanged: completed qualified price event,
+selected indicator, VWAP, applicable higher context and ADX, 70% coverage,
+continuation 55/15 or reversal 65/20 (elevated equity VIX at least 65/20), and
+at least 1.20 planned reward/risk. A confirmed setup becomes an entered local
+trade only on a fresh matching connected-stream quote after issue, reaching its
+trigger before expiry while remaining unconsumed, valid and >=1.20 at that quote.
+The dashboard tracks the trade and TSL locally; it does not place broker orders.
+Validation: 277 targeted analysis, agent, confirmation, commodity, card/dashboard
+and history tests pass. Build, lint and diff checks pass; Vite retains its existing
+large-chunk advisory. New regressions cover all three indices, no duplicate GIFT
+vote, full 100% coverage, a missing/aged GIFT quote, PCR exclusion and unchanged
+technical decisions. Authenticated feeds and interactive browser operation were
+not exercised; no performance improvement is inferred from these tests.
+
+## 25. Bounded adaptive confirmation: completed 15-minute regimes
+
+Current policy is `adaptive-confirmation-v3`; the exact formulas, assumptions and
+sources are in [adaptive confirmation](adaptive-confirmation.md). This supersedes
+the fixed confirmation floors in sections 23–24 while retaining their price-event,
+selected-indicator, higher-context, VWAP, coverage, risk and entry checks.
+
+Thresholds remain necessary evidence gates. Continuation support/lead ranges
+from 55/15 to 80/30; reversal ranges from 65/20 to 80/30. The latest completed
+15-minute ADX, EMA direction, relative ATR and current-session chop determine
+the requirements. Relative ATR uses the median of 50 prior valid ATR14 values,
+excluding the current observation. Unchanged data between regime closes produces
+unchanged regime inputs; forming/future candles cannot affect them.
+
+Aligned strong trends can use 55/15 and continuation ADX18. Ranges require at
+least 65/20. Relative ATR >=1.5 raises support/lead to at least 65/20 and
+continuation ADX to at least 22, regardless of strong ADX. ATR ratio >=2.5 or
+chop >=0.8 blocks new setups, including known extremes during partial warmup.
+Missing/stale 15-minute data blocks confirmation. An incomplete feature baseline
+uses labelled conservative 60/20 continuation or 65/20 reversal floors; missing
+ratios are never presented as measured values.
+
+A genuine accepted opposing swing break plus the selected momentum turn can
+qualify a reversal before an EMA crossover, ADX20 or higher-trend agreement.
+A slope turn alone remains TRANSITION/WAIT. The score and other guards can still
+reject an early turn; capturing every move is not a supported promise.
+
+RSI/structure 25%, VWAP 25%, price action 35% and other indicators 15% are unchanged.
+Market sentiment remains dated reference rather than a gate-relaxation signal;
+existing elevated equity-VIX risk floors remain in force. Minimum initial/actual
+entry reward/risk remains 1.20. TSL, uncapped profit and existing trade protection
+continue independently of new-entry regime blocks. No broker orders are added.
+
+The card shows the regime, anchor close, feature readiness and required gates.
+New saved records include regime features, base thresholds and actual VIX-adjusted
+thresholds. Validation rejects malformed adaptive snapshots while retaining v1/v2
+history compatibility. The offline comparison now reports legacy, fixed-v2 and
+adaptive-v3 entries under identical supplied costs and fixed-target comparison
+exits. It does not simulate live TSL, option fills or option-premium P/L.
+
+Validation: 286 targeted tests pass across confirmation/audit (38), agent (120),
+history (50), analysis (42), commodities (25) and replay (11). Build, lint and diff
+checks pass; Vite retains its large-chunk advisory. A synthetic comparison smoke
+check verifies distinct policy labels and identical cost/exit assumptions. These
+checks verify implementation, not improved returns. Actual private browser trade
+history, authenticated feeds, live execution and unseen-session performance were
+not validated. Prepared for manual review; no merge or deployment is included.

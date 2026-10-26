@@ -1,6 +1,9 @@
+import { minimumRewardRisk, meetsMinimumRewardRisk } from './tradeRisk'
+import { confirmationPolicy } from './confirmationQuality'
+import type { AtmVwapSnapshot } from '../api/atmVwap'
 import type { AngelOneCandle } from '../api/angelOne'
 import { analyzePriceAction } from './priceAction'
-import { analyzeTradingEvidence, tradingEvidenceRules } from './tradingEvidence'
+import { analyzeTradingEvidence } from './tradingEvidence'
 import { buildEarlyPrediction, type PredictionPlan } from './earlyPrediction'
 import { isCommodity, validCommodityContract, type CommodityContract } from './commodities'
 import { inTradingEntryWindow, squareOffTime, tradingSession } from './tradingSession'
@@ -8,8 +11,8 @@ import { inTradingEntryWindow, squareOffTime, tradingSession } from './tradingSe
 const duration = 300_000
 export const replayLimits = { candles: 5000, lookback: 1000, warmup: 50 } as const
 const instruments = ['Nifty 50', 'Sensex', 'Bank Nifty', 'Natural Gas', 'Crude Oil', 'Silver', 'Gold']
-export type ReplayInput = { instrument: string; interval?: 'FIVE_MINUTE'; candles: AngelOneCandle[]; contract?: CommodityContract; costs?: { slippagePointsPerSide?: number; roundTripCostPoints?: number } }
-export type ReplayEvaluation = { instrument: string; contract?: CommodityContract; candles: AngelOneCandle[]; now: number }
+export type ReplayInput = { instrument: string; interval?: 'FIVE_MINUTE'; candles: AngelOneCandle[]; contract?: CommodityContract; atmVwapSnapshots?: AtmVwapSnapshot[]; costs?: { slippagePointsPerSide?: number; roundTripCostPoints?: number } }
+export type ReplayEvaluation = { instrument: string; contract?: CommodityContract; candles: AngelOneCandle[]; now: number; atmVwap?: AtmVwapSnapshot }
 /** Injection is for deterministic engine tests only; the CLI always uses the real strategy. */
 export type ReplayEvaluator = (input: ReplayEvaluation) => PredictionPlan | undefined
 export type ReplayOutcome = 'TARGET' | 'STOP' | 'SQUARE_OFF' | 'AMBIGUOUS' | 'DATA_GAP' | 'END_OF_DATA'
@@ -17,10 +20,23 @@ export type ReplayTrade = { signalId: string; side: 'CALL' | 'PUT'; signalCandle
 const round = (value: number) => Math.round(value * 1e8) / 1e8
 
 /** No public context is injected: today's OI/news/VIX cannot be replayed into the past. */
-export const evaluateReplaySetup: ReplayEvaluator = ({ instrument, contract, candles, now }) => {
+export const evaluateReplayLegacySetup: ReplayEvaluator = ({ instrument, contract, candles, now, atmVwap }) => {
   const analysis = analyzePriceAction(candles, 'FIVE_MINUTE', now, instrument)
-  const evidence = analyzeTradingEvidence({ analysis, candles, instrument, interval: 'FIVE_MINUTE', now })
+  const evidence = analyzeTradingEvidence({ analysis, candles, instrument, interval: 'FIVE_MINUTE', now, atmVwap })
   const result = buildEarlyPrediction(analysis, instrument, 'FIVE_MINUTE', now, undefined, undefined, evidence, contract)
+  return result.side !== 'WAIT' && result.plan.stage === 'CONFIRMED' ? result.plan : undefined
+}
+export const evaluateReplaySetup: ReplayEvaluator = ({ instrument, contract, candles, now, atmVwap }) => {
+  const analysis = analyzePriceAction(candles, 'FIVE_MINUTE', now, instrument)
+  const evidence = analyzeTradingEvidence({ analysis, candles, instrument, interval: 'FIVE_MINUTE', now, atmVwap, confirmationContext: {} })
+  const result = buildEarlyPrediction(evidence.selectedAnalysis ?? analysis, instrument, 'FIVE_MINUTE', now, undefined, undefined, evidence, contract)
+  return result.side !== 'WAIT' && result.plan.stage === 'CONFIRMED' ? result.plan : undefined
+}
+/** Immediately preceding price-confirmation policy with fixed 55/15 or 65/20 gates. */
+export const evaluateReplayFixedSetup: ReplayEvaluator = ({ instrument, contract, candles, now, atmVwap }) => {
+  const analysis = analyzePriceAction(candles, 'FIVE_MINUTE', now, instrument)
+  const evidence = analyzeTradingEvidence({ analysis, candles, instrument, interval: 'FIVE_MINUTE', now, atmVwap, confirmationContext: { thresholdMode: 'FIXED' } })
+  const result = buildEarlyPrediction(evidence.selectedAnalysis ?? analysis, instrument, 'FIVE_MINUTE', now, undefined, undefined, evidence, contract)
   return result.side !== 'WAIT' && result.plan.stage === 'CONFIRMED' ? result.plan : undefined
 }
 
@@ -38,6 +54,7 @@ function validate(input: ReplayInput) {
     previous = time
   }
   for (const value of [input.costs?.slippagePointsPerSide, input.costs?.roundTripCostPoints]) if (value !== undefined && (!Number.isFinite(value) || value < 0)) throw new Error('Slippage and costs must be finite nonnegative price points.')
+  if (input.atmVwapSnapshots !== undefined && (!Array.isArray(input.atmVwapSnapshots) || input.atmVwapSnapshots.length > 10000 || input.atmVwapSnapshots.some((snapshot, i) => !snapshot || snapshot.index !== input.instrument || !Number.isFinite(Date.parse(snapshot.fetchedAt)) || i > 0 && Date.parse(snapshot.fetchedAt) < Date.parse(input.atmVwapSnapshots![i - 1].fetchedAt)))) throw new Error('Archived ATM VWAP snapshots must match the instrument and be ordered by their recorded fetch time.')
   if ((input.costs?.slippagePointsPerSide ?? 0) >= minimumPrice) throw new Error('Per-side slippage must be smaller than the minimum observed price.')
 }
 
@@ -46,7 +63,7 @@ export function replayStrategy(input: ReplayInput, evaluator: ReplayEvaluator = 
   validate(input)
   const slippage = input.costs?.slippagePointsPerSide ?? 0, costs = input.costs?.roundTripCostPoints ?? 0
   const trades: ReplayTrade[] = [], rejected: Record<string, number> = {}, signalIds = new Set<string>()
-  let active: ReplayTrade | undefined, pending: PredictionPlan | undefined, blockedSession: string | undefined, evaluations = 0, candidates = 0
+  let active: ReplayTrade | undefined, pending: PredictionPlan | undefined, blockedSession: string | undefined, evaluations = 0, candidates = 0, snapshotIndex = -1
   const reject = (reason: string) => { rejected[reason] = (rejected[reason] ?? 0) + 1 }
   const finish = (outcome: ReplayOutcome, note: string, time?: number, observedExit?: number) => {
     if (!active) return
@@ -74,7 +91,7 @@ export function replayStrategy(input: ReplayInput, evaluator: ReplayEvaluator = 
       else if (!contiguous || time !== Date.parse(plan.signalCandleTime) + duration) reject('MISSING_NEXT_OPEN')
       else if (!inTradingEntryWindow(time, input.instrument) || time >= plan.expiresAt || time >= (input.contract?.expiresAt ?? Infinity)) reject('ENTRY_WINDOW_ENDED')
       else if (d * (row[1] - plan.entry) < 0) reject('TRIGGER_NOT_REACHED_AT_NEXT_OPEN')
-      else if (!(risk > 0) || !(reward > 0) || reward / risk < tradingEvidenceRules.minimumRewardRisk) reject('NEXT_OPEN_RR_OR_LEVELS_INVALID')
+      else if (!(risk > 0) || !(reward > 0) || !meetsMinimumRewardRisk(reward / risk)) reject('NEXT_OPEN_RR_OR_LEVELS_INVALID')
       else {
         active = { signalId: plan.id, side: plan.side, signalCandleTime: plan.signalCandleTime, entryTime: row[0], entry: round(entry), stop: plan.stopLoss, target: plan.target, risk: round(risk), outcome: 'END_OF_DATA', note: 'No observed exit yet.' }
         trades.push(active)
@@ -98,7 +115,10 @@ export function replayStrategy(input: ReplayInput, evaluator: ReplayEvaluator = 
     if (active || blockedSession === tradingSession(time).date || i + 1 < replayLimits.warmup || !inTradingEntryWindow(now, input.instrument) || now >= (input.contract?.expiresAt ?? Infinity)) continue
     // Every evaluation gets a separate prefix and rows: no evaluator sees the next open or future extrema.
     const candles = input.candles.slice(Math.max(0, i + 1 - replayLimits.lookback), i + 1).map(candle => [...candle] as AngelOneCandle)
-    const plan = evaluator({ instrument: input.instrument, contract: input.contract, candles, now })
+    const snapshots = input.atmVwapSnapshots ?? []
+    while (snapshotIndex + 1 < snapshots.length && Date.parse(snapshots[snapshotIndex + 1].fetchedAt) <= now) snapshotIndex++
+    const atmVwap = snapshotIndex >= 0 && now - Date.parse(snapshots[snapshotIndex].fetchedAt) < 120000 ? snapshots[snapshotIndex] : undefined
+    const plan = evaluator({ instrument: input.instrument, contract: input.contract, candles, now, atmVwap })
     evaluations++
     if (!plan) continue
     if (plan.stage !== 'CONFIRMED' || plan.strategyVersion !== 'technical-v2' || plan.instrument !== input.instrument || plan.interval !== 'FIVE_MINUTE' || Date.parse(plan.signalCandleTime) !== time || !Number.isFinite(plan.generatedAt) || !Number.isFinite(plan.expiresAt) || plan.generatedAt > now || plan.expiresAt <= now || !['CALL', 'PUT'].includes(plan.side) || ![plan.entry, plan.stopLoss, plan.target].every(value => Number.isFinite(value) && value > 0) || (input.contract ? plan.contract?.token !== input.contract.token || plan.contract?.symbol !== input.contract.symbol || plan.contract?.expiresAt !== input.contract.expiresAt : plan.contract !== undefined)) { reject('INVALID_OR_MISMATCHED_PLAN'); continue }
@@ -113,7 +133,7 @@ export function replayStrategy(input: ReplayInput, evaluator: ReplayEvaluator = 
   return {
     version: 'offline-candle-replay-v1' as const, instrument: input.instrument, contract: input.contract, interval: 'FIVE_MINUTE',
     data: { candles: input.candles.length, first: input.candles[0]?.[0], last: input.candles[input.candles.length - 1]?.[0], evaluations, maximumLookback: replayLimits.lookback },
-    assumptions: { entry: 'Immediate next observed 5-minute open only, trigger reached, same session, with actual-open reward/risk >= 1.5. No intrabar trigger fills.', slippagePointsPerSide: slippage, roundTripCostPoints: costs, costsAreUserSupplied: true, defaultCostsAreZero: slippage === 0 && costs === 0, strategy: evaluator === evaluateReplaySetup ? 'Current technical rules, without archived contextual snapshots' : 'Injected test evaluator; not a strategy accuracy result', missingContext: ['Historical OI/PCR', 'Historical India VIX', 'Historical news, institutional flows and global quotes', 'Paired ATM option VWAP'], unsupported: ['Minute/tick protective exits, trailing stops and live quote latency', 'Broker execution, bid/ask spread, liquidity, taxes unless supplied as point costs', 'Exchange holiday/special-session calendar; configured weekday sessions are used', 'Option premium or rupee P/L; results are underlying/futures price points'], ambiguity: 'Dual-touch, data gaps and open positions excluded from resolved metrics. Intrabar exit timestamps use candle close, not an invented tick time.' },
+    assumptions: { exitPolicy: 'Fixed-target comparison model; live trades use open profit with TSL. This replay does not validate live exits.', entry: `Immediate next observed 5-minute open only, trigger reached, same session, with actual-open reward/risk >= ${minimumRewardRisk.toFixed(2)}. No intrabar trigger fills.`, slippagePointsPerSide: slippage, roundTripCostPoints: costs, costsAreUserSupplied: true, defaultCostsAreZero: slippage === 0 && costs === 0, strategy: evaluator === evaluateReplaySetup ? `${confirmationPolicy} with chronological continuation/reversal filters` : evaluator === evaluateReplayFixedSetup ? 'structure-confirmation-v2 fixed score/ADX thresholds' : evaluator === evaluateReplayLegacySetup ? 'Legacy technical-v2 confirmation baseline' : 'Injected test evaluator; not a strategy accuracy result', missingContext: ['Historical OI/PCR', 'Historical India VIX', 'Historical news, institutional flows and global quotes', ...(input.atmVwapSnapshots?.length ? [] : ['Paired ATM option VWAP'])], unsupported: ['Minute/tick protective exits, trailing stops and live quote latency', 'Broker execution, bid/ask spread, liquidity, taxes unless supplied as point costs', 'Exchange holiday/special-session calendar; configured weekday sessions are used', 'Option premium or rupee P/L; results are underlying/futures price points'], ambiguity: 'Dual-touch, data gaps and open positions excluded from resolved metrics. Intrabar exit timestamps use candle close, not an invented tick time.' },
     summary: { candidates, entered: trades.length, resolved: resolved.length, excluded: trades.length - resolved.length, wins: resolved.filter(trade => trade.netPoints! > 0).length, losses: resolved.filter(trade => trade.netPoints! < 0).length, winRate: resolved.length ? round(resolved.filter(trade => trade.netPoints! > 0).length / resolved.length) : null, grossPoints: total('grossPoints'), netPoints: total('netPoints'), netR: total('netR'), maximumRealisedDrawdownPoints: round(drawdownPoints), maximumRealisedDrawdownR: round(drawdownR) },
     warnings: [input.candles.length < replayLimits.warmup ? 'Insufficient history: at least 50 completed candles are required.' : 'Historical signals are evaluated without historical contextual feeds; this can differ from the deployed agent.', 'This is a deterministic simulation, not observed fills or established profitability. Unknown outcomes are excluded and may bias resolved-only metrics.'], rejected, trades,
   }

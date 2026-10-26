@@ -91,14 +91,14 @@ test('forming, old, same-side and wrong-contract plans cannot create reversal ex
   }
 })
 
-test('original stops and targets settle before a competing supported-timeframe reversal', () => {
+test('original stops settle first; supported-timeframe reversals still exit beyond reference targets', () => {
   for (const interval of intervals) for (const side of ['CALL', 'PUT']) {
     const record = active('FIFTEEN_MINUTE', side, instruments[4]), opposite = plan(interval, side === 'CALL' ? 'PUT' : 'CALL', instruments[4])
     const d = side === 'CALL' ? 1 : -1
     const stopped = syncPredictionRecord(record, [], quote(record, now, record.stopLoss - d), now, false, undefined, opposite)
     assert.equal(stopped.status, 'STOP_LOSS_HIT'); assert.equal(stopped.exitPrice, record.stopLoss - d)
     const target = syncPredictionRecord(record, [], quote(record, now, record.target + d), now, false, undefined, opposite)
-    assert.equal(target.status, 'TARGET_HIT'); assert.equal(target.exitPrice, record.target)
+    assert.equal(target.status, 'EARLY_EXIT'); assert.equal(target.earlyExitSource, 'AGENT_REVERSAL'); assert.equal(target.exitPrice, record.target + d)
   }
 })
 

@@ -48,7 +48,7 @@ test('the signal candle, future bars and malformed prices do not consume a valid
   assert.equal(consumedSetupReason(plan, [[new Date(close).toISOString(), 1000, NaN, 900, 1001, 0]], close + 6000), undefined)
   const active = observePredictionTick(plan, 1000, close + 6000)
   const result = syncPredictionRecord(active, [bar(close)], tick(close + 7000, 1021), close + 7000, true, undefined, null)
-  assert.equal(result.status, 'TARGET_HIT'); assert.equal(result.points, 20)
+  assert.equal(result.status, 'ACTIVE'); assert.equal(result.points, undefined); assert(result.protection.stop >= result.entryPrice)
 })
 test('real five-minute pattern scoring rejects consumed moves symmetrically across all seven instruments', () => {
   const { analyzePriceAction } = require('../src/analysis/priceAction.ts')
@@ -81,8 +81,8 @@ test('an entry reconstructed after the trade ended must not announce a new confi
   const { observePredictionCandles } = require('../src/analysis/predictionHistory.ts')
   const { predictionEvents } = require('../src/analysis/predictionEvents.ts')
   const item = { ...pending(), strategyVersion:'early-v1', generatedAt:close, observedThrough:close, expiresAt:close+3*duration }
-  const terminal = observePredictionCandles(item, [[new Date(close).toISOString(),1000,1021,999,1020,0]], close+duration)
-  assert.equal(terminal.status, 'TARGET_HIT')
+  const terminal = observePredictionCandles(item, [[new Date(close).toISOString(),1000,1021,989,1020,0]], close+duration)
+  assert.equal(terminal.status, 'STOP_LOSS_HIT')
   const events = predictionEvents([item],[terminal])
   assert.equal(events.length, 1); assert.doesNotMatch(events[0].reason, /Confirm call|Entry reached/)
 })

@@ -87,10 +87,10 @@ test('unrated and stale evidence never redistributes its fixed weight to other h
   const input = fixture()
   input.context.articles.push({ ...input.context.articles[0], id: 'unrated', url: 'https://publisher.example/unrated' })
   const initial = analyzeTradingEvidence(input).sentiment.layers.find(layer => layer.key === 'news')
-  assert.equal(initial.bullish, 15)
+  assert.equal(initial.bullish, 7.5)
   input.context.articles[0].publishedAt = iso(12 * 3_600_000)
   const aged = analyzeTradingEvidence(input).sentiment.layers.find(layer => layer.key === 'news')
-  assert.equal(aged.bullish, 7.5)
+  assert.equal(aged.bullish, 3.75)
   assert.equal(aged.coverage, .5)
   input.context.feeds[0].status = 'STALE'
   const stale = analyzeTradingEvidence(input).sentiment.layers.find(layer => layer.key === 'news')
@@ -98,7 +98,7 @@ test('unrated and stale evidence never redistributes its fixed weight to other h
   assert.equal(stale.bullish, 0)
 })
 
-test('PCR remains a single technical allocation plus isolated reference; it cannot create macro sentiment alone', () => {
+test('PCR retains its legacy technical allocation but has zero market-context weight', () => {
   const input = fixture()
   input.context.articles = []
   input.context.inputs.institutional = { status: 'UNAVAILABLE' }
@@ -109,8 +109,38 @@ test('PCR remains a single technical allocation plus isolated reference; it cann
   const result = analyzeTradingEvidence(input)
   assert.equal(result.layers.filter(layer => layer.key === 'oi').length, 1)
   assert.equal(result.layers.some(layer => layer.key === 'pcr'), false)
-  assert.equal(result.sentiment.layers.filter(layer => layer.key === 'pcr').length, 1)
-  assert.equal(result.sentiment.layers.find(layer => layer.key === 'pcr').bullish, 5)
-  assert.equal(result.sentiment.coverage, 10)
+  assert.equal(result.sentiment.layers.filter(layer => layer.key === 'pcr').length, 0)
+  assert.equal(result.sentiment.coverage, 0)
   assert.equal(result.sentiment.bias, 'UNAVAILABLE')
+})
+test('all indices use FII/DII 40, GIFT 30, global 15 and news 15 with independently counted GIFT',()=>{
+ for(const instrument of ['Nifty 50','Sensex','Bank Nifty'])for(const d of [1,-1]){
+  const input=fixture(d);input.instrument=instrument;input.context.instrument=instrument
+  const result=analyzeTradingEvidence(input),layers=result.sentiment.layers
+  assert.deepEqual(Object.fromEntries(layers.map(l=>[l.key,l.weight])),{flows:40,news:15,gift:30,global:15})
+  assert.equal(layers.reduce((sum,l)=>sum+l.weight,0),100)
+  const gift=layers.find(l=>l.key==='gift'),global=layers.find(l=>l.key==='global')
+  assert.equal(gift[d===1?'bullish':'bearish'],30);assert.equal(global[d===1?'bullish':'bearish'],15)
+  assert(!global.details.some(text=>text.includes('GIFT Nifty')))
+  const other=structuredClone(input);other.context.inputs.giftNifty.data.changePercent=-d
+  const changed=analyzeTradingEvidence(other)
+  assert.deepEqual(changed.sentiment.layers.find(l=>l.key==='global'),global)
+  assert.equal(changed.sentiment.layers.find(l=>l.key==='gift')[d===1?'bearish':'bullish'],30)
+  for(const key of ['bullishScore','bearishScore','coverage','canConfirm','stopLoss'])assert.equal(changed[key],result[key],key)
+ }
+})
+test('full configured context reaches 100% coverage; missing GIFT loses exactly 30 points without redistribution',()=>{
+ const input=fixture(),flowHistory=[0,86400000,2*86400000].map(age=>({...input.context.inputs.institutional.data,asOf:iso(age)}))
+ const full=analyzeTradingEvidence({...input,flowHistory})
+ assert.equal(full.sentiment.coverage,100)
+ const absent=structuredClone(input);absent.context.inputs.giftNifty.status='UNAVAILABLE'
+ const missing=analyzeTradingEvidence({...absent,flowHistory})
+ assert.equal(missing.sentiment.coverage,70)
+ for(const key of ['flows','news','global'])assert.deepEqual(missing.sentiment.layers.find(l=>l.key===key),full.sentiment.layers.find(l=>l.key===key))
+ const old=structuredClone(input);old.context.inputs.giftNifty.data.asOf=iso(sentimentAgeRules.global.halfLifeMs)
+ const aged=analyzeTradingEvidence({...old,flowHistory})
+ assert.equal(aged.sentiment.coverage,100);assert.equal(aged.sentiment.layers.find(l=>l.key==='gift').bullish,15)
+ for(const key of ['flows','news','global'])assert.deepEqual(aged.sentiment.layers.find(l=>l.key===key),full.sentiment.layers.find(l=>l.key===key))
+ const stale=structuredClone(input);stale.context.inputs.giftNifty.data.asOf=iso(sentimentAgeRules.global.maxAgeMs+1)
+ assert.equal(analyzeTradingEvidence({...stale,flowHistory}).sentiment.layers.find(l=>l.key==='gift').coverage,0)
 })

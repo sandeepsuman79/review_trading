@@ -34,6 +34,23 @@ export function validateOptionRequest(input) {
   return { index: input.index, strikes: [...input.strikes].sort((a, b) => a - b) }
 }
 
+
+// SmartAPI exchange timestamps have no offset. Interpret broker wall-clock dates in IST.
+export function optionQuoteTime(value) {
+  if (typeof value !== 'string') return null
+  const text = value.trim()
+  const iso = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}:\d{2}:\d{2}(?:\.\d+)?)(Z|[+-]\d{2}:?\d{2})?$/i.exec(text)
+  const broker = /^(\d{1,2})-([a-z]{3})-(\d{4}) (\d{2}:\d{2}:\d{2})$/i.exec(text)
+  if (!iso && !broker) return null
+  const year = Number(iso ? iso[1] : broker[3]), month = iso ? Number(iso[2]) - 1 : months.indexOf(broker[2].toUpperCase()), day = Number(iso ? iso[3] : broker[1])
+  const calendar = new Date(Date.UTC(year, month, day))
+  if (calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month || calendar.getUTCDate() !== day) return null
+  const date = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  const time = Date.parse(`${date}T${iso ? iso[4] : broker[4]}${iso?.[5] || '+05:30'}`)
+  return Number.isFinite(time) ? new Date(time).toISOString() : null
+}
+const numeric = (value, allowZero = false) => (typeof value === 'number' || typeof value === 'string' && value.trim() !== '') && Number.isFinite(Number(value)) && (allowZero ? Number(value) >= 0 : Number(value) > 0) ? Number(value) : null
+
 export function createOptionPremiumService({ loadOptions, fetcher = fetch, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), spacing = 1000 }) {
   const cache = new Map(), pending = new Map()
   let queue = Promise.resolve(), nextRequestAt = 0, cooldownUntil = 0
@@ -49,7 +66,7 @@ export function createOptionPremiumService({ loadOptions, fetcher = fetch, now =
       const pause = nextRequestAt - now()
       if (pause > 0) await sleep(pause)
       nextRequestAt = now() + spacing
-      const response = await fetcher('https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/', { method: 'POST', headers, body: JSON.stringify({ mode: 'LTP', exchangeTokens: tokens }), signal: AbortSignal.timeout(20_000) })
+      const response = await fetcher('https://apiconnect.angelone.in/rest/secure/angelbroking/market/v1/quote/', { method: 'POST', headers, body: JSON.stringify({ mode: input.mode, exchangeTokens: tokens }), signal: AbortSignal.timeout(20_000) })
       const body = await response.json()
       const errorcode = String(body.errorcode || body.errorCode || '').toUpperCase()
       const authError = response.status === 401 || ['AG8001', 'AG8002', 'AG8003'].includes(errorcode) || /(?:invalid|expired|missing)\s+(?:access\s+|jwt\s+)?token|token\s+(?:expired|missing)/i.test(body.message || '')
@@ -67,14 +84,14 @@ export function createOptionPremiumService({ loadOptions, fetcher = fetch, now =
         const quote = fetched.find(quote => quote.exchange === contract.exchange && String(quote.symbolToken) === contract.token && (!quote.tradingSymbol || quote.tradingSymbol === contract.symbol))
         const value = quote?.ltp
         const ltp = (typeof value === 'number' || typeof value === 'string' && value.trim() !== '') && Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : null
-        row[side] = { ...contract, ltp, receivedAt: ltp === null ? null : receivedAt, message: ltp === null ? unfetched.find(quote => quote.exchange === contract.exchange && String(quote.symbolToken) === contract.token)?.message || 'Quote unavailable' : null }
+        row[side] = { ...contract, ltp, ...(input.mode === 'FULL' ? { averagePrice: numeric(quote?.avgPrice), volume: numeric(quote?.tradeVolume, true), asOf: optionQuoteTime(quote?.exchTradeTime) ?? optionQuoteTime(quote?.exchFeedTime) } : {}), receivedAt: ltp === null ? null : receivedAt, message: ltp === null ? unfetched.find(quote => quote.exchange === contract.exchange && String(quote.symbolToken) === contract.token)?.message || 'Quote unavailable' : null }
       }
       return row
     })
     return { index: input.index, expiry: new Date(options.expiryAt).toISOString().slice(0, 10), fetchedAt: receivedAt, timeBasis: 'RECEIVED', rows }
   }
   return { async get(raw, headers) {
-    const input = validateOptionRequest(raw), key = createHash('sha256').update(`${headers.Authorization}:${input.index}:${input.strikes.join(',')}`).digest('hex')
+    const input = { ...validateOptionRequest(raw), mode: raw.mode === 'FULL' ? 'FULL' : 'LTP' }, key = createHash('sha256').update(`${headers.Authorization}:${input.mode}:${input.index}:${input.strikes.join(',')}`).digest('hex')
     const previous = cache.get(key)
     if (previous?.until > now()) return previous.data
     if (pending.has(key)) return pending.get(key)

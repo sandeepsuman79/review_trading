@@ -1,3 +1,4 @@
+import { minimumRewardRisk, meetsMinimumRewardRisk } from './tradeRisk'
 import { analyzeDirectionalAlignment, type DirectionalAlignment } from './directionalAlignment'
 import { momentumSetupBlockers } from './trendSetups'
 import { findMomentumSetups } from './momentumSetups'
@@ -724,7 +725,7 @@ function makeCandidate(
     risk <= 0 ||
     !Number.isFinite(reward) ||
     reward <= 0 ||
-    rr < 1.5
+    !meetsMinimumRewardRisk(rr)
   ) {
     return {
       ...context,
@@ -732,7 +733,7 @@ function makeCandidate(
       pattern: 'NO_CONFIRMED_PATTERN',
       setup: 'No confirmed setup',
       reason:
-        'A price-action setup exists, but the nearest valid target does not provide at least 1.5:1 reward-to-risk.',
+        `A price-action setup exists, but the nearest valid target does not provide at least ${minimumRewardRisk.toFixed(2)}:1 reward-to-risk.`,
       confidence: Math.min(candidate.score, 59),
       confluence: candidate.confluence,
       warnings: [
@@ -1507,7 +1508,7 @@ export function analyzePriceAction(
     const chartRisk = (candidate.entry - candidate.stopLoss) * d
     const risk = chartRisk
     const reward = (candidate.target - candidate.entry) * d
-    return chartRisk > 0 && risk > 0 && reward / risk >= 1.5
+    return chartRisk > 0 && risk > 0 && meetsMinimumRewardRisk(reward / risk)
   })
 
   if (!eligibleCandidates.length) {
@@ -1518,7 +1519,7 @@ export function analyzePriceAction(
       latestMovingAverage20Slope, rsi14, rsi14Momentum, supertrendDirection,
     )
     return empty(
-      'A price-action pattern was detected, but every candidate was rejected because its target offers less than 1.5:1 reward-to-risk.',
+      `A price-action pattern was detected, but every candidate was rejected because its target offers less than ${minimumRewardRisk.toFixed(2)}:1 reward-to-risk.`,
       {
         phase,
         structure,
@@ -1534,12 +1535,12 @@ export function analyzePriceAction(
         todayHigh: session.todayHigh,
         todayLow: session.todayLow,
         warnings: [
-          'Risk/reward filter rejected all detected setups (minimum 1.5:1).',
+          `Risk/reward filter rejected all detected setups (minimum ${minimumRewardRisk.toFixed(2)}:1).`,
           'Do not widen the stop only to manufacture a better-looking target.',
         ],
         ...outlook,
         detectedSetups,
-        tradeStatus: 'WAIT — detected setup rejected by minimum 1.5:1 reward-to-risk filter',
+        tradeStatus: `WAIT — detected setup rejected by minimum ${minimumRewardRisk.toFixed(2)}:1 reward-to-risk filter`,
         movingAverage20,
         exponentialMovingAverage20,
         exponentialMovingAverage50,
@@ -1595,7 +1596,7 @@ export function analyzePriceAction(
     // candidates available for monitoring reversals in an already open position.
     const atrReady = (candidate: Candidate) => {
       const risk = Math.max(Math.abs(candidate.entry - candidate.stopLoss), atr14 ?? 0)
-      return risk > 0 && Math.abs(candidate.target - candidate.entry) / risk >= 1.5
+      return risk > 0 && meetsMinimumRewardRisk(Math.abs(candidate.target - candidate.entry) / risk)
     }
     const readiness = Number(atrReady(b)) - Number(atrReady(a))
     if (readiness) return readiness
