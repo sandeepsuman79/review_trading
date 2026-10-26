@@ -1,6 +1,7 @@
 import { writeChartCache } from '../storage/chartCache'
 import { useTimeframeTrajectories } from '../hooks/useTimeframeTrajectories'
 import SessionReview from '../components/SessionReview'
+import TradeQualityAudit from '../components/TradeQualityAudit'
 import { useAtmVwap } from '../hooks/useAtmVwap'
 import { contractExpiryNotice } from '../analysis/agentMonitoring'
 import { recordIntrabarTick } from '../analysis/intrabarContext'
@@ -36,7 +37,6 @@ import PredictionHeader from '../components/PredictionHeader'
 import PredictionNotifications from '../components/PredictionNotifications'
 import type { PredictionEvent } from '../analysis/predictionEvents'
 import { canEnterConfirmedPrediction, type PredictionRecord } from '../analysis/predictionHistory'
-import { analyzeTradingEvidence } from '../analysis/tradingEvidence'
 import type { IndiaVixSnapshot } from '../api/marketContext'
 import { useInstitutionalFlows } from '../hooks/useInstitutionalFlows'
 import { useGapOutlook } from '../hooks/useGapOutlook'
@@ -190,7 +190,7 @@ function PriceActionAgent({ candlesByInterval, chartInterval, trackLevels, onAss
     setAiLoading(true)
     setAiError('')
     try {
-      const preliminaryEvidence = analyzeTradingEvidence({ analysis, candles: snapshot, interval, instrument, context: market.context, indiaVix, flowHistory, atmVwap: atm.data, now })
+      const preliminaryEvidence = evidence
       const result = await getAiPriceAction(instrument, interval, snapshot, analysis, controller.signal, false, preliminaryEvidence)
       if (result.asOf !== analysis.latestCandleTime) throw new Error('AI analysis returned a different chart timestamp. Using the current chart only.')
       if (!controller.signal.aborted) { setAiAnalysis(result); setAssessedSnapshot(assessmentKey); setAiError('') }
@@ -237,6 +237,7 @@ function PriceActionAgent({ candlesByInterval, chartInterval, trackLevels, onAss
     <section aria-label="Candle price-action agent" className="price-action-agent">
       <MultiTimeframePanel trajectories={trajectories} assessment={assessment} activeTrade={activeTrade} connected={streamConnected} now={now} />
       <SessionReview instrument={instrument} records={setupRecords} candles={five} now={now} contractToken={contract?.token} />
+      {visible && <TradeQualityAudit instrument={instrument} records={setupRecords} candlesByInterval={candlesByInterval} contract={contract} now={now} />}
       {!commodity && <p className="agent-score-note" role="status">ATM CE/PE VWAP · {atmContext.bias === undefined
         ? `${atm.error || atmContext.reason} VWAP’s 25-point input is unavailable; technical coverage is ${evidence.coverage}% / 70% required.`
         : `Strike ${atm.data!.strike} · CE volume ${atm.data!.ce.volume.toLocaleString('en-IN')} / PE volume ${atm.data!.pe.volume.toLocaleString('en-IN')} · ${atmContext.reason} ${evidence.canConfirm ? 'Technical setup confirmed.' : evidence.reason}`}</p>}

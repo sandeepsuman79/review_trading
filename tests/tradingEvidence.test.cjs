@@ -116,14 +116,16 @@ test('opposing sentiment warns without changing technical scores, confirmation o
   }
 })
 
-test('OI/PCR contributes to technical confluence and independently to the sentiment reference', () => {
+test('legacy technical OI/PCR is separate from the four market-context budgets', () => {
   const input = fixture(), initial = analyzeTradingEvidence(input)
   const changed = analyzeTradingEvidence({ ...input, context: { ...input.context, inputs: { ...input.context.inputs, openInterest: fixture(-1).context.inputs.openInterest } } })
   assert(changed.bullishScore < initial.bullishScore)
   assert(changed.bearishScore > initial.bearishScore)
   assert.deepEqual(initial.layers.map(layer => layer.key), ['chart', 'indicators', 'rsiVwap', 'oi'])
   assert.equal(initial.sentiment.layers.reduce((sum, layer) => sum + layer.weight, 0), 100)
-  assert.equal(initial.sentiment.layers.find(layer => layer.key === 'pcr').bullish, 10)
+  assert.equal(initial.sentiment.layers.find(layer => layer.key === 'pcr'), undefined)
+  assert.equal(changed.sentiment.bullishScore, initial.sentiment.bullishScore)
+  assert.equal(changed.sentiment.bearishScore, initial.sentiment.bearishScore)
 })
 
 test('ATR excludes tight invalidation and insufficient reward without manufacturing new targets', () => {

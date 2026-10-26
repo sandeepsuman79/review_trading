@@ -34,13 +34,13 @@ function usable<T extends { asOf: string }>(snapshot: PublicSnapshot<T> | undefi
   return Number.isFinite(fetchedAge) && fetchedAge >= -60_000 && fetchedAge <= 10 * 60_000 && Number.isFinite(dataAge) && dataAge >= -60_000 && dataAge <= maxAge
 }
 
-export function globalMarketRows(context: MarketContext | null, now: number, instrument = context?.instrument) {
+export function globalMarketRows(context: MarketContext | null, now: number, instrument = context?.instrument, excludeGiftNifty = false) {
   const commodity = isCommodity(instrument)
   const inputs = commodity && (context?.marketType !== 'COMMODITY' || context.instrument !== instrument) ? undefined : context?.inputs
   const rows: Array<[string, string]> = []
   const details: NonNullable<AnalysisTile['rowDetails']> = {}
   const votes: number[] = []
-  const specs = commodity ? commodityMarkets[instrument as keyof typeof commodityMarkets].benchmarks.map(spec => ({ ...spec, provider: 'yahoo', indiaSign: spec.cueSign, showCue: spec.cueSign !== 0 })) : globalMarkets
+  const specs = commodity ? commodityMarkets[instrument as keyof typeof commodityMarkets].benchmarks.map(spec => ({ ...spec, provider: 'yahoo', indiaSign: spec.cueSign, showCue: spec.cueSign !== 0 })) : globalMarkets.filter(spec => !excludeGiftNifty || spec.symbol !== 'GIFT_NIFTY')
   for (const spec of specs) {
     const snapshot: PublicSnapshot<GlobalQuote> | undefined = spec.provider === 'nse' ? inputs?.giftNifty : inputs?.global.find(quote => quote.data?.symbol === spec.symbol)
     const data = snapshot?.data

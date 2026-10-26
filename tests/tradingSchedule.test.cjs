@@ -132,4 +132,9 @@ test('after-close sentiment pipeline assesses fresh flows, news and global/GIFT 
  }
  assert.equal(assess(1).bias,'GAP_UP_BIAS');assert.equal(assess(-1).bias,'GAP_DOWN_BIAS')
  assert(assess(1).reasons.some(r=>r.includes('GIFT Nifty')))
+ const result=assess(1)
+ assert.equal(result.coverage,92,'missing futures positions and multi-session flows leave eight of the 40 FII/DII points unavailable')
+ assert.equal(result.inputs.find(input=>input.name==='GIFT Nifty').bullish,30)
+ assert.equal(result.inputs.find(input=>input.name==='Global markets').bullish,15)
+ assert.equal(result.inputs.length,4)
 })

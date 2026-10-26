@@ -36,20 +36,26 @@ export function buildGapOutlook(instrument: string, evidence: Pick<TradingEviden
   if (!session || !instruments.includes(instrument) || evidence.instrument !== instrument) return undefined
   const sentiment = evidence.sentiment
   if (!sentiment || ![sentiment.bullishScore, sentiment.bearishScore, sentiment.coverage].every(value => Number.isFinite(value) && value >= 0 && value <= 100)) return undefined
-  const sentimentLead = sentiment.bias === 'UNAVAILABLE' ? undefined : sentiment.bullishScore - sentiment.bearishScore
+  // Older assessments may contain PCR; exclude its contribution without
+  // increasing the other inputs' weights. Current equity context already assigns it zero.
+  const pcr = (sentiment.layers ?? []).filter(layer => layer.key === 'pcr' || /\bpcr\b/i.test(layer.name))
+  const layers = (sentiment.layers ?? []).filter(layer => !pcr.includes(layer))
+  const bullishScore = Math.max(0, sentiment.bullishScore - pcr.reduce((sum, layer) => sum + layer.bullish, 0))
+  const bearishScore = Math.max(0, sentiment.bearishScore - pcr.reduce((sum, layer) => sum + layer.bearish, 0))
+  const sentimentLead = sentiment.bias === 'UNAVAILABLE' ? undefined : bullishScore - bearishScore
   const evidenceScore = Math.round((sentimentLead ?? 0) * 10) / 10
-  const coverage = Math.round(sentiment.coverage * 10) / 10
+  const coverage = Math.round(Math.max(0, sentiment.coverage - pcr.reduce((sum, layer) => sum + (layer.weight ?? 10) * layer.coverage, 0)) * 10) / 10
   const bias = coverage >= gapOutlookThresholds.minimumCoverage && sentimentLead !== undefined && Math.abs(evidenceScore) >= gapOutlookThresholds.minimumLead
     ? evidenceScore > 0 ? 'GAP_UP_BIAS' : 'GAP_DOWN_BIAS' : 'MIXED'
   const reasons = [
-    'External-input outlook: global markets including GIFT Nifty, FII/DII flows, assessed news and available PCR reference. Index chart completion is not required.',
-    sentimentLead === undefined ? 'Current external evidence is insufficient; no directional gap bias is issued.' : `External evidence: ${sentiment.bullishScore.toFixed(1)} bullish / ${sentiment.bearishScore.toFixed(1)} bearish.`,
+    'External-input outlook: FII/DII 40%, GIFT Nifty 30%, global markets 15% and assessed news 15%. Index chart completion is not required.',
+    sentimentLead === undefined ? 'Current external evidence is insufficient; no directional gap bias is issued.' : `External evidence: ${bullishScore.toFixed(1)} bullish / ${bearishScore.toFixed(1)} bearish.`,
   ]
-  for (const layer of sentiment.layers ?? []) reasons.push(`${layer.name}: ${layer.bullish.toFixed(1)} bullish / ${layer.bearish.toFixed(1)} bearish · ${(layer.coverage * 100).toFixed(0)}% available. ${layer.details.join(' · ')}`)
+  for (const layer of layers) reasons.push(`${layer.name}: ${layer.bullish.toFixed(1)} bullish / ${layer.bearish.toFixed(1)} bearish · ${(layer.coverage * 100).toFixed(0)}% available. ${layer.details.join(' · ')}`)
   reasons.push('Source publication and observation times determine freshness. New events can revise the outlook; missing inputs earn no directional points.')
-  const inputs = (sentiment.layers ?? []).map(({ key, name, bullish, bearish, coverage }) => ({ name: key === 'global' ? 'Global / GIFT Nifty' : name, bullish, bearish, coverage: Math.min(100, Math.max(0, coverage * 100)) }))
-  return { inputs, bullishScore: sentiment.bullishScore, bearishScore: sentiment.bearishScore, version: 2, expiresAt: session.expiresAt, instrument, session: session.date, generatedAt: now, asOf: new Date(now).toISOString(), bias, evidenceScore, coverage,
-    technicalLead: 0, ...(sentimentLead === undefined ? {} : { sentimentLead }), reasons, missing: [...sentiment.missing].slice(0, 20) }
+  const inputs = layers.map(({ key, name, bullish, bearish, coverage }) => ({ name: key === 'global' ? 'Global markets' : name, bullish, bearish, coverage: Math.min(100, Math.max(0, coverage * 100)) }))
+  return { inputs, bullishScore, bearishScore, version: 2, expiresAt: session.expiresAt, instrument, session: session.date, generatedAt: now, asOf: new Date(now).toISOString(), bias, evidenceScore, coverage,
+    technicalLead: 0, ...(sentimentLead === undefined ? {} : { sentimentLead }), reasons, missing: sentiment.missing.filter(item => !/\bpcr\b/i.test(item)).slice(0, 20) }
 }
 
 export function readGapOutlook(storage: Pick<Storage, 'getItem'>, instrument: string): GapOutlook | undefined {

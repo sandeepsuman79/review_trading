@@ -7,7 +7,7 @@ import { candleIntervalMs } from './candleData'
 import { candleSession } from './vwap'
 import { inTradingEntryWindow, marketHours, squareOffLabel } from './tradingSession'
 
-export type TradeReasonCode = 'INSUFFICIENT_CANDLES' | 'STALE_DATA' | 'SESSION_DATA_GAP' | 'INDICATOR_NOT_READY' | 'NO_DIRECTIONAL_ROUTE' | 'SCORE_BELOW_THRESHOLD' | 'DIRECTIONAL_LEAD_TOO_SMALL' | 'TECHNICAL_COVERAGE_LOW' | 'NO_CONFIRMED_PATTERN' | 'ATR_INVALID' | 'TRADE_LEVELS_INVALID' | 'RR_BELOW_MINIMUM' | 'OUTSIDE_ENTRY_WINDOW' | 'ENTRY_NOT_REACHED' | 'LIVE_STREAM_DISCONNECTED' | 'QUOTE_STALE' | 'QUOTE_BEFORE_SIGNAL' | 'SETUP_NOT_CONFIRMED' | 'TRADE_ALREADY_OPEN'
+export type TradeReasonCode = 'INSUFFICIENT_CANDLES' | 'STALE_DATA' | 'SESSION_DATA_GAP' | 'INDICATOR_NOT_READY' | 'NO_DIRECTIONAL_ROUTE' | 'SCORE_BELOW_THRESHOLD' | 'DIRECTIONAL_LEAD_TOO_SMALL' | 'TECHNICAL_COVERAGE_LOW' | 'NO_CONFIRMED_PATTERN' | 'ATR_INVALID' | 'TRADE_LEVELS_INVALID' | 'RR_BELOW_MINIMUM' | 'OUTSIDE_ENTRY_WINDOW' | 'ENTRY_NOT_REACHED' | 'LIVE_STREAM_DISCONNECTED' | 'QUOTE_STALE' | 'QUOTE_BEFORE_SIGNAL' | 'SETUP_NOT_CONFIRMED' | 'TRADE_ALREADY_OPEN' | 'QUALITY_DATA' | 'TREND_REGIME' | 'HIGHER_TREND' | 'ENTRY_EXTENSION' | 'PRICE_ACCEPTANCE' | 'MOMENTUM_CONFIRMATION' | 'PARTICIPATION' | 'VWAP_CONFIRMATION'
 export type DecisionCheck = { code: TradeReasonCode; label: string; status: 'PASS' | 'FAIL' | 'NOT_CHECKED'; detail: string }
 export type CandidateDecision = {
   side: 'CALL' | 'PUT'; state: 'EARLY' | 'CONFIRMED' | 'RISKY' | 'REJECTED' | 'WAIT'; quality?: 'STANDARD' | 'STRONG'
@@ -24,6 +24,8 @@ export function buildCandidateDecision(analysis: PriceActionAnalysis, evidence: 
   const opposingScore = side === 'CALL' ? evidence.bearishScore : evidence.bullishScore
   const lead = Math.round((supportScore - opposingScore) * 10) / 10
   const routes = Date.parse(analysis.alignment?.at ?? '') === Date.parse(analysis.latestCandleTime ?? '') ? analysis.alignment?.routes.filter(route => route.side === side).map(route => route.name) ?? [] : []
+  const selectedConfirmation = evidence.confirmation
+  const routePass = selectedConfirmation ? Boolean(selectedConfirmation.family && selectedConfirmation.checks.find(check => check.code === 'MOMENTUM_CONFIRMATION')?.passed) : routes.length > 0
   const previous = candles[candles.length - 2], latest = candles[candles.length - 1]
   const consecutive = Boolean(previous && latest && Date.parse(latest[0]) - Date.parse(previous[0]) === candleIntervalMs(evidence.interval) && candleSession(previous[0]) === candleSession(latest[0]) && candleSession(latest[0]) === candleSession(new Date(now).toISOString()))
   const fresh = evidence.checks?.find(check => check.label === 'Recent completed candles')?.passed === true
@@ -43,12 +45,15 @@ export function buildCandidateDecision(analysis: PriceActionAnalysis, evidence: 
   add('INDICATOR_NOT_READY', 'Full indicator readiness', warm, '50 completed candles and available EMA20/50, RSI/momentum and Supertrend')
   add('ATR_INVALID', 'ATR(14)', atr, atr ? `${evidence.atr14!.toFixed(2)} points` : 'Current positive ATR required')
   add('NO_CONFIRMED_PATTERN', 'Price pattern', pattern, pattern ? analysis.setup : 'No completed price setup detected for this direction')
-  add('NO_DIRECTIONAL_ROUTE', 'Directional route', routes.length > 0, routes.join(' or ') || 'No EMA, Supertrend or level route in this direction')
+  add('NO_DIRECTIONAL_ROUTE', 'Directional route', routePass, selectedConfirmation ? `${selectedConfirmation.setupType} with explicitly selected ${selectedConfirmation.indicator}` : routes.join(' or ') || 'No EMA, Supertrend or level route in this direction')
   add('TECHNICAL_COVERAGE_LOW', 'Full technical coverage', evidence.coverage >= 70, `${evidence.coverage}% / 70% full, ${early.earlyCoverage}% early; missing weights stay missing`)
   add('SCORE_BELOW_THRESHOLD', 'Supporting score', supportScore >= evidence.requiredScore, `${supportScore}/100 / ${evidence.requiredScore} required`)
-  add('DIRECTIONAL_LEAD_TOO_SMALL', 'Directional score ratio', scoreDominates(supportScore, opposingScore) && lead >= evidence.requiredGap, `${supportScore} support / ${opposingScore} opposition; require positive support ≥1.5× opposition and ${evidence.requiredGap} risk-floor lead`)
+  add('DIRECTIONAL_LEAD_TOO_SMALL', selectedConfirmation ? 'Directional lead' : 'Directional score ratio', (selectedConfirmation ? supportScore > 0 : scoreDominates(supportScore, opposingScore)) && lead >= evidence.requiredGap, `${supportScore} support / ${opposingScore} opposition; ${selectedConfirmation ? `require ≥${evidence.requiredScore} support and ≥${evidence.requiredGap} lead; no additional ratio gate` : `require positive support ≥1.5× opposition and ${evidence.requiredGap} risk-floor lead`}`)
   add('TRADE_LEVELS_INVALID', 'Trade levels', levels, 'Positive entry, ATR-adjusted stop and target on the correct sides', pattern)
   add('RR_BELOW_MINIMUM', 'Reward/risk', riskReward !== undefined && meetsMinimumRewardRisk(riskReward), riskReward !== undefined ? `${riskReward.toFixed(2)}:1 / ${minimumRewardRisk.toFixed(2)}:1 required` : 'No validated trade levels', pattern && levels)
+  for (const check of evidence.confirmation?.checks ?? []) add(check.code, check.label, check.passed, check.detail)
+  const vwapCheck = evidence.confirmation && evidence.checks?.find(check => check.label === 'VWAP confirmation')
+  if (vwapCheck) add('VWAP_CONFIRMATION', vwapCheck.label, vwapCheck.passed, vwapCheck.detail)
   const hardReady = fresh && consecutive && withinEntryWindow(now, evidence.instrument) && atr && candles.length >= early.earlyCandles
   const initialIndicators = [analysis.exponentialMovingAverage20, analysis.rsi14, analysis.rsi14Momentum].every(value => value !== undefined && Number.isFinite(value)) && Boolean(analysis.supertrendDirection)
   const earlyReady = hardReady && initialIndicators && routes.length > 0 && evidence.coverage >= early.earlyCoverage && supportScore >= Math.max(early.earlyScore, evidence.requiredScore) && lead >= Math.max(early.earlyGap, evidence.requiredGap)

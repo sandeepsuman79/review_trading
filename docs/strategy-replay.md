@@ -59,9 +59,14 @@ This bounded history can differ from a dashboard with a larger local cache.
 
 The engine runs the existing price-pattern, evidence-score and confirmed-plan
 builders at each completed candle's close, giving them only a chronological
-prefix. It supplies **no reconstructed OI/PCR, India VIX, news, FII/DII, global
-quotes or paired option VWAP**. Those historical observations are absent, and the
-result discloses them. Today's data must never be injected into a past assessment.
+prefix. It supplies **no reconstructed OI/PCR, India VIX, news, FII/DII or global
+quotes**. Paired option VWAP is also absent unless genuine recorded
+`atmVwapSnapshots` are provided. Each snapshot uses the `AtmVwapSnapshot` shape in
+`src/api/atmVwap.ts`, including instrument, strike, expiry, fetch time and both
+legs' prices, VWAPs, timestamps, traded volume and session coverage. Only recorded
+snapshots fetched by the evaluation time are visible; normal freshness and ATM
+matching checks still apply. Today's data must never be injected into a past
+assessment.
 
 A confirmed setup may enter only at the **immediate next observed bar's open**,
 with its trigger already reached, in the same session and before expiry. The
@@ -119,10 +124,20 @@ Validate on unseen sessions and multiple volatility conditions before proposing
 any live parameter changes. This tool does not modify those parameters.
 
 
-With the 22 October RSI/VWAP weights, index OHLC alone has at most 65% technical
-coverage: the paired ATM VWAP (25%) and OI/PCR (10%) are absent. The current offline
-CLI does not accept archived context, so it cannot confirm index entries at the
-70% coverage threshold. Zero index entries therefore do not establish strategy
+The current technical budget excludes OI/PCR. Index OHLC alone can have at most
+75% coverage without ATM VWAP, but still cannot confirm: matching VWAP is an
+explicit mandatory gate. The legacy baseline has at most 65% coverage without
+ATM/OI and cannot reach 70%. The optional `atmVwapSnapshots` input accepts recorded
+ATM snapshots in fetch-time order; future snapshots are never exposed to an
+earlier evaluation. Missing or stale snapshots do not earn their weight. Zero
+index entries therefore do not establish strategy
 performance. MCX OHLCV includes its own genuine volume and can still supply VWAP.
 Live index analysis obtains ATM context separately; it must not be substituted
 into a past replay.
+
+The default entry evaluator now applies `adaptive-confirmation-v3`. Use
+`npm run agent:compare -- candles.json --output comparison.json` to compare it
+with both the explicit legacy technical-v2 baseline and the preceding fixed-v2
+confirmation policy under identical supplied costs
+and fixed-target comparison exits. This does not validate live open-profit TSL.
+See [the confirmation algorithm](chart-confirmation.md) for its gates and limits.

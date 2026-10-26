@@ -4,6 +4,10 @@ For a consolidated checklist of current rules, weights, entry/exit timing and th
 late-entry review, see [Agent rule audit](agent-rule-audit.md).
 The [enhancement review](agent-enhancement-review.md) documents monitoring,
 sentiment-age weighting and offline replay additions and their limits.
+Current confirmation uses [bounded adaptive thresholds](adaptive-confirmation.md)
+from completed 15-minute regimes. Continuation 55/15 and reversal 65/20 are lower
+bounds; volatility/chop can raise them, and extreme conditions return WAIT.
+The 1.20 entry reward/risk floor, score weights and TSL are unchanged.
 
 The agent has two independent analyses. Technical analysis alone confirms CALL/CE
 or PUT/PE setups. Market sentiment describes support or headwinds; it never creates,
@@ -16,8 +20,27 @@ independently analyses completed **5-minute, 15-minute and 1-hour candles**, eve
 while another chart is displayed. Each interval evaluates its own candle patterns,
 EMA/SMA, RSI, ATR, ADX, Supertrend and genuine VWAP where volume exists. Every model
 needs its own 50-bar warmup and full confirmation checks. The agent does not add
-scores across intervals or require unanimous direction. Either CALL/CE or PUT/PE
+scores across intervals or require unanimous direction. Five-minute entries need
+completed 15-minute context; 15-minute entries need completed hourly context.
+Continuations cannot oppose it; proven price-structure reversals may with stricter
+scores. Missing/stale higher history always blocks. Each required higher view
+needs its own 50-bar warmup. Hourly entries use their own context. Either CALL/CE or PUT/PE
 (LONG/SHORT for MCX) can qualify automatically on any eligible interval.
+
+The [revised confirmation algorithm](chart-confirmation.md) separates continuation,
+early reversal and uncertain transition. Exactly one explicitly selected indicator
+(default EMA20/50; RSI14 or Supertrend alternatives) confirms the price event.
+Continuations use a regime-dependent ADX14 floor between 18 and 25, with support
+at least 55 and lead at least 15. Reversals need a genuine opposing-structure
+break, momentum turn and at least 65 support / 20 lead, without a continuation
+ADX floor. The adaptive policy can raise support/lead to 80/30 or block extreme
+conditions. A changing slope alone waits. Entry extension, participation, VWAP,
+coverage and risk still apply.
+RSI with structure remains 25% and VWAP 25%; chart/price action is 35%, other
+indicators 15%. OI/PCR is context only. VIX adds risk floors, not direction. These
+intraday parameters require validation on unseen sessions. Today's trade quality
+audit reads actual saved browser entries and outcomes; missing historical inputs
+are reported as unavailable rather than reconstructed from today's context.
 
 Among eligible confirmed setups the latest completed signal close has priority;
 equal close times prefer 5 minutes, then 15 minutes, then 1 hour. The selected
@@ -58,15 +81,15 @@ even though short-term structure detection uses a bounded recent window.
 
 | Input group | Fixed budget | Inputs |
 | --- | ---: | --- |
-| Chart | 25% | Completed setup, pattern, location, candle pressure, structure, bullish/bearish evidence |
+| Chart | 35% | Completed setup, pattern, location, candle pressure, structure, bullish/bearish evidence |
 | Other indicators | 15% | SMA20, price/EMA20, EMA20/50 alignment, slopes, non-RSI/non-VWAP turns and crossovers, Supertrend10/3 |
 | RSI structure + VWAP | 50% | RSI14 level 8%, momentum 7%, confirmed RSI HH/HL/LH/LL structure 10%, genuine session VWAP 25% |
-| OI / PCR | 10% | Current unexpired option-chain PCR and call/put OI change balance |
+| OI / PCR | 0% | Reference data; no live technical allocation |
 
 Each group's bullish and bearish contributions remain inside its budget. Missing
 inputs never increase other weights. OI walls, max pain and totals remain reference
-levels; OI alone does not establish writing. A missing option chain (including
-Sensex) can leave a trade eligible when remaining technical evidence is strong.
+levels; OI alone does not establish writing. A missing option chain does not
+remove live technical coverage; the explicit legacy replay retains its old OI budget.
 Indices use the selected index’s ATM CE/PE broker session averages and actual traded volume for VWAP context, with a candle-volume fallback.
 Zero-volume spot candles cannot supply VWAP; missing ATM data earns no VWAP points.
 
@@ -86,7 +109,10 @@ Confirmation requires:
 
 - A recent completed price-action pattern with valid entry, target and invalidation.
 - At least 50 completed bars and warmed-up EMA20/50, RSI14/momentum and Supertrend.
-- At least 70% technical coverage, positive directional support ≥1.5× opposition for STANDARD confirmation.
+- At least 70% technical coverage; continuation support ≥55 with lead ≥15,
+  reversal support ≥65 with lead ≥20. These are lower bounds, raised by the
+  completed 15-minute regime up to 80/30; extreme volatility/chop returns WAIT.
+  These replace the legacy 1.5× ratio gate.
 - STRONG classification requires at least 60/100 support and a 20-point lead.
 - Consecutive completed bars from the current IST session and the Mon–Fri 09:15–15:15 IST new-entry window.
 - A stop outside chart invalidation and at least one ATR14 from entry, rounded outward.
@@ -103,22 +129,22 @@ Unavailable VIX is disclosed. Thresholds require strategy validation.
 
 | Input group | Independent budget | Inputs |
 | --- | ---: | --- |
-| FII / DII | 30% | Published daily flows, participant futures positions, observed multi-session flow trend |
-| News | 30% | Current individually assessed Indian, global and constituent headlines |
-| Global | 30% | Available GIFT Nifty, Dow, Nasdaq, FTSE, Nikkei, KOSPI, Brent, USD/INR, US10Y, S&P500, WTI |
-| PCR reference | 10% | Same current option-chain PCR used in technical analysis |
+| FII / DII | 40% | Published daily flows, participant futures positions, observed multi-session flow trend |
+| GIFT Nifty | 30% | Its own valid quote and percentage move, age-adjusted from observation time |
+| Global markets | 15% | Dow, Nasdaq, FTSE, Nikkei, KOSPI, Brent, USD/INR, US10Y, S&P500, WTI; excludes GIFT |
+| News | 15% | Current individually assessed Indian, global and constituent headlines |
 
 Sentiment needs 40% available coverage and at least one sufficiently observed
-non-PCR group to label a direction; a gap below 15 points is neutral. Otherwise
+positive-budget group to label a direction; a gap below 15 points is neutral. Otherwise
 it is unavailable. Support/opposition compares sentiment with the technical setup
-and warns about counter-sentiment risk. PCR appears in both views for context;
-sentiment never adds another PCR vote to the technical score. Missing or stale
+and warns about counter-sentiment risk. PCR has no equity market-context weight.
+GIFT is not counted again in global markets. Missing or stale
 sentiment never blocks technical confirmation. Gemini can run or refresh while
 the technical agent confirms and observes entry locally.
 
 Sentiment-only contributions now decay from publication/observation time, with
-experimental half-lives of news 12h, globals 24h, published flows 3d and PCR
-reference 15m. Existing hard freshness gates remain; fetch time does not reset
+experimental half-lives of news 12h, global/GIFT quotes 24h and published flows 3d.
+PCR has no equity context contribution. Existing hard freshness gates remain; fetch time does not reset
 age, coverage is not reweighted, raw headline labels stay visible, and technical
 OI/PCR scores and confirmation thresholds do not decay. Input details show the
 remaining age-weight. Historical flow-trend reports decay individually.
@@ -182,9 +208,13 @@ the dashboard is open, including overnight and weekends until the next weekday
 09:15 IST open. A login fetches the feeds again. Weekends are handled; an exchange
 holiday calendar is not connected.
 
-Direction uses the current external sentiment lead, with its existing fixed
-budgets: FII/DII 30%, assessed news 30%, global markets including GIFT Nifty 30%,
-and available PCR reference 10%. Source publication/observation timestamps and age
+Direction uses the same 100-point equity market-context budget: FII/DII 40,
+GIFT Nifty 30, global markets 15 and news 15. PCR contributes no gap score,
+coverage or displayed row. GIFT is excluded from the global group. Full gap
+coverage can reach 100% when all component inputs are available; missing inputs
+are never redistributed. Commodity context retains its own existing news and
+benchmark budgets; equity FII/DII and GIFT are not applied to MCX.
+Source publication/observation timestamps and age
 weights remain in force; fetching an old report does not make it newly published.
 Missing or unassessed news and stale feeds do not gain points or redistribute
 weights. Coverage must be at least 60% and the absolute directional lead at least

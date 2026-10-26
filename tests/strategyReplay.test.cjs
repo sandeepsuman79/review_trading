@@ -97,21 +97,30 @@ test('index cutoff is 15:15; MCX retains its own later session and squares off a
   }
 })
 
-test('real production replay excludes indices without archived ATM/OI and confirms both MCX directions with genuine futures volume', () => {
-  const at = Date.parse('2026-10-16T14:00:00+05:30')
-  for (const [instrument, base, scale, root] of [['Nifty 50', 22000, 1], ['Sensex', 74000, 3], ['Bank Nifty', 50000, 2], ['Natural Gas', 300, .2, 'NATURALGAS'], ['Crude Oil', 6000, 2, 'CRUDEOIL'], ['Gold', 110000, 10, 'GOLD'], ['Silver', 90000, 10, 'SILVER']]) for (const d of [1, -1]) {
-    const candles = Array.from({ length: 52 }, (_, i) => { const o = base + d * (i * .3 + Math.sin(i / 4) * 6) * scale, c = o + d * 2 * scale; return [new Date(at - (52 - i) * duration).toISOString(), o, Math.max(o, c) + .7 * scale, Math.min(o, c) - .7 * scale, c, root ? 100 : 0] })
+test('production replay requires higher warmup, confirms both MCX directions and requires archived ATM for indices', () => {
+  const { markets, fixture } = require('./helpers/confirmation.cjs')
+  const at = Date.parse('2026-10-26T14:00:00+05:30')
+  for (const market of markets) for (const d of [1, -1]) {
+    const [instrument,,,root] = market
+    // Several real session prefixes provide 50 completed higher bars. A 52-bar
+    // lower-only impulse cannot pass the revised policy's higher-trend warmup.
+    const { candles } = fixture(market, d, 'FIVE_MINUTE', at, 'ACCEPTED_BREAK', 180)
     const matched = root ? { ...contract(instrument, root), tickSize: root === 'NATURALGAS' ? .1 : 1 } : undefined
+    assert.equal(evaluateReplaySetup({ instrument, contract: matched, candles: candles.slice(-52), now: at }), undefined)
     const plan = evaluateReplaySetup({ instrument, contract: matched, candles, now: at })
     if (!root) {
-      assert.equal(plan, undefined, `${instrument}: absent ATM/OI leaves at most 65% coverage, below 70%`)
+      assert.equal(plan, undefined, `${instrument}: missing ATM VWAP cannot pass the explicit VWAP confirmation gate`)
+      const atmVwap = require('./helpers/atmVwap.cjs')(instrument, candles.at(-1)[4], at, d)
+      assert.equal(evaluateReplaySetup({ instrument, candles, now: at, atmVwap })?.stage, 'CONFIRMED', `${instrument}: archived ATM and complete higher history permit confirmation`)
       continue
     }
     assert.equal(plan?.stage, 'CONFIRMED', instrument)
     assert.equal(plan.side, d === 1 ? 'CALL' : 'PUT')
     assert.equal(plan.evidenceSummary.indiaVix, undefined)
     assert(plan.coverage.includes('Public market context unavailable'))
-    assert.equal(plan.evidenceSummary.layers.find(layer => layer.name === 'OI / PCR').coverage, 0)
+    assert.equal(plan.evidenceSummary.layers.find(layer => layer.name === 'OI / PCR'), undefined, 'context-only OI has no persisted technical allocation')
+    assert.equal(plan.evidenceSummary.layers.find(layer => layer.name === 'Chart & pattern').weight, 35)
+    assert.equal(plan.evidenceSummary.layers.reduce((sum, layer) => sum + layer.weight, 0), 100)
   }
 })
 
@@ -145,4 +154,24 @@ test('offline CLI emits honest JSON and only creates an explicitly chosen new re
     const duplicate = spawnSync(process.execPath, [cli, source, '--output', output], { encoding: 'utf8' })
     assert.equal(duplicate.status, 1); assert.match(duplicate.stderr, /exist/)
   } finally { fs.rmSync(folder, { recursive: true, force: true }) }
+})
+
+test('archived option context is visible only from its recorded fetch time, never from later snapshots', () => {
+  const snapshot = require('./helpers/atmVwap.cjs')('Nifty 50',1000,start+50*duration,1)
+  const future = { ...snapshot, fetchedAt:new Date(start+52*duration).toISOString() }
+  const seen=[]
+  replayStrategy({instrument:'Nifty 50',candles:history(start,54),atmVwapSnapshots:[snapshot,future]},input=>{seen.push([input.now,input.atmVwap?.fetchedAt]);return undefined})
+  assert(seen.length>0)
+  for(const [now,at] of seen)if(at)assert(Date.parse(at)<=now)
+  assert.equal(seen[0][1],snapshot.fetchedAt)
+  assert(seen.some(([now,at])=>now===start+52*duration&&at===future.fetchedAt))
+  assert.throws(()=>replayStrategy({instrument:'Nifty 50',candles:history(),atmVwapSnapshots:[future,snapshot]}),/ordered/)
+})
+
+test('legacy and revised evaluators remain distinct and comparison never changes the live exit policy', () => {
+ const {evaluateReplayLegacySetup}=require('../src/analysis/strategyReplay.ts')
+ const input={instrument:'Nifty 50',candles:history()}
+ assert.match(replayStrategy(input).assumptions.strategy,/adaptive-confirmation-v3/)
+ assert.match(replayStrategy(input,evaluateReplayLegacySetup).assumptions.strategy,/Legacy technical-v2/)
+ assert.match(replayStrategy(input).assumptions.exitPolicy,/Fixed-target comparison/)
 })

@@ -1,4 +1,5 @@
 import { meetsMinimumRewardRisk } from './tradeRisk'
+import { validSavedAdaptive } from './adaptiveConfirmation'
 import { updateTradeProtection, protectiveStopTouched, type TradeProtection, type ProtectionAssessment } from './tradeProtection'
 import type { AngelOneCandle, AngelOneStreamTick } from '../api/angelOne'
 import type { PredictionPlan } from './earlyPrediction'
@@ -122,6 +123,23 @@ function validRecord(value: unknown): value is PredictionRecord {
     && (record.latestPriceSource === undefined || ['LIVE', 'CANDLE'].includes(record.latestPriceSource))
     && (record.entrySource === undefined || ['LIVE', 'CANDLE'].includes(record.entrySource))
     && validTradeProtection(record)
+    && (record.confirmationSnapshot === undefined || record.confirmationSnapshot !== null && ['chart-confirmation-v1', 'structure-confirmation-v2', 'adaptive-confirmation-v3'].includes(record.confirmationSnapshot.policy)
+      && record.confirmationSnapshot.passed === true && record.confirmationSnapshot.side === record.side && record.confirmationSnapshot.asOf === record.signalCandleTime
+      && record.confirmationSnapshot.vwap?.passed === true && ['ATM_OPTIONS', 'CONTRACT'].includes(record.confirmationSnapshot.vwap.source) && Number.isFinite(record.confirmationSnapshot.vwap.observedAt)
+      && (record.confirmationSnapshot.policy !== 'adaptive-confirmation-v3' || validSavedAdaptive(record.confirmationSnapshot.adaptive, Date.parse(record.signalCandleTime) + candleIntervalMs(record.interval), record.confirmationSnapshot.setupType === 'REVERSAL')
+        && record.confirmationSnapshot.requiredScore === record.confirmationSnapshot.adaptive!.minimumScore && record.confirmationSnapshot.requiredLead === record.confirmationSnapshot.adaptive!.minimumLead
+        && Number.isFinite(record.confirmationSnapshot.appliedScore) && record.confirmationSnapshot.appliedScore! >= record.confirmationSnapshot.requiredScore! && record.confirmationSnapshot.appliedScore! <= 80
+        && Number.isFinite(record.confirmationSnapshot.appliedLead) && record.confirmationSnapshot.appliedLead! >= record.confirmationSnapshot.requiredLead! && record.confirmationSnapshot.appliedLead! <= 30)
+      && (record.confirmationSnapshot.policy === 'chart-confirmation-v1' ? ['PULLBACK', 'ACCEPTED_BREAK'].includes(record.confirmationSnapshot.family ?? '')
+        : ['EMA20_50', 'RSI14', 'SUPERTREND'].includes(record.confirmationSnapshot.indicator ?? '')
+          && ['CONTINUATION', 'REVERSAL'].includes(record.confirmationSnapshot.setupType ?? '')
+          && Number.isFinite(record.confirmationSnapshot.requiredScore) && record.confirmationSnapshot.requiredScore! > 0
+          && Number.isFinite(record.confirmationSnapshot.requiredLead) && record.confirmationSnapshot.requiredLead! > 0
+          && (record.confirmationSnapshot.setupType === 'REVERSAL' ? record.confirmationSnapshot.family === 'STRUCTURE_REVERSAL'
+            && Number.isFinite(record.confirmationSnapshot.structureLevel) && Number.isFinite(record.confirmationSnapshot.invalidationLevel)
+            : ['PULLBACK', 'ACCEPTED_BREAK'].includes(record.confirmationSnapshot.family ?? '')))
+      && Array.isArray(record.confirmationSnapshot.checks)
+      && record.confirmationSnapshot.checks.length === 7 && record.confirmationSnapshot.checks.every(check => check && check.passed === true && typeof check.code === 'string' && typeof check.label === 'string' && typeof check.detail === 'string'))
     && (record.reversalInterval === undefined || (candleIntervals as readonly string[]).includes(record.reversalInterval))
     && (record.earlyExitSource === undefined || ['MANUAL', 'AGENT_REVERSAL', 'AGENT_PROTECTION', 'SESSION_SQUARE_OFF'].includes(record.earlyExitSource))
     && (record.earlyExitAcknowledgedAt === undefined || record.status === 'EARLY_EXIT' && Number.isFinite(record.earlyExitAcknowledgedAt) && record.earlyExitAcknowledgedAt >= record.exitAt!)
@@ -153,6 +171,7 @@ function validEvidenceSummary(value: PredictionRecord['evidenceSummary']) {
       && [value.sentiment.bullishScore, value.sentiment.bearishScore, value.sentiment.coverage].every(score => Number.isFinite(score) && score >= 0 && score <= 100)
       && value.sentiment.bullishScore + value.sentiment.bearishScore <= 100
       && ['BULLISH', 'BEARISH', 'NEUTRAL', 'UNAVAILABLE'].includes(value.sentiment.bias)
+      && (value.sentiment.state === undefined || ['SUPPORTIVE_BULLISH', 'SUPPORTIVE_BEARISH', 'MIXED', 'HIGH_RISK'].includes(value.sentiment.state))
       && ['SUPPORTS', 'OPPOSES', 'MIXED', 'UNAVAILABLE', 'NO_TECHNICAL_DIRECTION'].includes(value.sentiment.alignment)
       && typeof value.sentiment.reason === 'string')
 }
