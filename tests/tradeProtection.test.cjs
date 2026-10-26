@@ -28,11 +28,11 @@ test('TSL is automatic before 0.75R and removed minute-pressure data cannot forc
   assert.equal(closed.protection.atr,10,'removed minute ATR is ignored')
  }
 })
-test('saved protective stops survive reload and replay cannot turn an ambiguous stop/target candle into a win',()=>{
+test('saved protective stops settle even when the same candle crosses the reference target',()=>{
  let record=position();record=observePredictionTick(record,1015,now,true,review(record))
  const start=Date.parse('2026-10-16T13:05:00+05:30');record={...record,observedThrough:start}
  const bar=[new Date(start).toISOString(),1015,1035,1000,1025,0]
- const replay=observePredictionCandles(record,[bar],start+300000,false);assert.equal(replay.status,'AMBIGUOUS');assert.equal(replay.points,undefined)
+ const replay=observePredictionCandles(record,[bar],start+300000,false);assert.equal(replay.status,'EARLY_EXIT');assert.equal(replay.exitPrice,record.protection.stop)
  const trailOnly=observePredictionCandles(record,[[bar[0],1015,1016,1000,1005,0]],start+300000,false);assert.equal(trailOnly.status,'EARLY_EXIT');assert.equal(trailOnly.earlyExitSource,'AGENT_PROTECTION')
 })
 

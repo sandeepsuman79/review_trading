@@ -26,6 +26,7 @@ test('chronological evaluation sees only completed prefixes; entry waits for nex
   assert.equal(result.trades[0].outcome, 'END_OF_DATA')
   assert.equal(result.summary.resolved, 0)
   assert.equal(result.summary.winRate, null)
+  assert.match(result.assumptions.exitPolicy, /Fixed-target comparison.*does not validate live exits/)
   const changed = [...candles.slice(0, 51), row(start + 51 * duration, 1000, 5000, 500, 2000)]
   const other = replayStrategy({ instrument: 'Nifty 50', candles: changed }, evaluate)
   assert.equal(other.trades[0].entry, result.trades[0].entry)

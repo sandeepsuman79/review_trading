@@ -26,7 +26,7 @@ export default function TradeDecisionPanel({ decisions, instrument, plan, tick, 
         <strong className={decision.side === 'CALL' ? 'agent-text-bullish' : 'agent-text-bearish'}>{label(decision.side)} · {state(decision)}{decision.quality && ` · ${decision.quality}`}</strong>
         <p>Support {decision.supportScore}/100 · Opposition {decision.opposingScore}/100 · Lead {decision.lead} · Coverage {decision.coverage}%</p>
         <p>{decision.setup}</p>
-        {decision.entry !== undefined && <p>Entry {decision.entry.toFixed(2)} · SL {decision.stopLoss!.toFixed(2)} · Target {decision.target!.toFixed(2)} · RR {decision.riskReward!.toFixed(2)}:1</p>}
+        {decision.entry !== undefined && <p>Entry {decision.entry.toFixed(2)} · Initial SL {decision.stopLoss!.toFixed(2)} · Reference target {decision.target!.toFixed(2)} · Entry RR {decision.riskReward!.toFixed(2)}:1</p>}
         <Checks checks={decision.checks} />
       </section>)}
     </div>

@@ -48,7 +48,7 @@ export default function ChartIndicators({ onShowAtm, visibility, onToggle, avera
         </button>)}
     </div>
     {showTradeContext && <div className="chart-trade-legend" aria-label="Trade level legend">
-      <span><i className="is-entry" />Entry</span><span><i className="is-stop" />Stop-loss</span><span><i className="is-target" />Target</span>
+      <span><i className="is-entry" />Entry</span><span><i className="is-stop" />Initial stop-loss</span><span><i className="is-target" />Reference target · Open profit</span>
       {trade?.trailingStop !== undefined && <span><i style={{ background: '#D97706' }} />TSL {number(trade.trailingStop)}</span>}
       <small>{trade ? 'Current live trade' : 'Levels appear when a confirmed trade is live'}</small>
     </div>}
@@ -84,7 +84,7 @@ export default function ChartIndicators({ onShowAtm, visibility, onToggle, avera
       </div>
       <div className="chart-indicator-metric" aria-label="ATR 14 indicator">
         <span className="chart-indicator-metric-title">ATR (14)</span><strong>{technical.atr14 === undefined ? '—' : `${technical.atr14.toFixed(1)} pts`}</strong>
-        <small>{technical.atr14 === undefined ? 'Needs 14 candles' : trade ? `Trade SL ${Math.abs(trade.entry - trade.stopLoss).toFixed(1)} · TGT ${Math.abs(trade.target - trade.entry).toFixed(1)} pts` : '14-candle volatility'}</small>
+        <small>{technical.atr14 === undefined ? 'Needs 14 candles' : trade ? `Initial SL ${Math.abs(trade.entry - trade.stopLoss).toFixed(1)} · REF ${Math.abs(trade.target - trade.entry).toFixed(1)} pts` : '14-candle volatility'}</small>
       </div>
       <div className="chart-indicator-metric" aria-label="ADX and DMI indicators">
         <span className="chart-indicator-metric-title">ADX / DMI (14)</span><strong>{technical.adx14?.toFixed(1) ?? '—'}</strong>

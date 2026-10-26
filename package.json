@@ -22,7 +22,7 @@
     "test:context": "node --test tests/marketContext.test.js",
     "test:dashboard": "node --test tests/marketInputs.test.js tests/marketDashboard.test.cjs tests/newsEvidence.test.cjs",
     "test:sync": "node --test tests/historySync.test.cjs tests/historicalProxy.test.js",
-    "test:history": "node --test tests/predictionHistory.test.cjs",
+    "test:history": "node --test tests/predictionHistory.test.cjs tests/openProfit.test.cjs",
     "news:setup": "node server/setupLocalNews.js",
     "test:ai": "node --test tests/aiResilience.test.js"
   },

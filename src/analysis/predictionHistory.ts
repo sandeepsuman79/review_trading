@@ -136,7 +136,7 @@ function validTradeProtection(record: PredictionRecord) {
   const p = record.protection, d = record.side === 'CALL' ? 1 : -1
   return p === undefined || p !== null && p.version === 1 && typeof p.armed === 'boolean'
     && [p.peakPrice, p.peakAt, p.stop, p.atr, p.risk].every(Number.isFinite) && p.atr > 0 && p.risk > 0 && p.stop > 0 && record.entryPrice !== undefined && record.entryAt !== undefined
-    && p.peakAt >= record.entryAt && (p.peakPrice - record.entryPrice) * d >= 0 && (p.stop - record.stopLoss) * d >= 0 && (record.target - p.stop) * d > 0
+    && p.peakAt >= record.entryAt && (p.peakPrice - record.entryPrice) * d >= 0 && (p.stop - record.stopLoss) * d >= 0 && (p.peakPrice - p.stop) * d > 0
 }
 
 function validEvidenceSummary(value: PredictionRecord['evidenceSummary']) {
@@ -188,7 +188,7 @@ export function observePredictionTick(record: PredictionRecord, price: number, t
     return close({ ...next, earlyExitSource: 'SESSION_SQUARE_OFF' }, 'EARLY_EXIT', price, time, `Automatic ${squareOffLabel(record.instrument, next.entryAt!)} IST square-off; exit uses the first observed quote at or after the cutoff, not a backdated fill.`)
   }
   if ((price - record.stopLoss) * d <= 0) return close(next, 'STOP_LOSS_HIT', price, time, 'Stop crossed in live instrument quotes; exit uses the observed quote.')
-  if ((price - record.target) * d >= 0) return close(next, 'TARGET_HIT', record.target, time, 'Target observed in live instrument quotes; points use the planned target.')
+  // The planned target is an entry eligibility reference, never a profit-taking cap.
   next = updateTradeProtection(next, price, time, protectionAssessment)
   if (protectiveStopTouched(next, price)) return close({ ...next, earlyExitSource: 'AGENT_PROTECTION' }, 'EARLY_EXIT', price, time, `Automatic trailing stop ${next.protection!.stop.toFixed(2)} crossed; exited at the observed quote, not the stop price. New opposite entry confirmation is not required.`)
   return next
@@ -211,8 +211,11 @@ export function observePredictionCandles(record: PredictionRecord, candles: Ange
       // even when the last saved live quote was inside that bar.
       const overlap = next.status === 'ACTIVE' && time < next.observedThrough && end > next.observedThrough
       const stop = next.protection?.stop ?? next.stopLoss
-      const harmless = overlap && (next.side === 'CALL' ? candle[3] > stop && candle[2] < next.target : candle[2] < stop && candle[3] > next.target)
-      if (harmless) { next = { ...next, observedThrough: end }; continue }
+      const harmless = overlap && (next.side === 'CALL' ? candle[3] > stop : candle[2] < stop)
+      if (harmless) {
+        next = updateTradeProtection({ ...next, observedThrough: end, latestPrice: candle[4], latestPriceAt: end, latestPriceSource: 'CANDLE' }, candle[4], end)
+        continue
+      }
       if (overlap) return { ...next, status: 'UNVERIFIED', outcomeNote: 'A reconnect bar touched an exit level but its ordering relative to saved quotes is unknown. Recorded entry is preserved; outcome is unverified.' }
       return { ...next, outcomeNote: 'Recovering saved trade: waiting for complete candle history over the disconnected period.' }
     }
@@ -246,16 +249,14 @@ export function observePredictionCandles(record: PredictionRecord, candles: Ange
     const trail = next.protection?.armed && (next.protection.stop - next.stopLoss) * d > 0 ? next.protection.stop : undefined
     const trailTouched = trail !== undefined && (d === 1 ? low <= trail : high >= trail)
     const stopTouched = d === 1 ? low <= next.stopLoss : high >= next.stopLoss
-    const targetTouched = d === 1 ? high >= next.target : low <= next.target
     // An opening gap has a known first quote, unlike the subsequent high/low ordering.
     if ((open - next.stopLoss) * d <= 0) return close(next, 'STOP_LOSS_HIT', open, end, 'Opening gap crossed stop; exit uses candle open. Time is the candle close timestamp.')
-    if ((open - next.target) * d >= 0) return close(next, 'TARGET_HIT', next.target, end, 'Opening quote crossed target. Time is the candle close timestamp.')
     if (trail !== undefined && (open - trail) * d <= 0) return close({ ...next, earlyExitSource: 'AGENT_PROTECTION' }, 'EARLY_EXIT', open, end, 'Opening gap crossed the saved protective stop; exit uses the observed candle open.')
-    if (trailTouched && targetTouched) return { ...next, status: 'AMBIGUOUS', exitAt: end, outcomeNote: 'Protective stop and target touched in the same unobserved candle; ordering is unknown.' }
     if (trailTouched) return close({ ...next, earlyExitSource: 'AGENT_PROTECTION' }, 'EARLY_EXIT', trail!, end, 'Saved protective stop touched in a completed candle; reconstructed level, exact fill time unknown.')
-    if (stopTouched && targetTouched) return { ...next, status: 'AMBIGUOUS', exitAt: end, outcomeNote: 'Target and stop touched in the same candle; ordering is unknown. Excluded from success rate.' }
     if (stopTouched) return close(next, 'STOP_LOSS_HIT', next.stopLoss, end, 'Stop touched in completed candle; time is the candle close timestamp.')
-    if (targetTouched) return close(next, 'TARGET_HIT', next.target, end, 'Target touched in completed candle; time is the candle close timestamp.')
+    // Only the known close may tighten protection for the next bar. High/low order
+    // is unknown, so never manufacture a peak or a same-bar trailing exit.
+    if (next.entryAt !== end) next = updateTradeProtection(next, closing, end)
   }
   if (next.status === 'PENDING' && now >= next.expiresAt) return { ...next, status: 'EXPIRED', outcomeNote: 'Entry not verified before the three-interval deadline.' }
   return next

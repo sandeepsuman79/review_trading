@@ -70,6 +70,8 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
   const movement = activeTrade?.entryPrice !== undefined && quote !== undefined ? (quote - activeTrade.entryPrice) * (activeTrade.side === 'CALL' ? 1 : -1) : undefined
   const points = movement === 0 ? 0 : movement
   const trailingStop = activeTrade?.protection?.armed ? activeTrade.protection.stop : undefined
+  const initialRisk = activeTrade?.entryPrice !== undefined ? Math.abs(activeTrade.entryPrice - activeTrade.stopLoss) : undefined
+  const currentR = points !== undefined && initialRisk !== undefined && initialRisk > 0 ? points / initialRisk : undefined
   const effectiveStop = trailingStop ?? plan?.stopLoss
   const progress = plan && quote !== undefined && effectiveStop !== undefined && plan.target !== effectiveStop ? Math.max(0, Math.min(100, (quote - effectiveStop) / (plan.target - effectiveStop) * 100)) : undefined
   const endedSetup = !activeTrade && prediction.side === 'WAIT' && Boolean(evidence?.canConfirm)
@@ -114,15 +116,16 @@ export default function AgentTradeCard({ analysis, evidence, prediction, activeT
         <div><dt>{activeTrade ? 'Entry time' : 'Setup time'}</dt><dd className="agent-trade-time">{time(activeTrade?.entryAt ?? (pendingTrade?.id === plan?.id ? pendingTrade?.generatedAt : plan?.generatedAt))}</dd></div>
         <div><dt>{activeTrade ? 'Trade timeframe' : 'Analysis timeframe'}</dt><dd className="agent-trade-time">{timeframe(activeTrade?.interval ?? interval)}</dd></div>
         <div><dt>Initial stop-loss ({unit})</dt><dd className="agent-text-bearish">{price(plan?.stopLoss)}</dd><small>{activeTrade ? trailingStop !== undefined ? `Auto TSL ${price(trailingStop)} · Tightens only` : 'TSL waits for a fresh observed quote' : plan.stage === 'CONFIRMED' ? 'Auto TSL starts after observed entry' : 'TSL starts only after confirmed entry'}</small></div>
-        <div><dt>Target ({unit})</dt><dd className="agent-text-bullish">{price(plan?.target)}</dd></div>
+        {activeTrade && <div><dt>Current TSL ({unit})</dt><dd className="agent-text-bearish">{price(effectiveStop)}</dd><small>{trailingStop !== undefined ? 'Automatic · Tightens only' : 'Initial SL · Waiting for fresh quote'}</small></div>}
+        <div><dt>Reference target ({unit})</dt><dd className="agent-text-bullish">{price(plan?.target)}</dd><small>Entry reward/risk reference · Profit can continue beyond it</small></div>
       </dl>}
-      {plan && <div className="agent-trade-progress" aria-label="Instrument price between current stop and target">
+      {plan && !activeTrade && <div className="agent-trade-progress" aria-label="Instrument price between initial stop and reference target">
         <div className="agent-trade-progress-track">{progress !== undefined && <span className="agent-trade-progress-marker" style={{ '--trade-progress': `${progress}%` } as CSSProperties} />}</div>
-        <div className="agent-trade-progress-labels"><span>{trailingStop !== undefined ? 'TSL' : 'SL'} <strong>{price(effectiveStop)}</strong></span><span>{quote === undefined ? 'Waiting for quote' : `${live ? 'Now' : 'Last'} ${price(quote)}`}</span><span>TGT <strong>{price(plan.target)}</strong></span></div>
+        <div className="agent-trade-progress-labels"><span>SL <strong>{price(effectiveStop)}</strong></span><span>{quote === undefined ? 'Waiting for quote' : `${live ? 'Now' : 'Last'} ${price(quote)}`}</span><span>REF <strong>{price(plan.target)}</strong></span></div>
       </div>}
       {plan && <div className="agent-trade-summary">
         <div><span>{activeTrade ? 'Unrealized profit / loss' : 'Trade profit / loss'}</span><strong className={points !== undefined ? points >= 0 ? 'agent-text-bullish' : 'agent-text-bearish' : ''}>{points === undefined ? '—' : `${points > 0 ? '+' : ''}${price(points)} pts`}</strong><small>{activeTrade ? live ? `${unit} points · Live quote` : `${unit} points · Last available quote` : 'Available after confirmed entry'}</small></div>
-        <div><span>Reward : risk</span><strong>{plan ? `${plan.riskReward.toFixed(2)} : 1` : '—'}</strong><small>Based on planned {unit} levels</small></div>
+        <div><span>{activeTrade ? 'Current return / initial risk' : 'Planned reward : risk'}</span><strong>{activeTrade ? currentR === undefined ? '—' : `${currentR > 0 ? '+' : ''}${currentR.toFixed(2)}R` : `${plan.riskReward.toFixed(2)} : 1`}</strong><small>{activeTrade ? 'Open profit · Exit managed by TSL, reversal or square-off' : `Entry minimum ${minimumRewardRisk.toFixed(2)}:1 · Reference ${unit} levels`}</small></div>
       </div>}
       {plan && <p className="agent-trade-note">{activeTrade ? 'Agent-managed exit · One live trade per instrument' : plan.stage === 'CONFIRMED' ? 'Conditional entry · Current setup must remain confirmed · Trade tracking starts when entry is observed' : risky ? 'Risky conditional setup · Full confirmation incomplete' : 'Early analysis only · Not recorded as a trade'} · {plan.strategyVersion === 'technical-v2' ? 'Technical confirmation · Sentiment is reference only' : 'Recorded under the previous strategy'}<br />{plan.targetBasis}{activeTrade && <><br />Automatic TSL · {protectionRules.atrMultiplier}× completed-frame ATR, at least {protectionRules.minimumTrailR}R and two ticks · Break-even at +{protectionRules.breakEvenR}R · Exit uses an observed quote. {/recovering|waiting for complete candle history/i.test(activeTrade.outcomeNote) ? 'Paused for history recovery' : live ? 'Live monitoring' : 'Waiting for fresh quotes; local protection cannot execute offline'}.</>}</p>}
 

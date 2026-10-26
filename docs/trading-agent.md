@@ -28,7 +28,7 @@ all intervals for an instrument.
 
 There is no one-minute strategy analysis, one-minute historical sync or independent
 minute-pressure exit. Legacy one-minute trade records remain readable and receive
-ordinary stop/target tracking, but cannot produce new one-minute setups. Raw
+ordinary stop/trailing tracking, but cannot produce new one-minute setups. Raw
 one-minute option volume may still be used to calculate separately labelled ATM
 option VWAP context; it supplies no one-minute entry or exit trigger.
 
@@ -36,7 +36,8 @@ A current fully confirmed opposite setup on any of the three supported intervals
 may close an existing position. It must be a full completed candle formed wholly
 after entry, pass its own score/coverage/pattern/ATR/reward-risk gates, match the
 contract and have a fresh observed quote after its close. Developing or conflicting
-direction alone cannot close a position. Stops and targets settle first. Exit
+direction alone cannot close a position. Stops settle first. Reference targets
+do not close an entered position. Exit
 records retain the reversal timeframe, observed price and booked points. Any
 replacement needs its own confirmed setup and the same one-position guard.
 
@@ -147,14 +148,14 @@ quote. Replay that discovers both entry and exit reports a recorded outcome and
 does not announce a fresh confirmed entry after the trade has already ended.
 
 One active trade is allowed per index. Recorded risk levels remain fixed, with
-continued target, stop and completed-chart reversal monitoring. Profit/loss is
+continued stop, trailing and completed-chart reversal monitoring. Profit/loss is
 booked before another trade can enter for that index.
 
 Position management consumes current fully confirmed opposite plans from 5-minute,
 15-minute and hourly assessments, including for positions opened on another
 interval. Reversal exits
 require a full post-entry candle and a fresh live quote after its close. Developing,
-stale, missing or wrong-index plans cannot exit a position. Observed stops/targets
+stale, missing or wrong-index plans cannot exit a position. Observed stops
 take precedence; booked P/L and the existing one-active-trade guard precede any
 replacement entry. Older records retain their original timeframe for persistence
 and gap replay; they are not relabelled as new signals on another interval.
@@ -233,7 +234,8 @@ are described in [TradingView's DMI documentation](https://www.tradingview.com/s
 The numeric setup thresholds here are experimental rules, not calibrated accuracy.
 
 New setup stops cover both chart invalidation and at least one ATR from the outset.
-An observed support/resistance target remains a cap. When no observed target exists,
+An observed support/resistance level caps the reference target used for entry
+eligibility, while an entered trade can continue beyond it. When no observed target exists,
 a projected 2R target is labelled explicitly. Candidate ranking prefers setups
 that satisfy the final ATR reward/risk check. Rejected chart candidates remain
 visible in diagnostics. The live dashboard can use a fully confirmed opposite
@@ -417,9 +419,11 @@ its distance is the greater of **1.5 × eligible completed-frame ATR**, **0.35R*
 ticks. If a current matching timeframe ATR is unavailable, the last known protective ATR, entry ATR or
 initial risk is used. At **1R**, the stop cannot remain behind entry. Stops only
 tighten and original planned levels stay recorded separately. A live breach exits
-at the observed quote, which can be worse than the stop during a gap. Stops/targets
-and scheduled square-off take precedence. Saved trails survive reload; unobserved
-stop/target ordering remains ambiguous. No unobserved candle high is invented as
+at the observed quote, which can be worse than the stop during a gap. Initial stops
+and scheduled square-off take precedence. Reference targets never cap an open trade.
+Saved trails survive reload; unobserved entry/stop ordering remains ambiguous.
+Recovery checks saved stops before tightening from each known candle close for
+subsequent bars. No unobserved candle high is invented as
 a live peak. These thresholds are experimental, not a backtested optimum.
 
 For Nifty 50, Sensex and Bank Nifty, nearest-expiry CE/PE quotes follow the exact
@@ -503,9 +507,9 @@ thresholds stay as documented above.
 
 The requested reward/risk minimum is now **1.20:1**, shared across setup detection,
 ATR adjustment, plan creation and the actual observed entry. A gap/slippage below
-that floor cannot enter, and original targets are not stretched. A full-winner /
-full-loser model needs 45.45% wins before costs at this ratio; TSL changes realized
-outcomes and does not establish profitability. RSI/VWAP allocations, directional
+that floor cannot enter, and original reference targets are not stretched. Entered
+trades have open profit: reaching 1.2R, 2R, 3R or the original reference does not
+trigger take-profit. Realised reward depends on the exit. RSI/VWAP allocations, directional
 score requirements, coverage and VIX/ATR checks remain unchanged.
 
 Automatic TSL begins when a confirmed setup actually enters, retaining its
@@ -515,3 +519,12 @@ its current level; its breach records a local exit at the observed quote, even
 without an opposite setup. Tracking requires fresh data and an open dashboard;
 no broker-held stop or broker order is created. Reconstructed entries never use
 an unobserved candle high as a trailing peak.
+
+Both the main card and today's confirmed-trade list show current TSL separately
+from initial SL. The main card displays current R using initial risk and has no
+bounded target-progress meter for active trades. The target remains labelled as
+an entry reference; chart badges read REF. Trails may pass it and survive reload.
+Saved completed target outcomes are preserved. Recovery checks the saved stop
+before each known candle close can tighten it for subsequent bars. Confirmed
+reversal, manual and session square-off exits remain available. This tracks
+underlying/futures points for CE/PE directions, not actual option premium orders.

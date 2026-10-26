@@ -71,6 +71,10 @@ or low and does not assume a same-close fill. The next open is a simulation
 convention, not a live quote proven to have arrived after signal computation.
 Missed triggers are skipped; a later retracement cannot resurrect the candidate.
 
+This simulator remains a **fixed-target comparison model**. The live ledger now
+lets profit run beyond its reference target with TSL; these replay results do
+not validate that exit policy or its profitability.
+
 Only one position is active per input instrument. Stops/targets are the plan's
 original levels. Stop gaps use the worse observed open; favourable target gaps
 are capped at the target. A candle touching both is **AMBIGUOUS**: neither a win

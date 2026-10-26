@@ -212,7 +212,9 @@ test('entry pauses during reassessment, continues observing stops and resumes on
   assert.equal(stopped.status, 'EXPIRED')
   record = observePredictionTick(record, 100, now + 2000, true)
   assert.equal(record.status, 'ACTIVE')
-  assert.equal(observePredictionTick(record, 120, now + 3000, false).status, 'TARGET_HIT', 'reassessment never suspends exit tracking')
+  const beyond = observePredictionTick(record, 120, now + 3000, false)
+  assert.equal(beyond.status, 'ACTIVE', 'reference target does not cap profit during reassessment')
+  assert.equal(observePredictionTick(beyond, beyond.protection.stop, now + 4000, false).earlyExitSource, 'AGENT_PROTECTION', 'reassessment never suspends trailing exits')
   const candle = [new Date(now).toISOString(), 99, 102, 98, 101, 0]
   const waiting = observePredictionCandles(createPredictionRecord(prediction.plan), [candle], now + duration, false)
   assert.equal(waiting.status, 'PENDING')

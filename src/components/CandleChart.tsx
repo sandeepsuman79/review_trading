@@ -352,7 +352,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
         ...(trade ? [
           { id: 'trade-level-entry', label: 'ENTRY', value: trade.entry, color: '#64748B', background: '#F1F5F9', textColor: '#334155' },
           { id: 'trade-level-stop', label: trade.trailingStop === trade.stopLoss ? 'SL / TSL' : 'SL', value: trade.stopLoss, color: '#EF4444', background: '#FEE2E2', textColor: '#B91C1C' },
-          { id: 'trade-level-target', label: 'TGT', value: trade.target, color: '#22C55E', background: '#DCFCE7', textColor: '#166534' },
+          { id: 'trade-level-target', label: 'REF', value: trade.target, color: '#22C55E', background: '#DCFCE7', textColor: '#166534' },
           ...(trade.trailingStop !== undefined && trade.trailingStop !== trade.stopLoss ? [{ id: 'trade-level-trailing', label: 'TSL', value: trade.trailingStop, color: '#D97706', background: '#FEF3C7', textColor: '#92400E' }] : []),
         ].map(level => ({
           id: level.id, y: level.value, borderColor: level.color, strokeDashArray: 5,
@@ -382,7 +382,7 @@ export default function CandleChart({ candles: inputCandles, name, intervalLabel
   const scaleBadges: ScaleBadge[] = [
     ...(latestPrice !== undefined ? [{ id: 'live', value: latestPrice, text: price(latestPrice), background: '#6C63FF' }] : []),
     ...([{ id: 'support', value: levels?.support, prefix: 'S', background: '#15803D' }, { id: 'resistance', value: levels?.resistance, prefix: 'R', background: '#B91C1C' }].filter((level): level is typeof level & { value: number } => level.value !== undefined).map(level => ({ ...level, text: `${level.prefix} ${price(level.value)}` }))),
-    ...(trade ? [{ id: 'entry', value: trade.entry, text: `ENTRY ${price(trade.entry)}`, background: '#F1F5F9', color: '#334155' }, { id: 'stop', value: trade.stopLoss, text: `SL ${price(trade.stopLoss)}`, background: '#FEE2E2', color: '#B91C1C' }, { id: 'target', value: trade.target, text: `TGT ${price(trade.target)}`, background: '#DCFCE7', color: '#166534' }] : []),
+    ...(trade ? [{ id: 'entry', value: trade.entry, text: `ENTRY ${price(trade.entry)}`, background: '#F1F5F9', color: '#334155' }, { id: 'stop', value: trade.stopLoss, text: `SL ${price(trade.stopLoss)}`, background: '#FEE2E2', color: '#B91C1C' }, { id: 'target', value: trade.target, text: `REF ${price(trade.target)}`, background: '#DCFCE7', color: '#166534' }] : []),
     ...(trade?.trailingStop !== undefined ? [{ id: 'trailing', value: trade.trailingStop, text: `${trade.trailingStop === trade.stopLoss ? 'SL / TSL' : trade.trailingStop === trade.entry ? 'ENTRY / TSL' : 'TSL'} ${price(trade.trailingStop)}`, background: '#FEF3C7', color: '#92400E' }] : []),
     ...horizontalLines.map(line => ({ id: `line-${line.id}`, value: line.price, text: price(line.price), background: '#2563EB', remove: () => { setMarker(null); setHorizontalLines(current => current.filter(item => item.id !== line.id)) } })),
   ]

@@ -20,7 +20,8 @@ bearish scores are evidence ratings, not probabilities.
   three is not required.
 - There is no one-minute strategy analysis, background candle sync or one-minute
   signal-based protective exit. Old one-minute ledger records remain readable.
-- Actual stream quotes check entries, stops, targets and trailing protection.
+- Actual stream quotes check entry eligibility, stops and trailing protection.
+  Targets remain entry reward/risk references; open trades have no fixed profit cap.
 - Forming candle extremes can cancel an invalid/finished entry idea. A forming
   candle cannot confirm a new entry.
 - The dashboard must remain running. Trade tracking is browser-local and sends no
@@ -172,7 +173,7 @@ so an older 15-minute/hourly close cannot reject the current ATM strike. RSI swi
 coverage or points. A break below the last HL votes bearish; a break above the
 last LH votes bullish. Forming candles cannot change this vote. The same fixed
 weights apply on 5/15/60-minute setups and fully confirmed opposite setups used
-for reversal exits. Stops, targets, ATR trailing protection and scheduled exits
+for reversal exits. Stops, ATR trailing protection and scheduled exits
 continue independently of directional scores.
 
 OI must be fresh, match the underlying and have an unexpired expiry. OI totals,
@@ -259,8 +260,9 @@ Sources: [setupTiming.ts](../src/analysis/setupTiming.ts),
 
 Existing positions continue monitoring even while the entry model says WAIT.
 
-- Original stop/target and scheduled square-off take priority. Crossed stops use
-  actual observed quotes; targets conservatively use the planned target.
+- Original stop and scheduled square-off take priority. Crossed stops use
+  actual observed quotes. The setup target remains an entry reward/risk reference;
+  reaching it after entry never closes the trade or caps booked points.
 - A current fully confirmed opposite 5-minute, 15-minute or 1-hour plan can exit,
   without first opening its replacement. A full candle formed after entry,
   correct contract and fresh live quote after its close are required.
@@ -276,8 +278,9 @@ Existing positions continue monitoring even while the entry model says WAIT.
 - Reversal revalidation and the matching live quote must be current (≤30 seconds
   old). The confirmed candle must remain current for its own interval and be
   wholly after entry. The price can gap beyond a protective stop.
-- Gaps/missing observations are replayed conservatively. Unknown intrabar ordering
-  is AMBIGUOUS or UNVERIFIED, not an invented winning fill.
+- Gaps/missing observations are replayed conservatively. Saved stops are checked
+  before each completed close can tighten the trail for the next bar. Unknown
+  entry/stop ordering is AMBIGUOUS or UNVERIFIED, not an invented winning fill.
 - Points = (exit − entry) for CALL/LONG, (entry − exit) for PUT/SHORT. These are
   underlying/futures points; no option premium return or broker execution is inferred.
 
@@ -644,9 +647,8 @@ cannot validate its profitability. Saved protection remains compatible with
 version-1 records and resumes from verified observations after reload.
 
 The rule parameters are an implementation choice, not a demonstrated optimum.
-For full-target winners and full-stop losers, 1.20:1 needs a 45.45% win rate to
-break even before costs, versus 40% at 1.50:1; trailing exits change that realized
-payoff distribution. Production performance requires separate historical/tick
+The 1.20:1 minimum measures room at entry, not the realised winner size. Trailing
+exits produce variable rewards and losses. Production performance requires separate historical/tick
 validation with costs. This remains dashboard-local tracking while running,
 not a broker-held stop or automatic broker order.
 
@@ -654,6 +656,46 @@ Research: [Fidelity ATR guidance](https://www.fidelity.com/learning-center/tradi
 describes adapting stops to volatility using an ATR multiple, including 1.5×.
 [Fidelity trailing stops](https://www.fidelity.com/learning-center/trading-investing/trading/trailing-stops-video/)
 explains the favorable-price trailing mechanism and execution/data risks.
+
+## 20. Open profit with trailing protection
+
+Confirmed CALL/CE and PUT/PE trades, and MCX LONG/SHORT trades, remain active when
+the original reference target is reached. There is no fixed take-profit boundary
+at 1.2R, 2R, 3R or higher. The reference is still required before entry: both the
+setup and actual observed entry must provide at least 1.20:1, and an already
+consumed setup cannot be entered late. RSI/VWAP weights and confirmation gates
+are unchanged.
+
+TSL starts with the initial stop and follows favourable observed prices using
+the existing max(1.5 × eligible ATR, 0.35R, two ticks) distance. It tightens in the
+correct direction for CE and PE, reaches entry or better at +1R, and never loosens.
+It can move beyond the reference target. A live stop breach books the actual
+observed quote and uncapped directional points. Initial SL remains the denominator
+for R. Existing confirmed reversal, manual exit and session/contract square-off
+rules still apply.
+
+Both the main agent card and today's confirmed-trade cards show the current TSL
+separately from initial SL. The main card shows current return in R and removes
+the bounded target-progress meter for active trades. Chart target labels are REF.
+
+Saved trails beyond the reference survive version-1 history validation and reload.
+Existing completed TARGET_HIT results remain terminal. Reconnect recovery ignores
+reference crossings and checks the saved stop first. Only known completed closes
+may tighten the trail for subsequent bars; unobserved high/low ordering cannot
+create a synthetic same-bar trailing win. The separate offline five-minute replay
+remains a fixed-target comparison model and cannot validate this live exit policy.
+
+Regression coverage includes all seven instruments in both directions through
+1.2R/2R/3R/5R, observed gap exits, persistence past the reference, one-position
+enforcement, recovery, entry reward/risk checks and rendered CE/PE cards.
+The 258 targeted tests pass across agent, analysis, history/open-profit,
+commodities, storage, replay and enhancement suites. Production build, lint and
+diff checks pass; Vite retains its existing large-chunk advisory. Authenticated
+broker data and interactive browser operation were not exercised.
+
+Sources: [predictionHistory.ts](../src/analysis/predictionHistory.ts),
+[tradeProtection.ts](../src/analysis/tradeProtection.ts),
+[openProfit.test.cjs](../tests/openProfit.test.cjs).
 Sources: [tradeRisk.ts](../src/analysis/tradeRisk.ts),
 [tradeProtection.ts](../src/analysis/tradeProtection.ts),
 [predictionHistory.ts](../src/analysis/predictionHistory.ts).
