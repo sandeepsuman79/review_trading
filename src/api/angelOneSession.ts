@@ -9,6 +9,14 @@ export class AngelOneSessionExpiredError extends Error {
   constructor() { super('Angel One session expired. Please sign in again.'); this.name = 'AngelOneSessionExpiredError' }
 }
 
+export function reportAngelOneSessionExpired(rejectedToken: string) {
+  if (typeof window !== 'undefined' && (localStorage.getItem('angelone_jwt_token') || '') === rejectedToken) window.dispatchEvent(new Event('angelone-session-expired'))
+}
+function expiredSession(rejectedToken: string) {
+  reportAngelOneSessionExpired(rejectedToken)
+  return new AngelOneSessionExpiredError()
+}
+
 let pending: { key: string; promise: Promise<string> } | undefined
 
 /** Share token rotation with profile/quote requests; never overwrite a newer login or logout. */
@@ -16,7 +24,7 @@ export async function recoverAngelOneSession(rejectedToken: string): Promise<str
   const token = localStorage.getItem('angelone_jwt_token') || ''
   if (token && token !== rejectedToken) return token
   const refreshToken = localStorage.getItem('angelone_refresh_token')
-  if (!refreshToken) throw new AngelOneSessionExpiredError()
+  if (!refreshToken) throw expiredSession(rejectedToken)
   const key = JSON.stringify([token, refreshToken])
   if (pending?.key === key) return pending.promise
   const promise = (async () => {
@@ -26,7 +34,7 @@ export async function recoverAngelOneSession(rejectedToken: string): Promise<str
     })
     const result = await response.json().catch(() => ({}))
     if (!response.ok || result.status === false || result.success === false || typeof result.data?.jwtToken !== 'string' || !result.data.jwtToken.trim()) {
-      if (isAngelOneAuthError({ ...result, status: response.status })) throw new AngelOneSessionExpiredError()
+      if (isAngelOneAuthError({ ...result, status: response.status })) throw expiredSession(token)
       throw new Error('Angel One session refresh is temporarily unavailable. Please retry shortly.')
     }
     if ((localStorage.getItem('angelone_jwt_token') || '') !== token || localStorage.getItem('angelone_refresh_token') !== refreshToken) {

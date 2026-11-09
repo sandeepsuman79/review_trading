@@ -1,8 +1,9 @@
 # Confirmation algorithm: continuation, reversal and transition
 
-Current policy: **adaptive-confirmation-v3**; see [adaptive rules](adaptive-confirmation.md)
+Archived indicator policy: **adaptive-confirmation-v3**; see [adaptive rules](adaptive-confirmation.md)
 for the completed-15-minute regime and bounded score/lead/ADX requirements.
-The price-event/indicator rules below remain in effect. The fixed 55/15 and 65/20
+The live agent now uses [five-minute candlesticks only](candlestick-agent.md).
+The rules below describe archived comparisons. The fixed 55/15 and 65/20
 figures describe baseline floors, not the actual requirement in every regime.
 
 Preceding policy: `structure-confirmation-v2`. It replaced the earlier
@@ -81,8 +82,11 @@ there is no automatic per-candle search or fallback to another indicator.
 - SUPERTREND: completed Supertrend direction must agree. If it lags, this mode
   waits; it does not silently substitute EMA or RSI. RSI 70/30 alone never trades.
 
-Indicator comparisons cannot bridge missing candles or session boundaries.
-All price-derived indicators still receive their normal warmup for scoring.
+Indicator comparisons use rolling trading-bar history across regular overnight
+and weekend closures, without bridging missing trading bars. All price-derived
+indicators still receive their normal warmup for scoring across available
+previous/current sessions. Current-session price acceptance and VWAP remain
+separate checks; yesterday's VWAP is never substituted for today's.
 When older pattern detectors produce no candidate for a direction, a fully
 qualified completed price event can supply its own candidate. This prevents
 their older combined-indicator routes from silently vetoing the explicitly
@@ -92,8 +96,9 @@ opposing levels, or an explicitly labelled 2R projection when no cap exists.
 
 ## Price event and entry quality
 
-Only completed candles are used, with 50-bar indicator warmup and at least three
-consecutive current-session price bars. Higher views each need their own 50 bars.
+Only completed candles are used, with at least 50 indicator bars across previous
+and current sessions and at least three consecutive current-session price bars.
+Higher views each need their own historical warmup, not 50 candles from today.
 
 Continuation accepted break: prior and latest closes beyond the preceding ten-bar
 high/low plus 0.05 ATR. Latest retest may penetrate at most 0.25 ATR. Initial
@@ -141,8 +146,9 @@ VIX. India VIX adds zero directional points. MCX excludes equity flows and VIX.
 
 Technical coverage must be >=70%. Valid structural stops cover at least one ATR;
 reversal stops additionally cover the confirmed opposite swing, rounded outward.
-Planned and actually observed entry reward/risk must remain >=1.20:1. Targets are
-not extended to compensate for widening a stop. Contract tick rounding, current
+Planned and actually observed entry reward/risk have no minimum ratio. Positive
+risk and remaining reward are required. Targets are not extended to compensate
+for widening a stop. Contract tick rounding, current
 entry windows, unconsumed signal, stream/quote freshness and one open position
 per instrument remain required. No spread feed, monetary risk budget or live
 cost estimate is available, so this does not claim spread-aware, budget-aware

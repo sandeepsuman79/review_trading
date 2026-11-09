@@ -1,4 +1,5 @@
 import { isCommodity } from './commodities'
+import { currentTradeTarget, usesStructureTargets } from './tradeTargets'
 import { squareOffLabel } from './tradingSession'
 import { isConfirmedTrade, type PredictionRecord } from './predictionHistory'
 
@@ -30,8 +31,10 @@ export function predictionEvents(previous: PredictionRecord[], next: PredictionR
     const liveEntry = record.status === 'ACTIVE' && (record.entrySource === 'LIVE' || record.entrySource === undefined && record.latestPriceSource === 'LIVE')
       && (now === undefined || now - record.entryAt! >= -1_000 && now - record.entryAt! <= 30_000)
     if (newEntry && liveEntry) {
-      add('entry', isCommodity(record.instrument) ? 'Confirmed trade · Entry reached' : 'Confirm call · Entry reached', `Entry ${record.entryPrice!.toFixed(2)}. Initial stop ${record.stopLoss.toFixed(2)} · TSL ${(record.protection?.stop ?? record.stopLoss).toFixed(2)}. Open profit · Reference ${record.target.toFixed(2)} does not trigger an exit.`)
+      add('entry', isCommodity(record.instrument) ? 'Confirmed trade · Entry reached' : 'Confirm call · Entry reached', `Entry ${record.entryPrice!.toFixed(2)}. Initial stop ${record.stopLoss.toFixed(2)} · TSL ${(record.protection?.stop ?? record.stopLoss).toFixed(2)}. ${usesStructureTargets(record) ? `Target ${currentTradeTarget(record).toFixed(2)}: exit on touch, or extend with fresh same-direction price structure.` : `Open profit · Reference ${record.target.toFixed(2)} does not trigger an exit.`}`)
     }
+    if (old?.status === 'ACTIVE' && record.status === 'ACTIVE' && (record.targetManagement?.revisions ?? 0) > (old.targetManagement?.revisions ?? 0))
+      add(`target:${record.targetManagement!.revisions}`, 'Target achieved · Extended', `${currentTradeTarget(old).toFixed(2)} → ${currentTradeTarget(record).toFixed(2)} · ${record.targetManagement!.basis}. SL/TSL and profit guard remain active.`)
     if ((!old || old.status !== record.status) && record.status !== 'PENDING' && record.status !== 'ACTIVE') {
       const reason = record.status === 'TARGET_HIT' ? 'Target achieved · Exit'
         : record.status === 'STOP_LOSS_HIT' ? 'Stop loss · Exit'

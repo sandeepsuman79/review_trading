@@ -1,11 +1,13 @@
 import type { AngelOneCandle } from '../api/angelOne'
 import { candleBucketTime, candleIntervalMs, completedCandles } from './candleData'
 import { isCommodity } from './commodities'
+import { instrumentSession } from './tradingSession'
 import { calculateMovingAverageSeries } from './movingAverages'
 import type { PriceActionInterval } from './priceAction'
 import { calculateTechnicalIndicatorSeries } from './technicalIndicators'
 import { candleSession } from './vwap'
 import { deriveAdaptiveThresholds, type AdaptiveThresholds, type ThresholdMode } from './adaptiveConfirmation'
+import { adjacentIndicatorBars } from './indicatorHistory'
 
 export const confirmationPolicy = 'adaptive-confirmation-v3' as const
 export type ConfirmationIndicator = 'EMA20_50' | 'RSI14' | 'SUPERTREND'
@@ -44,7 +46,7 @@ export function aggregateConfirmationCandles(candles: AngelOneCandle[], interval
   if (to <= from || to % from !== 0) return []
   const groups = new Map<number, AngelOneCandle[]>()
   for (const bar of completedCandles(candles, interval, asOf)) {
-    const bucket = candleBucketTime(Date.parse(bar[0]), target, isCommodity(instrument) ? 540 : 555)
+    const bucket = candleBucketTime(Date.parse(bar[0]), target, instrumentSession(Date.parse(bar[0]), instrument).openMinute)
     const group = groups.get(bucket) ?? []; group.push(bar); groups.set(bucket, group)
   }
   return [...groups].flatMap(([start, bars]): AngelOneCandle[] => {
@@ -79,7 +81,7 @@ export function assessConfirmationQuality({ candles, interval, instrument, side,
   const ready = bars.length >= 50 && Boolean(latest && previous) && finite(atr) && atr > 0 && finite(ema) && finite(point?.ema50)
     && now >= signalClose && now < signalClose + candleIntervalMs(interval) && candleSession(latest[0]) === candleSession(new Date(now).toISOString())
     && recent.length === 3 && recent.every((bar, i) => candleSession(bar[0]) === candleSession(latest[0]) && (!i || Date.parse(bar[0]) - Date.parse(recent[i - 1][0]) === candleIntervalMs(interval)))
-  add('QUALITY_DATA', 'Quality data', ready, '50 completed indicator bars and three consecutive current-session price bars; no forming candle or missing interval')
+  add('QUALITY_DATA', 'Quality data', ready, '50 completed indicator bars across previous and current sessions; the price setup separately needs three consecutive current-session bars and a current completed close')
   const higherInterval = higherConfirmationInterval(interval)
   let higherBias: ConfirmationQuality['higherBias'] = 'UNAVAILABLE', higherAsOf: string | undefined
   if (higherInterval) {
@@ -145,7 +147,7 @@ export function assessConfirmationQuality({ candles, interval, instrument, side,
   add('PRICE_ACCEPTANCE', 'Accepted breakout or pullback', Boolean(family), family === 'STRUCTURE_REVERSAL' ? `Prior opposing swings broken at ${structureLevel!.toFixed(2)}; two completed accepting closes; invalidation ${invalidationLevel!.toFixed(2)}` : family === 'ACCEPTED_BREAK' ? `Two completed closes beyond prior ${confirmationRules.breakLookback}-bar level ${level!.toFixed(2)}, without a failed retest` : family === 'PULLBACK' ? 'Actual counter-direction pullback to EMA20 followed by a completed break of the preceding candle' : 'Wait for an accepted continuation or confirmed reversal of opposing swings. A slope change or single impulse is insufficient.')
   const emaSlope = finite(older?.ema20) && finite(ema) ? d * (ema - older.ema20) : undefined
   const oldEma = averages[end - 6]?.ema20
-  const continuous = (lookback: number) => end >= lookback && bars.slice(end - lookback).every((bar, i, tail) => candleSession(bar[0]) === candleSession(latest[0]) && (!i || Date.parse(bar[0]) - Date.parse(tail[i - 1][0]) === candleIntervalMs(interval)))
+  const continuous = (lookback: number) => end >= lookback && bars.slice(end - lookback).every((bar, i, tail) => !i || adjacentIndicatorBars(Date.parse(tail[i - 1][0]), Date.parse(bar[0]), candleIntervalMs(interval), instrument))
   const emaConfirm = ready && continuous(setupType === 'REVERSAL' ? 6 : 3) && finite(emaSlope) && emaSlope > 0 && d * (latest[4] - ema!) > 0
     && (setupType === 'REVERSAL' ? finite(oldEma) && d * (older!.ema20! - oldEma) <= 0 : d * (ema! - point.ema50!) > 0)
   const rsiConfirm = ready && continuous(setupType === 'REVERSAL' ? 6 : 1) && finite(current?.rsi14) && finite(points[end - 1]?.rsi14) && d * (current.rsi14 - points[end - 1].rsi14!) > 0

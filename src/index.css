@@ -345,7 +345,7 @@ input, textarea, select { min-width: 0; max-width: 100%; }
 .candle-price-viewport { display: grid; grid-template-columns: minmax(0, 1fr) 16px; }
 .candle-price-viewport .apex-candle-plot { touch-action: none; cursor: crosshair; }
 .candle-price-viewport .apex-candle-plot:active { cursor: grabbing; }
-.candle-price-scroll { height: 360px; overflow-y: scroll; overflow-x: hidden; overscroll-behavior: contain; }
+.candle-price-scroll { overflow-y: scroll; overflow-x: hidden; overscroll-behavior: contain; }
 .candle-time-scroll { width: 100%; height: 18px; overflow-x: scroll; overflow-y: hidden; overscroll-behavior: contain; }
 .candle-time-scroll::-webkit-scrollbar { height: 12px; }
 .candle-price-scroll::-webkit-scrollbar { width: 12px; }
@@ -806,3 +806,13 @@ button.chart-scale-badge { cursor: pointer; }
 .candle-volume > small { padding-left: 12px; color: var(--text-secondary); }
 
 .atm-chart-loading { min-height: 360px; display: grid; place-items: center; padding: 20px; text-align: center; color: var(--text-secondary); }
+
+.candle-structure-summary { display: grid; gap: 8px; padding: 14px 16px; margin: 8px 0; border-top: 1px solid var(--border); line-height: 1.6; font-size: 12px; }
+.candle-structure-summary strong { color: var(--text-primary); }
+.candle-structure-summary span, .candle-structure-summary small { color: var(--text-secondary); }
+
+.candle-wick-focus { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 8px 12px; font-size: 11px; line-height: 1.5; color: var(--text-secondary); border-top: 1px solid var(--border); }
+.candle-wick-focus button { padding: 5px 10px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); color: var(--text-primary); cursor: pointer; }
+
+.background-monitoring-status { padding-top: 10px; padding-bottom: 10px; font-size: 12px; line-height: 1.6; color: var(--text-primary); }
+.background-monitoring-status small { display: block; color: var(--text-secondary); }

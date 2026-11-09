@@ -93,10 +93,12 @@ test('early bias can produce a conditional entry before technical confirmation',
   assert.equal(buildEarlyPrediction({ ...input, currentPrice: 101 }, 'Nifty 50', interval, now).side, 'WAIT')
 })
 
-test('insufficient, stale, future, wrong-sided and low reward setups cannot issue calls', () => {
-  for (const change of [{ analyzedCandles: 10 }, { latestCandleTime: new Date(now - 3 * duration).toISOString() }, { latestCandleTime: new Date(now).toISOString() }, { stopLoss: 105 }, { target: 105 }, { target: NaN }]) {
+test('insufficient, stale, future and invalid-level setups cannot issue calls, while low positive reward can', () => {
+  for (const change of [{ analyzedCandles: 10 }, { latestCandleTime: new Date(now - 3 * duration).toISOString() }, { latestCandleTime: new Date(now).toISOString() }, { stopLoss: 105 }, { target: 100 }, { target: NaN }]) {
     assert.equal(buildEarlyPrediction({ ...analysis(), ...change }, 'Nifty 50', interval, now).side, 'WAIT')
   }
+  const result=buildEarlyPrediction({ ...analysis(), target: 105 }, 'Nifty 50', interval, now)
+  assert.equal(result.side,'CALL');assert.equal(result.plan.riskReward,.5)
 })
 
 test('CALL and PUT pass the reference target and settle actual directional points at TSL', () => {

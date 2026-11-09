@@ -1,8 +1,7 @@
 import type { AngelOneCandle } from '../api/angelOne'
 import type { PriceActionInterval } from './priceAction'
 import { candleBucketTime, candleIntervalMs, normalizeCandles } from './candleData'
-import { isCommodity, mcxSession } from './commodities'
-import { tradingSession } from './tradingSession'
+import { instrumentSession } from './tradingSession'
 import { defaultChartInterval, timeframeInfo } from './timeframes'
 
 export type HistoryJob = { token: string; interval: PriceActionInterval }
@@ -55,12 +54,9 @@ export function abortableWait(milliseconds: number, signal: AbortSignal) {
 /** Poll only after a completed candle is due, with a short broker publication grace. */
 export function historyRefreshDue(interval: PriceActionInterval, instrument: string, now: number, syncedThrough?: number, lastAttempt?: number) {
   if (!Number.isFinite(now) || lastAttempt !== undefined && now - lastAttempt < 30_000) return false
-  const session = tradingSession(now), commodity = isCommodity(instrument)
-  const openMinute = commodity ? 540 : 555
-  const start = session.start + openMinute * 60_000
-  const close = commodity ? mcxSession(now).close : session.start + 930 * 60_000
-  if (!session.weekday || now < start || now > close + 120_000) return false
-  const boundary = now >= close + 5000 ? close : candleBucketTime(now - 5000, interval, openMinute)
+  const session = instrumentSession(now, instrument), start = session.open, close = session.close
+  if (!session.tradingDay || now < start || now > close + 120_000) return false
+  const boundary = now >= close + 5000 ? close : candleBucketTime(now - 5000, interval, session.openMinute)
   return boundary > start && (syncedThrough === undefined || !Number.isFinite(syncedThrough) || syncedThrough < boundary)
 }
 

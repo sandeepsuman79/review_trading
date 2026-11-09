@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs'), ts = require('typescript')
 require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8').replace(/import\.meta\.env\.VITE_ANGELONE_API_KEY/g, '"fixture"'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, filename)
 const { getOptionPremiums } = require('../src/api/optionPremiums.ts')
-const { recoverAngelOneSession, AngelOneSessionExpiredError } = require('../src/api/angelOneSession.ts')
+const { recoverAngelOneSession, AngelOneSessionExpiredError, reportAngelOneSessionExpired } = require('../src/api/angelOneSession.ts')
 const { getAngelOneProfile } = require('../src/api/angelOne.ts')
 const original = { fetch: global.fetch, localStorage: global.localStorage, window: global.window, CustomEvent: global.CustomEvent }
 let events
@@ -104,4 +104,14 @@ test('profile also recognises HTTP-200 expired sessions and retains HTTP failure
   await assert.rejects(getAngelOneProfile('old-jwt'), error => error.status === 401)
   global.fetch = async () => ({ ok: false, status: 503, text: async () => JSON.stringify({ message: 'Provider down' }) })
   await assert.rejects(getAngelOneProfile('old-jwt'), error => error.status === 503 && error.message === 'Provider down')
+})
+
+test('background rejection stops the current session without invalidating a newer login', () => {
+  reportAngelOneSessionExpired('old-jwt')
+  assert.equal(events.length, 1); assert.equal(events[0].type, 'angelone-session-expired')
+  localStorage.setItem('angelone_jwt_token', 'new-account')
+  reportAngelOneSessionExpired('old-jwt')
+  assert.equal(events.length, 1)
+  reportAngelOneSessionExpired('new-account')
+  assert.equal(events.length, 2)
 })

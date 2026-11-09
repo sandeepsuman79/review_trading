@@ -15,6 +15,31 @@ function input(row=markets[0],d=1,family='ACCEPTED_BREAK',interval='FIVE_MINUTE'
 const quality=source=>assessConfirmationQuality({...source,candles:source.candles,now})
 const contract=row=>row[3]?{name:row[0],root:row[3],token:'12345',symbol:row[3]+'20NOV26FUT',expiry:'2026-11-20',expiresAt:mcxSession(Date.parse('2026-11-20T12:00:00+05:30')).close,exchange:'MCX',exchangeType:5,tickSize:row[3]==='NATURALGAS'?.1:1}:undefined
 
+test('a price-qualified candidate with a nearby positive target confirms without a reward/risk floor',()=>{
+ for(const d of[1,-1]){
+  const f=input(markets[0],d),raw=analyzePriceAction(f.candles,f.interval,now,f.instrument),price=f.candles.at(-1)[4]
+  const analysis={...raw,side:'WAIT',pattern:'NO_CONFIRMED_PATTERN',entry:undefined,stopLoss:undefined,target:undefined,detectedSetups:undefined,
+   ...(d===1?{resistance:price+.1,previousDayHigh:price+.2}:{support:price-.1,previousDayLow:price-.2})}
+  const evidence=analyzeTradingEvidence({analysis,candles:f.candles,interval:f.interval,instrument:f.instrument,now,atmVwap:atm(f.instrument,price,now,d),confirmationContext:{higherCandles:f.higherCandles}})
+  assert(evidence.canConfirm,evidence.reason);assert.equal(evidence.selectedAnalysis.side,f.side)
+  assert(evidence.confirmation.passed)
+  assert(!evidence.decisions.find(item=>item.side===f.side).reasons.includes('RR_BELOW_MINIMUM'))
+  assert(evidence.selectedAnalysis.target===price+d*.1,'the nearby target must be retained')
+ }
+})
+test('a no-pattern side retains adaptive checks instead of reverting to legacy ratio diagnostics',()=>{
+ const f=input(),raw=analyzePriceAction(f.candles,f.interval,now,f.instrument)
+ const analysis={...raw,side:'WAIT',pattern:'NO_CONFIRMED_PATTERN',entry:undefined,stopLoss:undefined,target:undefined,detectedSetups:undefined}
+ const evidence=analyzeTradingEvidence({analysis,candles:f.candles,interval:f.interval,instrument:f.instrument,now,confirmationContext:{higherCandles:f.higherCandles}})
+ for(const candidate of evidence.decisions){
+  assert(candidate.checks.some(c=>c.code==='QUALITY_DATA'))
+  assert(candidate.checks.some(c=>c.code==='VWAP_CONFIRMATION'&&c.status==='FAIL'))
+  const lead=candidate.checks.find(c=>c.code==='DIRECTIONAL_LEAD_TOO_SMALL')
+  assert.equal(lead.label,'Directional lead');assert(!lead.detail.includes('1.5×'))
+ }
+ assert(!evidence.canConfirm,'diagnostics do not create an eligible entry without a pattern and VWAP')
+})
+
 test('accepted breaks and actual pullbacks qualify symmetrically across all seven instruments',()=>{
  for(const row of markets)for(const d of[1,-1])for(const family of['ACCEPTED_BREAK','PULLBACK']){
   const source=input(row,d,family),result=quality(source)
@@ -29,7 +54,7 @@ test('all seven instruments can still confirm through the actual multi-timeframe
   const result=analyzeMultiTimeframe(source),five=result.reviews[0]
   assert(five.plan,`${row[0]} ${d}: ${five.reason}`);assert.equal(five.plan.side,d===1?'CALL':'PUT')
   assert.equal(five.plan.confirmationSnapshot.policy,'adaptive-confirmation-v3');assert(five.plan.confirmationSnapshot.passed)
-  assert(five.plan.riskReward>=1.2);assert.equal(five.evidence.layers.reduce((sum,l)=>sum+l.weight,0),100)
+  assert(five.plan.riskReward>0);assert.equal(five.evidence.layers.reduce((sum,l)=>sum+l.weight,0),100)
   let saved;writePredictionHistory({setItem:(_,v)=>saved=v},[createPredictionRecord(five.plan)])
   assert.equal(readPredictionHistory({getItem:()=>saved})[0].confirmationSnapshot.policy,'adaptive-confirmation-v3')
  }
@@ -109,7 +134,7 @@ test('index reversals pass the full live pipeline, retain structural stops and q
   const result=analyzeMultiTimeframe({instrument:f.instrument,now,candlesByInterval,atmVwap:atm(f.instrument,f.candles.at(-1)[4],now,d)}),five=result.reviews[0],plan=five.plan
   assert(plan,`${row[0]} ${d}: ${five.reason}`);assert.equal(plan.confirmationSnapshot.setupType,'REVERSAL')
   assert((plan.entry-plan.stopLoss)*d>0);assert((plan.stopLoss-plan.confirmationSnapshot.invalidationLevel)*d<=0)
-  assert(plan.riskReward>=1.2);assert.equal(five.evidence.requiredScore,65);assert.equal(five.evidence.requiredGap,20)
+  assert(plan.riskReward>0);assert.equal(five.evidence.requiredScore,65);assert.equal(five.evidence.requiredGap,20)
   assert.equal(selectReversalPlan({instrument:f.instrument,status:'ACTIVE',side:d===1?'PUT':'CALL',entryAt:now-1200000},result.reviews,now)?.id,plan.id)
   let saved;writePredictionHistory({setItem:(_,v)=>saved=v},[createPredictionRecord(plan)])
   assert.equal(readPredictionHistory({getItem:()=>saved})[0].confirmationSnapshot.setupType,'REVERSAL')
@@ -189,12 +214,17 @@ test('a neutral higher view is permitted but an extreme flat regime still blocks
  assert.equal(adaptive.higherBias,'NEUTRAL');assert(!adaptive.passed);assert(adaptive.adaptive.blocked)
  assert.equal(quality({...f,higherCandles:[]}).higherBias,'UNAVAILABLE')
 })
-test('MCX reversal risk still rejects nearby opposing levels after widening to the structural stop',()=>{
+test('MCX reversals retain nearby targets and reject invalid geometry after contract rounding',()=>{
  for(const row of markets.filter(r=>r[3]))for(const d of[1,-1]){
   const f=reversalFixture(row,d),result=analyzeMultiTimeframe({instrument:f.instrument,now,contract:contract(row),candlesByInterval:{FIVE_MINUTE:f.candles,FIFTEEN_MINUTE:fixture(row,-d,'FIFTEEN_MINUTE',now).candles,ONE_HOUR:fixture(row,-d,'ONE_HOUR',now).candles}}).reviews[0]
   assert.equal(result.evidence.confirmation.setupType,'REVERSAL');assert(result.evidence.confirmation.passed)
-  assert.equal(result.plan,undefined,`${row[0]} ${d}: a target must not be stretched to force approval`)
-  assert.match(result.reason,/reward.to.risk|reward to risk/i)
+  if(result.plan){
+   assert(result.plan.riskReward>0)
+   assert(d*(result.plan.target-result.plan.entry)>0)
+   assert(Math.abs(result.plan.target-result.evidence.selectedAnalysis.target)<=contract(row).tickSize+1e-8,'the target is only rounded, never stretched')
+  }else{
+   assert.match(result.reason,/positive risk and reward|invalid|target/i)
+  }
  }
 })
 test('a qualified price event supplies a candidate independently of the older combined-indicator routes',()=>{

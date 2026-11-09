@@ -3,14 +3,15 @@ import { useEffect, useRef, useState } from 'react'
 import type { PredictionPlan } from '../analysis/earlyPrediction'
 import type { PredictionRecord } from '../analysis/predictionHistory'
 import type { AngelOneCandle, AngelOneStreamTick } from '../api/angelOne'
+import type { AtmVwapSnapshot } from '../api/atmVwap'
 import { chartIntervals, defaultChartInterval, timeframeInfo } from '../analysis/timeframes'
 import { readIntrabarContext } from '../analysis/intrabarContext'
-import { contractExpiryNotice, readTradeTransitions, signalFreshness, trackedPerformance } from '../analysis/agentMonitoring'
+import { buildAgentMonitoringExport, contractExpiryNotice, readTradeTransitions, signalFreshness, trackedPerformance } from '../analysis/agentMonitoring'
 const time = (value: number) => new Date(value).toLocaleTimeString('en-GB', { timeZone: 'Asia/Kolkata', hour12: false })
 const r = (value?: number) => value === undefined ? '—' : `${value > 0 ? '+' : ''}${value.toFixed(2)}R`
 
-export default function AgentMonitoringPanel({ instrument, records, plan, active, now, frontContract, candles = [], tick, issuedAt }: {
-  instrument: string; records: PredictionRecord[]; plan?: PredictionPlan; active: boolean; now: number; frontContract?: CommodityContract; candles?: AngelOneCandle[]; tick?: AngelOneStreamTick; issuedAt?: number
+export default function AgentMonitoringPanel({ instrument, records, plan, active, now, frontContract, candles = [], tick, issuedAt, connected = false, atmVwap }: {
+  instrument: string; records: PredictionRecord[]; plan?: PredictionPlan; active: boolean; now: number; frontContract?: CommodityContract; candles?: AngelOneCandle[]; tick?: AngelOneStreamTick; issuedAt?: number; connected?: boolean; atmVwap?: AtmVwapSnapshot
 }) {
   const [expanded, setExpanded] = useState(false)
   const latest = useRef({ records, now }); latest.current = { records, now }
@@ -18,16 +19,17 @@ export default function AgentMonitoringPanel({ instrument, records, plan, active
   // Quote updates replace the records array frequently. Review the ledger at minute
   // boundaries or disclosure toggles, rather than sorting it on every live render.
   const performanceInterval = plan && (chartIntervals as readonly string[]).includes(plan.interval) ? plan.interval as typeof chartIntervals[number] : defaultChartInterval
-  const [performance, setPerformance] = useState(() => trackedPerformance(records, instrument, now, performanceInterval))
-  useEffect(() => { setPerformance(trackedPerformance(latest.current.records, instrument, latest.current.now, performanceInterval)) }, [instrument, performanceInterval, reviewMinute, expanded, records.length])
+  const strategyVersion = plan?.strategyVersion ?? 'candle-v2'
+  const [performance, setPerformance] = useState(() => trackedPerformance(records, instrument, now, performanceInterval, strategyVersion))
+  useEffect(() => { setPerformance(trackedPerformance(latest.current.records, instrument, latest.current.now, performanceInterval, strategyVersion)) }, [instrument, performanceInterval, strategyVersion, reviewMinute, expanded, records.length])
   const freshness = plan?.stage === 'CONFIRMED' && !active ? signalFreshness(plan, now, issuedAt) : undefined
   const expiry = contractExpiryNotice(plan?.contract ?? frontContract, now, frontContract)
   const events = expanded ? readTradeTransitions(instrument).slice(-10).reverse() : []
   const intrabar = tick ? readIntrabarContext(tick, now) : undefined
   function exportReplay() {
-    const payload = { instrument, interval: 'FIVE_MINUTE', ...(frontContract ? { contract: frontContract } : {}), candles: candles.slice(-5000) }
+    const payload = buildAgentMonitoringExport({ instrument, candles, records, plan, tick, connected, now, contract: frontContract, atmVwap, issuedAt })
     const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }))
-    const link = document.createElement('a'); link.href = url; link.download = `${instrument.replace(/ /g, '-')}-${frontContract?.symbol ?? 'spot'}-5min-replay.json`; link.click(); URL.revokeObjectURL(url)
+    const link = document.createElement('a'); link.href = url; link.download = `${instrument.replace(/ /g, '-')}-agent-monitoring.json`; link.click(); URL.revokeObjectURL(url)
   }
   return <details className="agent-evidence-checks agent-monitoring" onToggle={event => setExpanded(event.currentTarget.open)}><summary>Agent monitoring · {performance.state === 'REVIEW' ? 'Review recent results · ' : ''}Freshness, results & decision trail</summary>
     {freshness && <div aria-label="Signal freshness"><strong>Entry window remaining: {Math.round(freshness.remainingPercent)}% · {freshness.remainingSeconds}s</strong><progress max={100} value={freshness.remainingPercent} aria-label="Entry window remaining" /><p>Candle closed {time(freshness.closedAt)} · Setup first issued {time(freshness.issuedAt)} · Age {freshness.ageSeconds}s · Deadline {time(freshness.deadline)} IST. This measures time remaining; technical scores are unchanged.</p></div>}
@@ -42,7 +44,7 @@ export default function AgentMonitoringPanel({ instrument, records, plan, active
     <p className="agent-score-note">Results refresh each minute and when this panel opens. R uses each trade’s recorded underlying/futures stop distance. These are local tracked results before execution costs, not option-premium returns. The review flag never changes live thresholds or places orders.</p>
     <strong>Recent state changes</strong>
     {events.length ? <ol className="agent-transition-list">{events.map((event, i) => <li key={`${event.recordId}:${event.observedAt}:${i}`}><strong>{time(event.observedAt)} IST · {event.from} → {event.to}</strong>{event.contract && <small>Contract: {event.contract}</small>}<span>{event.reason}</span>{event.quote !== undefined && <small>{event.quoteSource === 'LIVE' ? 'Observed live quote' : event.quoteSource === 'CANDLE' ? 'Recorded candle close' : 'Recorded price'} {event.quote.toFixed(2)}{event.quoteAt !== undefined ? ` at ${time(event.quoteAt)} IST` : ''}</small>}</li>)}</ol> : <p>New state changes appear here during this page session. Loading saved trades does not create events.</p>}
-    <button type="button" onClick={exportReplay} disabled={!candles.length}>Export candles for offline replay</button>
-    <p className="agent-score-note">Exports up to 5,000 saved completed five-minute candles{frontContract ? ` for ${frontContract.symbol}` : ''}. Replay needs at least 50. It excludes broker credentials and current sentiment; tick protections require separate observations.</p>
+    <button type="button" onClick={exportReplay}>Export candles and agent diagnostics</button>
+    <p className="agent-score-note">Includes up to 5,000 completed five-minute candles{frontContract ? ` for ${frontContract.symbol}` : ''}, observed CALL/PUT checks, trade transitions, saved outcomes, current quote/connection and ATM VWAP context. Broker credentials are excluded. The current quote cannot recreate historical fills. Candle-only replay needs at least 20 completed price bars; archived indicator policies retain their own requirements.</p>
   </details>
 }

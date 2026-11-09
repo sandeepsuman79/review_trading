@@ -1,4 +1,4 @@
-import { minimumRewardRisk, meetsMinimumRewardRisk } from './tradeRisk'
+import { hasValidRewardRisk } from './tradeRisk'
 import type { PriceActionAnalysis, PriceActionInterval } from './priceAction'
 import { candleIntervalMs } from './candleData'
 import type { MarketArticle, MarketContext, MarketOutlook } from '../api/marketContext'
@@ -7,6 +7,7 @@ import { isCommodity, validCommodityContract, type CommodityContract } from './c
 import { squareOffTime, inTradingEntryWindow, marketHours } from './tradingSession'
 import { chartIntervals } from './timeframes'
 import type { ConfirmationQuality } from './confirmationQuality'
+import type { CandleConfirmation } from './candleAgent'
 
 export type PredictionPlan = {
   id: string
@@ -15,7 +16,8 @@ export type PredictionPlan = {
   interval: PriceActionInterval
   side: 'CALL' | 'PUT'
   stage: 'EARLY' | 'CONFIRMED' | 'RISKY'
-  strategyVersion: 'early-v1' | 'combined-v1' | 'technical-v2'
+  strategyVersion: 'early-v1' | 'combined-v1' | 'technical-v2' | 'candle-v1' | 'candle-v2'
+  candleConfirmation?: CandleConfirmation
   confirmationQuality?: 'STANDARD' | 'STRONG'
   confirmationSnapshot?: ConfirmationQuality
   risk?: { level: number; levelType: 'SUPPORT' | 'RESISTANCE'; passedChecks: number; unmetChecks: string[]; alignedIndicators: string[]; opposedIndicators: string[] }
@@ -90,7 +92,7 @@ export function buildEarlyPrediction(analysis: PriceActionAnalysis, instrument: 
   const snap = (value: number, up: boolean) => tick ? round((up ? Math.ceil(value / tick - 1e-8) : Math.floor(value / tick + 1e-8)) * tick) : round(value)
   const roundedEntry = snap(entry, direction === 1), roundedStop = snap(stopLoss, direction === -1), roundedTarget = snap(target, direction === -1)
   const riskReward = ((roundedTarget - roundedEntry) * direction) / ((roundedEntry - roundedStop) * direction)
-  if (!meetsMinimumRewardRisk(riskReward)) return wait(`The chart target offers less than ${minimumRewardRisk.toFixed(2)}:1 reward to risk. Waiting for a better setup.`)
+  if (!hasValidRewardRisk(riskReward)) return wait('Entry, stop and reference target must define finite, positive risk and reward. No minimum reward/risk ratio is required.')
   const reason = risky ? `Risky conditional ${side} setup: ${risky.passedChecks}/7 checks passed; ${risky.levelType.toLowerCase()} ${risky.level.toFixed(2)} with ${risky.alignedIndicators.join(' or ')}. Missing: ${risky.unmetChecks.join(', ')}. A trigger touch alone is not full confirmation.` : `${confirmed ? 'Confirmed chart setup' : 'Early conditional breakout'}; ${evidence ? `technical evidence ${side === 'CALL' ? evidence.bullishScore : evidence.bearishScore}/100 with ${evidence.coverage}% coverage` : 'technical confirmation; sentiment is reference only'}. Entry must be reached before the call becomes active.`
   return { side, reason, plan: {
     id: `${evidence?.version ?? 'early-v1'}:${risky ? 'risky:' : ''}${instrument}:${contract ? `${contract.token}:` : ''}${interval}:${analysis.latestCandleTime}:${side}`,
@@ -99,7 +101,7 @@ export function buildEarlyPrediction(analysis: PriceActionAnalysis, instrument: 
     ...(confirmed && evidence?.confirmation ? { confirmationSnapshot: evidence.confirmation } : {}),
     strategyVersion: evidence?.version ?? 'early-v1', instrument, interval, side, stage: risky ? 'RISKY' : confirmed ? 'CONFIRMED' : 'EARLY', signalCandleTime: analysis.latestCandleTime!,
     ...(risky ? { risk: { level: risky.level, levelType: risky.levelType, passedChecks: risky.passedChecks, unmetChecks: risky.unmetChecks, alignedIndicators: risky.alignedIndicators, opposedIndicators: risky.opposedIndicators } } : {}),
-    generatedAt: now, expiresAt: Math.min(confirmed && evidence?.version === 'technical-v2' ? candleTime + 2 * candleIntervalMs(interval) : now + 3 * candleIntervalMs(interval), squareOffTime(now, instrument), contract?.expiresAt ?? Infinity), entry: roundedEntry, stopLoss: roundedStop, target: roundedTarget, riskReward: round(riskReward), targetBasis, reason,
+    generatedAt: now, expiresAt: Math.min(confirmed && evidence?.version === 'technical-v2' ? candleTime + 2 * candleIntervalMs(interval) : now + 3 * candleIntervalMs(interval), squareOffTime(now, instrument), contract?.expiresAt ?? Infinity), entry: roundedEntry, stopLoss: roundedStop, target: roundedTarget, riskReward, targetBasis, reason,
     contextMode: !evidence && newsAligned ? 'NEWS_ALIGNED' : 'TECHNICAL_ONLY', bullishScore: evidence?.bullishScore ?? analysis.bullishScore, bearishScore: evidence?.bearishScore ?? analysis.bearishScore,
     technicalEvidence: [...(evidence ? side === 'CALL' ? evidence.bullishEvidence : evidence.bearishEvidence : side === 'CALL' ? analysis.bullishEvidence : analysis.bearishEvidence)],
     ...(evidence ? { evidenceSummary: { version: evidence.version, coverage: evidence.coverage, atr14: evidence.atr14, indiaVix: evidence.indiaVix?.price, layers: evidence.layers.filter(layer => layer.weight > 0).map(({ name, weight, coverage, bullish, bearish }) => ({ name, weight, coverage, bullish, bearish })), sentiment: { ...(evidence.sentiment.state ? { state: evidence.sentiment.state } : {}), bullishScore: evidence.sentiment.bullishScore, bearishScore: evidence.sentiment.bearishScore, coverage: evidence.sentiment.coverage, bias: evidence.sentiment.bias, alignment: evidence.sentiment.alignment, reason: evidence.sentiment.reason } } } : {}),

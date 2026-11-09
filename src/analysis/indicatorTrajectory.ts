@@ -1,4 +1,5 @@
 import { indicatorSwingEvidence } from './indicatorSwingStructure'
+import { adjacentIndicatorBars } from './indicatorHistory'
 import type { AngelOneCandle } from '../api/angelOne'
 import { candleIntervalMs, completedCandles } from './candleData'
 import { calculateMovingAverageSeries } from './movingAverages'
@@ -9,13 +10,13 @@ import { calculateSessionVwap } from './vwap'
 export type IndicatorTurn = { name: string; side: 'CALL' | 'PUT'; at: string }
 
 /** Turns describe completed bars only; they cannot create a trade without a price setup. */
-export function analyzeIndicatorTrajectory(candles: AngelOneCandle[], interval: PriceActionInterval, now: number) {
+export function analyzeIndicatorTrajectory(candles: AngelOneCandle[], interval: PriceActionInterval, now: number, instrument?: string) {
   const closed = completedCandles(candles, interval, now)
   const averages = calculateMovingAverageSeries(closed.map(candle => candle[4]))
   const indicators = calculateTechnicalIndicatorSeries(closed.map(candle => candle[2]), closed.map(candle => candle[3]), closed.map(candle => candle[4]))
   const vwap = calculateSessionVwap(closed)
   const end = closed.length - 1, latest = averages[end], previous = averages[end - 1]
-  const consecutive = (start: number) => start >= 0 && closed.slice(start + 1).every((candle, offset) => Date.parse(candle[0]) - Date.parse(closed[start + offset][0]) === candleIntervalMs(interval))
+  const consecutive = (start: number) => start >= 0 && closed.slice(start + 1).every((candle, offset) => adjacentIndicatorBars(Date.parse(closed[start + offset][0]), Date.parse(candle[0]), candleIntervalMs(interval), instrument))
   const turns: IndicatorTurn[] = []
   const record = (name: string, vote: number) => turns.push({ name, side: vote > 0 ? 'CALL' : 'PUT', at: closed[end][0] })
   const atr = indicators[end]?.atr14
@@ -67,7 +68,7 @@ export function analyzeIndicatorTrajectory(candles: AngelOneCandle[], interval: 
     const session = (time: string) => new Date(Date.parse(time) + 330 * 60_000).toISOString().slice(0, 10)
     if (session(closed[end - 1][0]) === session(closed[end][0])) cross('Price / VWAP', vwap[end - 1] === undefined ? undefined : closed[end - 1][4] - vwap[end - 1]!, vwap[end] === undefined ? undefined : closed[end][4] - vwap[end]!)
   }
-  const swingEvidence = indicatorSwingEvidence(closed, averages, indicators, candleIntervalMs(interval))
+  const swingEvidence = indicatorSwingEvidence(closed, averages, indicators, candleIntervalMs(interval), instrument)
   for (const item of swingEvidence) {
     slopeDetails.push(`${item.name} structure: ${item.structure.pattern}${item.structure.breakDirection ? ` · broken ${item.structure.breakDirection.toLowerCase()}` : ''}`)
     if (item.structure.newBreak) record(`${item.name} ${item.structure.pattern} structure broke ${item.structure.breakDirection!.toLowerCase()}`, item.structure.breakDirection === 'UP' ? 1 : -1)

@@ -21,7 +21,7 @@ function fixture(d = 1) {
 test('four checks plus level reaction and indicators produce explicit CALL/PUT risky conditional setups',()=>{
   for(const d of [1,-1]){
     const input=fixture(d),risk=findRiskyLevelSetup(input)
-    assert(risk);assert.equal(risk.side,d===1?'CALL':'PUT');assert.equal(risk.passedChecks,4);assert(risk.riskReward>=1.2)
+    assert(risk);assert.equal(risk.side,d===1?'CALL':'PUT');assert.equal(risk.passedChecks,4);assert(risk.riskReward>0)
     assert.equal(risk.levelType,d===1?'SUPPORT':'RESISTANCE');assert(Math.abs(risk.entry-risk.stopLoss)>=2)
     const evidence={instrument:'Nifty 50',interval,asOf:input.analysis.latestCandleTime,canConfirm:false,reason:'Waiting for price pattern',riskySetup:risk,version:'technical-v2',bullishScore:input.bullishScore,bearishScore:input.bearishScore,coverage:75,layers:[],sentiment:{},bullishEvidence:[],bearishEvidence:[]}
     const prediction=buildEarlyPrediction(input.analysis,'Nifty 50',interval,input.now,undefined,undefined,evidence)
@@ -41,9 +41,10 @@ test('any four arbitrary checks cannot bypass stale data, warmup, ATR or indicat
   assert.equal(findRiskyLevelSetup({...input,bullishScore:35,bearishScore:30}),undefined)
 })
 
-test('nearby target caps, missing or distant levels and invalid chronology reject risky ideas',()=>{
+test('nearby positive targets are retained while missing/distant levels and invalid chronology reject risky ideas',()=>{
   const input=fixture()
-  assert.equal(findRiskyLevelSetup({...input,analysis:{...input.analysis,resistance:103}}),undefined)
+  const nearby=findRiskyLevelSetup({...input,analysis:{...input.analysis,resistance:103}})
+  assert(nearby);assert.equal(nearby.target,103);assert(nearby.riskReward>0&&nearby.riskReward<1.2)
   assert.equal(findRiskyLevelSetup({...input,analysis:{...input.analysis,support:90}}),undefined)
   assert.equal(findRiskyLevelSetup({...input,analysis:{...input.analysis,support:undefined,resistance:undefined}}),undefined)
   const candles=input.candles.map((c,i)=>i===48?[new Date(Date.parse(c[0])-300000).toISOString(),...c.slice(1)]:c)

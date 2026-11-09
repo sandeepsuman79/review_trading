@@ -49,7 +49,7 @@ export function isFreshTick(tick: AngelOneStreamTick | undefined, now: number) {
 
 export function candleBucketTime(timestamp: number, interval: PriceActionInterval, sessionOpenMinute = 555) {
   const intervalMs = candleIntervalMs(interval)
-  const alignment = interval === 'ONE_HOUR' ? (sessionOpenMinute - 330) % 60 * 60_000 : 0
+  const alignment = (sessionOpenMinute - 330) * 60_000 % intervalMs
   return Math.floor((timestamp - alignment) / intervalMs) * intervalMs + alignment
 }
 

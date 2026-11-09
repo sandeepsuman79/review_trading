@@ -4,6 +4,7 @@ import { isCommodity } from './commodities'
 import { calculateMovingAverageSeries } from './movingAverages'
 import { calculateTechnicalIndicatorSeries } from './technicalIndicators'
 import { calculateSessionVwap, candleSession } from './vwap'
+import { adjacentIndicatorBars } from './indicatorHistory'
 
 export type ThresholdMode = 'ADAPTIVE' | 'FIXED'
 export type AdaptiveThresholds = {
@@ -47,7 +48,7 @@ function regime(raw: AngelOneCandle[], instrument: string, now: number): Omit<Ad
     : avg.ema20 < avg.ema50 && avg.ema20 < old.ema20 && last[4] < avg.ema20 ? 'PUT' : 'NEUTRAL'
   const tail: AngelOneCandle[] = []
   for (let i = end; i >= 0 && tail.length <= adaptiveRules.chopBars; i--) {
-    if (candleSession(bars[i][0]) !== candleSession(last[0]) || i < end && Date.parse(bars[i + 1][0]) - Date.parse(bars[i][0]) !== duration) break
+    if (i < end && !adjacentIndicatorBars(Date.parse(bars[i][0]), Date.parse(bars[i + 1][0]), duration, instrument)) break
     tail.unshift(bars[i])
   }
   let chop: number | undefined, vwapCrossings: number | undefined
@@ -61,7 +62,9 @@ function regime(raw: AngelOneCandle[], instrument: string, now: number): Omit<Ad
       const sides = tail.map((b, i) => values[offset + i] === undefined ? undefined : b[4] - values[offset + i]!)
       const known = sides.every(finite)
       if (known) {
-        const signs = sides.filter((v): v is number => finite(v) && Math.abs(v) > noise).map(Math.sign)
+        // VWAP resets at the session boundary; a reset is not a crossing.
+        const sessionSides = sides.filter((_, i) => candleSession(tail[i][0]) === candleSession(last[0]))
+        const signs = sessionSides.filter((v): v is number => finite(v) && Math.abs(v) > noise).map(Math.sign)
         vwapCrossings = signs.slice(1).filter((v, i) => v !== signs[i]).length
         if (signs.length > 1) chop = Math.max(chop, vwapCrossings / (signs.length - 1))
       }
@@ -73,7 +76,7 @@ function regime(raw: AngelOneCandle[], instrument: string, now: number): Omit<Ad
     : point!.adx14! >= 25 && direction !== 'NEUTRAL' ? 'STRONG_TREND' : 'TREND'
   const value = { ...base, baselineBars: baseline.length, ready, blocked, regime: kind, direction, adx: point?.adx14,
     atrMedian, relativeAtr, chop, vwapCrossings,
-    reason: blocked ? 'Extreme completed-bar volatility or chop: wait for a new qualified 15-minute regime.' : ready ? 'Adaptive thresholds use this completed 15-minute regime.' : 'ATR median needs 50 prior valid observations and chop needs six current-session changes; conservative fallback floors apply.' }
+    reason: blocked ? 'Extreme completed-bar volatility or chop: wait for a new qualified 15-minute regime.' : ready ? 'Adaptive thresholds use this completed 15-minute regime and rolling trading-bar history.' : 'ATR median needs 50 prior valid observations and chop needs six trading-bar changes across available sessions; conservative fallback floors apply.' }
   cache.set(raw, { at: closedAt, instrument, value }); return value
 }
 

@@ -1,4 +1,5 @@
 import { analyzeSwingTrajectory, type SwingTrajectory } from './swingTrajectory'
+import { adjacentIndicatorBars } from './indicatorHistory'
 export type ScoreSample = { at: number; bullish: number; bearish: number; indicators?: Record<string, number>; supertrendDirection?: 'UP' | 'DOWN' }
 export const scoreHistoryKey = 'traders_score_trajectory_v1'
 export function scoreDominates(support: number, opposition: number) {
@@ -32,10 +33,10 @@ export type IndicatorTrajectoryRow = {
   turn?: 'FROM_PEAK' | 'FROM_TROUGH'; risk: boolean; direction?: 'UP' | 'DOWN'
 }
 /** Each comparison uses adjacent completed observations of this same timeframe. */
-export function indicatorTrajectoryRows(samples: ScoreSample[], intervalMs = 300000): IndicatorTrajectoryRow[] {
+export function indicatorTrajectoryRows(samples: ScoreSample[], intervalMs = 300000, instrument?: string): IndicatorTrajectoryRow[] {
   const last = samples[samples.length - 1], recent: ScoreSample[] = []
   for (let i = samples.length - 1; i >= 0 && recent.length < 32; i--) {
-    if (i < samples.length - 1 && (samples[i + 1].at - samples[i].at !== intervalMs || Math.floor((samples[i].at + 19800000) / 86400000) !== Math.floor((samples[i + 1].at + 19800000) / 86400000))) break
+    if (i < samples.length - 1 && !adjacentIndicatorBars(samples[i].at, samples[i + 1].at, intervalMs, instrument)) break
     recent.unshift(samples[i])
   }
   const names = ['EMA20', 'EMA50', 'RSI', 'Supertrend', 'ATR', 'India VIX', 'ADX', '+DI', '-DI', 'SMA20']
@@ -48,7 +49,7 @@ export function indicatorTrajectoryRows(samples: ScoreSample[], intervalMs = 300
     const turn = previous !== undefined && before !== undefined && value !== undefined ? value < previous && previous >= before ? 'FROM_PEAK' : value > previous && previous <= before ? 'FROM_TROUGH' : undefined : undefined
     const atr = last?.indicators?.ATR
     const noise = ['EMA20', 'EMA50', 'Supertrend', 'SMA20'].includes(name) && atr ? atr * .03 : name === 'RSI' ? 1 : name === 'India VIX' ? .1 : name === 'ATR' ? Math.abs(value ?? 0) * .01 : .5
-    const structure = analyzeSwingTrajectory(recent.map(s => ({ at: s.at, value: finiteValue(s) })), intervalMs, noise)
+    const structure = analyzeSwingTrajectory(recent.map(s => ({ at: s.at, value: finiteValue(s) })), intervalMs, noise, (from, to) => adjacentIndicatorBars(from, to, intervalMs, instrument))
     return { structure, name, value, previous, change, low: values.length ? Math.min(...values) : undefined, high: values.length ? Math.max(...values) : undefined, movement, turn, risk: ['ATR', 'India VIX', 'ADX'].includes(name), ...(name === 'Supertrend' && last?.supertrendDirection ? { direction: last.supertrendDirection } : {}) }
   })
 }

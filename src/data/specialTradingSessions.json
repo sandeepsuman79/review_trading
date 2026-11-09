@@ -1,0 +1,13 @@
+{ "sessions": [
+  {
+    "date": "2026-11-08",
+    "label": "Diwali Muhurat trading",
+    "segments": {
+      "NSE": { "openMinute": 860, "closeMinute": 930, "source": "https://nsearchives.nseindia.com/content/circulars/CMTR76941.pdf" },
+      "BSE": { "openMinute": 860, "closeMinute": 930, "source": "https://www.bseindia.com/downloads/UploadDocs/Notices/20261019-9/20261019-9.pdf" },
+      "NFO": { "openMinute": 860, "closeMinute": 940, "source": "https://nsearchives.nseindia.com/content/circulars/FAOP76940.pdf" },
+      "BFO": { "openMinute": 860, "closeMinute": 940, "source": "https://www.bseindia.com/downloads/UploadDocs/Notices/20261019-10/20261019-10.pdf" },
+      "MCX": { "openMinute": 860, "closeMinute": 930, "source": "https://www.mcxindia.com/docs/default-source/circulars/english/2026/october/circular-590-2026.pdf?sfvrsn=41cf74f3_1" }
+    }
+  }
+] }

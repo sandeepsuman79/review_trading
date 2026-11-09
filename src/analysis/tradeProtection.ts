@@ -1,8 +1,10 @@
+import { isCandleStrategy } from './strategyPolicy'
 import type { PredictionRecord } from './predictionHistory'
+import type { TargetEvidence } from './tradeTargets'
 import { chartIntervals, timeframeInfo } from './timeframes'
 
 export const protectionRules = { activationR: 0, breakEvenR: 1, atrMultiplier: 1.5, minimumTrailR: .35 }
-export type TradeProtection = { version: 1; peakPrice: number; peakAt: number; stop: number; armed: boolean; atr: number; risk: number }
+export type TradeProtection = { version: 1 | 2; basis?: 'CANDLE_STRUCTURE'; peakPrice: number; peakAt: number; stop: number; armed: boolean; atr?: number; risk: number }
 export type ProtectionAssessment = {
   instrument: string
   contractToken?: string
@@ -10,6 +12,8 @@ export type ProtectionAssessment = {
   asOf: string
   reviewedAt: number
   atr?: number
+  candleStops?: Partial<Record<'CALL' | 'PUT', { price: number; at: string }>>
+  targetEvidence?: TargetEvidence
 }
 const direction = (record: PredictionRecord) => record.side === 'CALL' ? 1 : -1
 export function matchingProtectionAssessment(record: PredictionRecord, review: ProtectionAssessment | undefined, now: number) {
@@ -24,6 +28,25 @@ export function matchingProtectionAssessment(record: PredictionRecord, review: P
 export function updateTradeProtection(record: PredictionRecord, price: number, time: number, review?: ProtectionAssessment): PredictionRecord {
   if (record.status !== 'ACTIVE' || record.entryPrice === undefined || !Number.isFinite(price) || price <= 0 || !Number.isFinite(time) || !Number.isFinite(record.entryAt) || time < record.entryAt! || time < record.observedThrough || time < (record.protection?.peakAt ?? record.entryAt!)) return record
   const d = direction(record), risk = Math.abs(record.entryPrice - record.stopLoss)
+  if (isCandleStrategy(record.strategyVersion)) {
+    if (!Number.isFinite(risk) || risk <= 0) return record
+    const previous = record.protection, higher = !previous || d * (price - previous.peakPrice) > 0
+    const peakPrice = higher ? d * (price - record.entryPrice) > 0 ? price : record.entryPrice : previous.peakPrice
+    const gain = d * (peakPrice - record.entryPrice), tick = record.contract?.tickSize ?? .01
+    let candidate = gain > 0 ? peakPrice - d * Math.max(risk, 2 * tick) : record.stopLoss
+    const swing = review?.interval === 'FIVE_MINUTE' && matchingProtectionAssessment(record, review, time) ? review.candleStops?.[record.side] : undefined
+    if (swing && Number.isFinite(swing.price) && swing.price > 0 && Date.parse(swing.at) >= record.entryAt! && Date.parse(swing.at) <= Date.parse(review!.asOf)
+      && Date.parse(swing.at) + 300000 <= time && d * (price - swing.price) > 0)
+      candidate = d === 1 ? Math.max(candidate, swing.price) : Math.min(candidate, swing.price)
+    if (gain >= risk) candidate = d === 1 ? Math.max(candidate, record.entryPrice) : Math.min(candidate, record.entryPrice)
+    candidate = Math.round((d === 1 ? Math.floor(candidate / tick + 1e-8) : Math.ceil(candidate / tick - 1e-8)) * tick * 1e8) / 1e8
+    if (gain >= risk) {
+      const breakEven = Math.round((d === 1 ? Math.ceil(record.entryPrice / tick - 1e-8) : Math.floor(record.entryPrice / tick + 1e-8)) * tick * 1e8) / 1e8
+      candidate = d === 1 ? Math.max(candidate, breakEven) : Math.min(candidate, breakEven)
+    }
+    const stop = d === 1 ? Math.max(previous?.stop ?? record.stopLoss, candidate) : Math.min(previous?.stop ?? record.stopLoss, candidate)
+    return { ...record, protection: { version: 2, basis: 'CANDLE_STRUCTURE', peakPrice, peakAt: higher ? time : previous.peakAt, stop, armed: true, risk } }
+  }
   const atr = matchingProtectionAssessment(record, review, time) && typeof review?.atr === 'number' && Number.isFinite(review.atr) && review.atr > 0 ? review.atr : record.protection?.atr ?? record.evidenceSummary?.atr14 ?? risk
   if (!Number.isFinite(risk) || !(risk > 0) || !Number.isFinite(atr) || !(atr > 0)) return record
   const previous = record.protection

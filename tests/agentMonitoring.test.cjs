@@ -3,6 +3,27 @@ require.extensions['.ts'] = (m,f) => m._compile(ts.transpileModule(fs.readFileSy
 const { signalFreshness, recordTradeTransitions, readTradeTransitions, trackedPerformance, contractExpiryNotice } = require('../src/analysis/agentMonitoring.ts')
 const closed = Date.parse('2026-10-16T10:00:00+05:30')
 const plan = { id:'monitor', instrument:'Nifty 50', strategyVersion:'technical-v2', stage:'CONFIRMED', interval:'FIVE_MINUTE', signalCandleTime:new Date(closed-300000).toISOString(), generatedAt:closed, expiresAt:closed+900000, entry:100, stopLoss:90, target:120, bullishScore:70, bearishScore:10 }
+test('monitoring export includes actual rejection and entry checks without inventing historical context or exporting credentials',()=>{
+ const {buildAgentMonitoringExport}=require('../src/analysis/agentMonitoring.ts'),{recordTradeDiagnostics}=require('../src/analysis/tradeDecision.ts')
+ const atm=require('./helpers/atmVwap.cjs')('Nifty 50',100,closed)
+ const decision={side:'CALL',state:'REJECTED',supportScore:54,opposingScore:10,routes:[],checks:[{code:'VWAP_CONFIRMATION',status:'FAIL',detail:'Missing current option VWAP'}],reasons:['VWAP_CONFIRMATION']}
+ recordTradeDiagnostics('Nifty 50','FIVE_MINUTE',plan.signalCandleTime,closed,[decision])
+ recordTradeDiagnostics('Gold','FIVE_MINUTE',plan.signalCandleTime,closed,[{...decision,secret:'other instrument'}])
+ const candles=[[plan.signalCandleTime,100,101,99,100,0],[new Date(closed).toISOString(),100,102,98,101,0]]
+ const record={...plan,status:'PENDING',authToken:'must-not-export',outcomeNote:'Waiting for entry'}
+ const tick={token:'99926000',exchangeType:1,ltp:100,timestamp:closed,authToken:'must-not-export'}
+ const before=JSON.stringify({candles,record,tick,atm})
+ const result=buildAgentMonitoringExport({instrument:'Nifty 50',candles,records:[record,{...record,instrument:'Gold'}],plan:{...plan,authToken:'must-not-export'},tick,connected:false,now:closed,atmVwap:{...atm,authToken:'must-not-export'}})
+ assert.equal(result.kind,'AGENT_MONITORING');assert.equal(result.candles.length,1)
+ assert(result.assessments.some(a=>a.decisions.some(d=>d.reasons.includes('VWAP_CONFIRMATION'))))
+ assert(result.assessments.every(a=>a.instrument==='Nifty 50'));assert.equal(result.records.length,1)
+ assert.equal(result.current.connected,false);assert(result.current.entry.checks.some(c=>c.code==='LIVE_STREAM_DISCONNECTED'&&c.status==='FAIL'))
+ assert.deepEqual(JSON.parse(JSON.stringify(result.current.atmVwap.ce)),atm.ce);assert.equal(result.atmVwapSnapshots,undefined)
+ assert(!JSON.stringify(result).includes('must-not-export'));assert(!JSON.stringify(result).includes('other instrument'))
+ assert.equal(JSON.stringify({candles,record,tick,atm}),before)
+ const empty=buildAgentMonitoringExport({instrument:'Bank Nifty',candles:[],records:[],connected:false,now:closed})
+ assert.equal(empty.current.plan,null);assert.equal(empty.current.atmVwap,null);assert.equal(empty.records.length,0)
+})
 test('freshness uses the anchored deadline, fades with age and never changes evidence scores or extends on a late issue', () => {
   const before = JSON.stringify(plan)
   assert.equal(signalFreshness(plan,closed+60000).remainingPercent,80)

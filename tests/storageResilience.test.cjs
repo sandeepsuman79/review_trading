@@ -126,6 +126,23 @@ test('critical entry and TSL checkpoints persist through database unavailability
  assert.equal((await fresh.load())[0].protection.stop,125)
 })
 
+test('a target-only update is checkpointed before its database commit',async()=>{
+ const {predictionCheckpointKey}=require('../src/storage/predictionHistoryStore.ts')
+ const original={...trade(),targetPolicy:'STRUCTURE_TARGETS_V1',observedThrough:start+300001}
+ let raw=encode([original]),hold=false,release
+ const gate=new Promise(resolve=>{release=resolve})
+ const db={read:async()=>raw,transact:async update=>{const next=update(raw);if(hold)await gate;raw=next;return next}}
+ const local=storage(),store=createPredictionHistoryStore({backend:db,storage:local});await store.load();hold=true
+ const targetManagement={version:1,target:130,revisions:1,updatedAt:start+300001,asOf:new Date(start).toISOString(),basis:'Confirmed resistance swing'}
+ const pending=store.update(records=>records.map(record=>({...record,targetManagement})))
+ await new Promise(resolve=>setImmediate(resolve))
+ const checkpoint=JSON.parse(local.getItem(predictionCheckpointKey)).records[0]
+ assert.deepEqual(checkpoint.targetManagement,targetManagement)
+ assert.equal(JSON.parse(raw).records[0].targetManagement,undefined,'the write-ahead target is saved before database commit')
+ release();await pending
+ assert.deepEqual(JSON.parse(raw).records[0].targetManagement,targetManagement)
+})
+
 test('a valid empty local ledger can persist new trades when IndexedDB is unavailable',async()=>{
  const local=storage([[predictionHistoryKey,encode([])]]),db=backend();db.fail=true
  const store=createPredictionHistoryStore({backend:db,storage:local})

@@ -3,11 +3,12 @@ import { getIndiaVix, type IndiaVixSnapshot } from '../api/marketContext'
 import { getAngelOneLtp } from '../api/angelOne'
 import { angelIndiaVixSnapshot, type IndiaVixInstrument } from '../analysis/indiaVix'
 
-export function useIndiaVix(instrument?: IndiaVixInstrument) {
+export function useIndiaVix(instrument?: IndiaVixInstrument, enabled = true) {
   const [snapshot, setSnapshot] = useState<IndiaVixSnapshot>()
   const [loading, setLoading] = useState(false)
   const controllerRef = useRef<AbortController | null>(null)
   const refresh = useCallback(async () => {
+    if (!enabled) return
     controllerRef.current?.abort()
     const controller = new AbortController()
     controllerRef.current = controller
@@ -39,13 +40,14 @@ export function useIndiaVix(instrument?: IndiaVixInstrument) {
       window.clearTimeout(timeout)
       if (controllerRef.current === controller) setLoading(false)
     }
-  }, [instrument])
+  }, [instrument, enabled])
   useEffect(() => {
+    if (!enabled) { setLoading(false); return }
     void refresh()
     const onAuth = () => { void refresh() }
     window.addEventListener('angelone-auth-changed', onAuth)
     const timer = window.setInterval(() => void refresh(), 60_000)
     return () => { window.clearInterval(timer); window.removeEventListener('angelone-auth-changed', onAuth); controllerRef.current?.abort(); controllerRef.current = null }
-  }, [refresh])
+  }, [refresh, enabled])
   return { snapshot, loading, refresh }
 }

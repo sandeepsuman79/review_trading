@@ -1,20 +1,21 @@
-import { useLayoutEffect, useRef } from 'react'
+import { useLayoutEffect, useMemo, useRef } from 'react'
 import type { OptionPremiumSnapshot } from '../api/optionPremiums'
 import { priceScalePosition, scaleViews, type ScaleView } from '../analysis/indexPriceScale'
 export type ScaleGeometry = { left: number; top: number; width: number; height: number }
 export type ScaleBadge = { id: string; value: number; text: string; background: string; color?: string; remove?: () => void }
-export default function IndexPriceScale({ geometry, min, max, levels, name, view, onView, data, badges, onInteract }: {
-  geometry: ScaleGeometry; min: number; max: number; levels: number[]; name: string; view: ScaleView; onView: (view: ScaleView) => void; data?: OptionPremiumSnapshot; badges: ScaleBadge[]; onInteract: () => void
+export default function IndexPriceScale({ geometry, min, max, levels, name, view, onView, data, badges, onInteract, priceActionOnly = false }: {
+  priceActionOnly?: boolean; geometry: ScaleGeometry; min: number; max: number; levels: number[]; name: string; view: ScaleView; onView: (view: ScaleView) => void; data?: OptionPremiumSnapshot; badges: ScaleBadge[]; onInteract: () => void
 }) {
+  const views = useMemo<ScaleView[]>(() => priceActionOnly ? ['INDEX'] : scaleViews, [priceActionOnly])
   const scroll = useRef<HTMLDivElement>(null)
-  useLayoutEffect(() => { if (scroll.current) scroll.current.scrollLeft = geometry.width * scaleViews.indexOf(view) }, [view, geometry.width])
+  useLayoutEffect(() => { if (scroll.current) scroll.current.scrollLeft = geometry.width * views.indexOf(view) }, [view, geometry.width, views])
   const y = (value: number) => Math.max(7, Math.min(geometry.height - 7, priceScalePosition(value, min, max, geometry.height)))
-  return <div ref={scroll} className="chart-scale-ladder" style={{ left: geometry.left, top: geometry.top, width: geometry.width, height: geometry.height }} tabIndex={0} role="region" aria-label="Swipe left for the ATM CE chart, center for index values, right for the ATM PE chart" onPointerEnter={onInteract} onFocus={onInteract} onPointerDown={event => { event.stopPropagation(); onInteract() }} onPointerMove={event => event.stopPropagation()} onScroll={event => {
-    const selected = Math.max(0, Math.min(2, Math.round(event.currentTarget.scrollLeft / geometry.width)))
-    if (scaleViews[selected] !== view) onView(scaleViews[selected])
+  return <div ref={scroll} className="chart-scale-ladder" style={{ left: geometry.left, top: geometry.top, width: geometry.width, height: geometry.height }} tabIndex={0} role="region" aria-label={priceActionOnly ? "Underlying price-action levels" : "Swipe for CE price action, index values or PE price action"} onPointerEnter={onInteract} onFocus={onInteract} onPointerDown={event => { event.stopPropagation(); onInteract() }} onPointerMove={event => event.stopPropagation()} onScroll={event => {
+    const selected = Math.max(0, Math.min(views.length - 1, Math.round(event.currentTarget.scrollLeft / geometry.width)))
+    if (views[selected] !== view) onView(views[selected])
   }}>
-    <div className="chart-scale-track" style={{ width: geometry.width * 3 }}>
-      {scaleViews.map(mode => <div key={mode} className={`chart-scale-column is-${mode.toLowerCase()}`} style={{ width: geometry.width, height: geometry.height }} aria-hidden={view !== mode} aria-label={`${mode} price column`}>
+    <div className="chart-scale-track" style={{ width: geometry.width * views.length }}>
+      {views.map(mode => <div key={mode} className={`chart-scale-column is-${mode.toLowerCase()}`} style={{ width: geometry.width, height: geometry.height }} aria-hidden={view !== mode} aria-label={`${mode} price column`}>
         {levels.map(strike => {
           const leg = mode === 'INDEX' ? undefined : data?.rows.find(row => row.strike === strike)?.[mode === 'CE' ? 'ce' : 'pe']
           const value = mode === 'INDEX' ? strike.toLocaleString('en-IN') : leg?.ltp !== null && leg?.ltp !== undefined ? `₹${leg.ltp.toFixed(2)}` : '—'

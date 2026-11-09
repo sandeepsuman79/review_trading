@@ -4,6 +4,11 @@ import type { CommodityContract } from './commodities'
 import { setupEntryDeadline } from './setupTiming'
 import { candleIntervalMs } from './candleData'
 import { defaultChartInterval, type chartIntervals, timeframeInfo } from './timeframes'
+import type { AngelOneCandle, AngelOneStreamTick } from '../api/angelOne'
+import type { AtmVwapSnapshot } from '../api/atmVwap'
+import { completedCandles } from './candleData'
+import { readTradeDiagnostics } from './tradeDecision'
+import { diagnoseTradeEntry } from './tradeEntry'
 
 export type TradeTransition = {
   instrument: string; contract?: string; recordId: string; from: PredictionStatus | 'NEW'; to: PredictionStatus
@@ -29,6 +34,35 @@ export function readTradeTransitions(instrument: string) {
   return transitions.filter(item => item.instrument === instrument).map(item => ({ ...item }))
 }
 
+/** One reviewable export of observed decisions and candle history. A current
+ * ATM quote is explicitly separate from genuinely archived replay snapshots. */
+export function buildAgentMonitoringExport({ instrument, candles, records, plan, tick, connected, now, contract, atmVwap, issuedAt }: {
+  instrument: string; candles: AngelOneCandle[]; records: PredictionRecord[]; plan?: PredictionPlan; tick?: AngelOneStreamTick
+  connected: boolean; now: number; contract?: CommodityContract; atmVwap?: AtmVwapSnapshot; issuedAt?: number
+}) {
+  const saved = records.filter(record => record.instrument === instrument)
+  const safeContract = (value: CommodityContract) => ({ name: value.name, root: value.root, token: value.token, symbol: value.symbol, exchange: value.exchange,
+    exchangeType: value.exchangeType, expiry: value.expiry, expiresAt: value.expiresAt, tickSize: value.tickSize, lotSize: value.lotSize })
+  const safePlan = (value: PredictionPlan) => ({ id: value.id, instrument: value.instrument, interval: value.interval, side: value.side, stage: value.stage,
+    generatedAt: value.generatedAt, expiresAt: value.expiresAt, signalCandleTime: value.signalCandleTime, entry: value.entry, stopLoss: value.stopLoss,
+    target: value.target, riskReward: value.riskReward, confirmationSnapshot: value.confirmationSnapshot, candleConfirmation: value.candleConfirmation, strategyVersion: value.strategyVersion, ...(value.contract ? { contract: safeContract(value.contract) } : {}) })
+  const leg = (value: AtmVwapSnapshot['ce']) => ({ symbol: value.symbol, token: value.token, exchange: value.exchange, close: value.close,
+    vwap: value.vwap, volume: value.volume, asOf: value.asOf, priceAsOf: value.priceAsOf, coverage: value.coverage })
+  return { version: 3, kind: 'AGENT_MONITORING', generatedAt: new Date(now).toISOString(), instrument, interval: 'FIVE_MINUTE',
+    ...(contract ? { contract: safeContract(contract) } : {}),
+    candles: completedCandles(candles, 'FIVE_MINUTE', now).slice(-5000),
+    assessments: readTradeDiagnostics(instrument), tradeTransitions: readTradeTransitions(instrument),
+    records: saved.map(record => ({ ...safePlan(record), status: record.status, entryAt: record.entryAt, entryPrice: record.entryPrice,
+      exitAt: record.exitAt, exitPrice: record.exitPrice, outcomeNote: record.outcomeNote, protection: record.protection, targetPolicy: record.targetPolicy, targetManagement: record.targetManagement })),
+    current: { connected, quote: tick ? { token: tick.token, exchangeType: tick.exchangeType, ltp: tick.ltp, timestamp: tick.timestamp } : null,
+      plan: plan ? safePlan(plan) : null, entry: diagnoseTradeEntry(plan, tick, connected, now, saved.some(record => record.status === 'ACTIVE'), issuedAt),
+      atmVwap: atmVwap ? { index: atmVwap.index, strike: atmVwap.strike, expiry: atmVwap.expiry, fetchedAt: atmVwap.fetchedAt,
+        referenceIndexPrice: atmVwap.referenceIndexPrice, method: atmVwap.method, ce: leg(atmVwap.ce), pe: leg(atmVwap.pe) } : null },
+    limitations: ['Assessments and transitions are actual in-memory observations from this page session; missing observations are not reconstructed.',
+      'Candlestick-only confirmation uses five-minute OHLC; archived policies may require their own historical context. Current quotes cannot invent past fills.',
+      'Candle replay uses fixed-target comparison exits; it does not validate live tick TSL or option-premium returns.'] }
+}
+
 /** Objective time remaining, not a probability or an extra technical vote. */
 export function signalFreshness(plan: PredictionPlan, now: number, issuedAt = plan.generatedAt) {
   const closedAt = Date.parse(plan.signalCandleTime) + candleIntervalMs(plan.interval), deadline = setupEntryDeadline(plan)
@@ -50,8 +84,8 @@ export function contractExpiryNotice(contract: CommodityContract | undefined, no
 
 type Outcome = { at: number; r: number; session: string }
 /** Descriptive underlying/futures tracking only. Does not change thresholds or open/close positions. */
-export function trackedPerformance(records: PredictionRecord[], instrument: string, now: number, interval: typeof chartIntervals[number] = defaultChartInterval) {
-  const matching = records.filter(record => record.instrument === instrument && record.strategyVersion === 'technical-v2' && record.interval === interval)
+export function trackedPerformance(records: PredictionRecord[], instrument: string, now: number, interval: typeof chartIntervals[number] = defaultChartInterval, strategyVersion = 'technical-v2') {
+  const matching = records.filter(record => record.instrument === instrument && record.strategyVersion === strategyVersion && record.interval === interval)
   const outcomes: Outcome[] = matching.flatMap(record => {
     const risk = Math.abs((record.entryPrice ?? NaN) - record.stopLoss)
     if (record.stage !== 'CONFIRMED' || !['TARGET_HIT', 'STOP_LOSS_HIT', 'EARLY_EXIT'].includes(record.status)

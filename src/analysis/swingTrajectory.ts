@@ -5,11 +5,11 @@ export type SwingTrajectory = {
 }
 /** A pivot needs a completed bar to its right. Break levels exclude pivots
  * that become known only on the bar being evaluated; no future bars are read. */
-export function analyzeSwingTrajectory(points: Array<{ at: number; value?: number }>, intervalMs: number, noise = 0): SwingTrajectory {
+export function analyzeSwingTrajectory(points: Array<{ at: number; value?: number }>, intervalMs: number, noise = 0, adjacent?: (from: number, to: number) => boolean): SwingTrajectory {
   const tail: Array<{ at: number; value: number }> = []
   for (let i = points.length - 1; i >= 0 && tail.length < 32; i--) {
     const p = points[i], next = points[i + 1]
-    if (!Number.isFinite(p.at) || p.value === undefined || !Number.isFinite(p.value) || next && (next.at - p.at !== intervalMs || Math.floor((next.at + 19800000) / 86400000) !== Math.floor((p.at + 19800000) / 86400000))) break
+    if (!Number.isFinite(p.at) || p.value === undefined || !Number.isFinite(p.value) || next && (adjacent ? !adjacent(p.at, next.at) : next.at - p.at !== intervalMs || Math.floor((next.at + 19800000) / 86400000) !== Math.floor((p.at + 19800000) / 86400000))) break
     tail.unshift({ at: p.at, value: p.value })
   }
   const base: SwingTrajectory = { trend: 'WARMING_UP', pattern: 'Waiting for confirmed swings', newBreak: false }

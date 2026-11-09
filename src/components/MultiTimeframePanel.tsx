@@ -29,6 +29,7 @@ export default function MultiTimeframePanel({ assessment, activeTrade, connected
           <div className="agent-market-view-heading"><strong>{timeframeInfo[review.interval].label}</strong>{selected && <span>Selected entry</span>}</div>
           <p className={`agent-text-${tone}`}><strong>{review.plan ? tradeDirection(assessment.instrument, review.plan.side) : review.evidence.bias}</strong> · {fresh || review.status === 'WARMING_UP' ? review.status.replace('_', ' ') : 'Waiting for current data'}</p>
           <p className="agent-score-note">Bullish {review.evidence.bullishScore}/100 · Bearish {review.evidence.bearishScore}/100 · Coverage {review.evidence.coverage}%</p>
+          {review.evidence.indicatorHistory && <p className="agent-score-note">Indicator history: {review.evidence.indicatorHistory.completedBars}/50 completed bars · {review.evidence.indicatorHistory.currentSessionBars} today + {review.evidence.indicatorHistory.previousSessionBars} previous sessions</p>}
           <p>{review.analysis.setup}</p>
           <p className="agent-score-note">{review.closedAt ? `Last candle closed ${clock(review.closedAt)} IST` : 'Waiting for completed history'}</p>
           <details className="timeframe-trajectory">

@@ -24,7 +24,7 @@ test('all seven instruments independently evaluate both directions with actual c
    assert(review.analysis.rsi14 !== undefined && review.analysis.atr14 > 0)
    assert.equal(review.evidence.interval,review.interval)
    assert.equal(review.evidence.bias,d===1?'BULLISH':'BEARISH')
-   if (review.plan) { assert.equal(review.plan.side,d===1?'CALL':'PUT'); assert.equal(review.plan.stage,'CONFIRMED'); assert.equal(review.evidence.canConfirm,true); assert(review.plan.riskReward>=1.2) }
+   if (review.plan) { assert.equal(review.plan.side,d===1?'CALL':'PUT'); assert.equal(review.plan.stage,'CONFIRMED'); assert.equal(review.evidence.canConfirm,true); assert(review.plan.riskReward>0) }
   }
   assert(result.selectedPlan,`${row[0]} ${d}: ${result.reviews.map(r=>r.reason).join(' / ')}`)
   assert.equal(result.selectedPlan.side,d===1?'CALL':'PUT')
