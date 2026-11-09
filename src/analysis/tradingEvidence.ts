@@ -1,4 +1,5 @@
-import { minimumRewardRisk, meetsMinimumRewardRisk } from './tradeRisk'
+import { hasValidRewardRisk } from './tradeRisk'
+import { indicatorHistoryCounts } from './indicatorHistory'
 import { assessConfirmationQuality, confirmationConfig, passesConfirmationScore, type ConfirmationContext, type ConfirmationQuality } from './confirmationQuality'
 import { scoreDominates } from './scoreTrajectory'
 import { atmVwapContext, type AtmVwapSnapshot } from '../api/atmVwap'
@@ -23,7 +24,7 @@ export const tradingEvidenceRules = {
   strongScore: 60, strongGap: 20, elevatedVixGap: 20,
   earlyCandles: 30, earlyCoverage: 60, earlyScore: 55, earlyGap: 15,
   elevatedVixScore: 65, highVixLevel: 25, vixJumpPercent: 10,
-  minimumAtrRisk: 1, minimumRewardRisk,
+  minimumAtrRisk: 1,
 }
 export type EvidenceLayer = { key: string; name: string; weight: number; coverage: number; bullish: number; bearish: number; details: string[] }
 // Score allocation only. Confirmation cutoffs remain in tradingEvidenceRules.
@@ -40,6 +41,7 @@ export type MarketSentiment = {
   reason: string; layers: EvidenceLayer[]; bullishEvidence: string[]; bearishEvidence: string[]; missing: string[]
 }
 export type TradingEvidence = {
+  indicatorHistory?: ReturnType<typeof indicatorHistoryCounts>
   version: 'technical-v2'; instrument: string; asOf?: string; interval: PriceActionInterval
   bullishScore: number; bearishScore: number; coverage: number; bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
   selectedAnalysis?: PriceActionAnalysis
@@ -67,16 +69,19 @@ function fresh<T extends { asOf: string }>(snapshot: PublicSnapshot<T> | undefin
 }
 
 /** Fixed evidence budgets avoid multiplying correlated signals or promoting missing data to support. */
-function analyzeSetupEvidence({ analysis, candles, interval, instrument, context, outlook, indiaVix, flowHistory, atmVwap, now, historicalReference = false, confirmationContext }: {
+function analyzeSetupEvidence({ analysis, candles, interval, instrument, context, outlook, indiaVix, flowHistory, atmVwap, now, historicalReference = false, confirmationContext, assessmentSide }: {
   analysis: PriceActionAnalysis; candles: AngelOneCandle[]; interval: PriceActionInterval; instrument: string
   context?: MarketContext | null; outlook?: MarketOutlook; indiaVix?: IndiaVixSnapshot; flowHistory?: InstitutionalFlow[]; now: number; atmVwap?: AtmVwapSnapshot; historicalReference?: boolean
   confirmationContext?: ConfirmationContext
+  assessmentSide?: 'CALL' | 'PUT'
+  recordDiagnostics?: boolean
 }): TradingEvidence {
   const commodity = isCommodity(instrument)
   const weights = confirmationContext ? technicalWeights : legacyTechnicalWeights
   const referenceWeights = commodity ? commoditySentimentWeights : sentimentWeights
   const historicalOutcomes = historicalReference ? cachedHistoricalOutcomes(candles, interval, now, instrument) : undefined
-  const { closed, averages, trajectory, vwap: vwapValues } = cachedCandleIndicators(candles, interval, now)
+  const { closed, averages, trajectory, vwap: vwapValues } = cachedCandleIndicators(candles, interval, now, instrument)
+  const indicatorHistory = indicatorHistoryCounts(closed, now)
   const chartTime = Date.parse(analysis.latestCandleTime || '')
   const chartCurrent = analysis.analyzedCandles >= 25 && finite(chartTime) && chartTime === Date.parse(closed[closed.length - 1]?.[0] || '')
     && chartTime + candleIntervalMs(interval) <= now && now < chartTime + 2 * candleIntervalMs(interval)
@@ -156,7 +161,7 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
     : `VWAP: ${finite(vwap) ? `${format(vwap)} · price ${price !== undefined && price > vwap ? 'above' : 'below'}` : 'unavailable; zero traded volume'}`)
   if (vwapVote === undefined) missing.push(indexVwap ? 'Current ATM CE/PE VWAP' : 'VWAP (genuine traded volume unavailable)')
   if (atr === undefined) missing.push('ATR(14)')
-  else riskNotes.push(`ATR(14) ${format(atr)} pts · stop distance must cover at least 1 ATR; reward/risk must remain ≥ ${minimumRewardRisk.toFixed(2)}:1`)
+  else riskNotes.push(`ATR(14) ${format(atr)} pts · stop distance must cover at least 1 ATR; reward/risk is informational with no minimum ratio`)
 
   const oiLayer = layer('oi', 'OI / PCR'), pcrLayer = layer('pcr', 'PCR reference'), oi = commodity ? undefined : market?.inputs?.openInterest
   const expiryText = oi?.data?.expiry
@@ -214,8 +219,8 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
 
   const previous = closed[closed.length - 2]
   const sessionIntact = Boolean(previous && chartTime - Date.parse(previous[0]) === candleIntervalMs(interval) && candleSession(previous[0]) === candleSession(new Date(now).toISOString()) && candleSession(previous[0]) === candleSession(analysis.latestCandleTime!))
-  const side = analysis.side, d = side === 'CALL' ? 1 : -1
-  const confirmation = confirmationContext && side !== 'WAIT' ? assessConfirmationQuality({ candles, interval, instrument, side, now, ...confirmationContext }) : undefined
+  const side = analysis.side, direction = assessmentSide ?? (side !== 'WAIT' ? side : undefined), d = direction === 'CALL' ? 1 : -1
+  const confirmation = confirmationContext && direction ? assessConfirmationQuality({ candles, interval, instrument, side: direction, now, ...confirmationContext }) : undefined
   let requiredGap = tradingEvidenceRules.minimumGap
   let currentVix: TradingEvidence['indiaVix'], requiredScore = tradingEvidenceRules.minimumScore
   if (!commodity && fresh(indiaVix, now, 30 * 60_000) && indiaVix!.data!.symbol === '^INDIAVIX' && finite(indiaVix!.data!.price) && indiaVix!.data!.price > 0 && finite(indiaVix!.data!.changePercent)) {
@@ -272,33 +277,33 @@ function analyzeSetupEvidence({ analysis, candles, interval, instrument, context
   else if (!withinEntryWindow(now, instrument)) reason = `Outside the entry window (${marketHours(instrument, now)}). Open trades are due for automatic square-off at ${squareOffLabel(instrument, now)}.`
   else if (side === 'WAIT' || analysis.pattern === 'NO_CONFIRMED_PATTERN') reason = 'Waiting for a confirmed chart pattern at a valid structure / location.'
   else if (!atr) reason = 'Waiting for a valid ATR(14) risk estimate.'
-  else if (!coreIndicators) reason = 'Waiting for EMA(20/50), RSI(14), momentum and Supertrend to warm up on at least 50 completed candles.'
+  else if (!coreIndicators) reason = 'Waiting for EMA(20/50), RSI(14), momentum and Supertrend to warm up using at least 50 completed bars across previous and current sessions.'
   else if (coverage < tradingEvidenceRules.minimumCoverage) reason = `Insufficient technical evidence: ${coverage}% coverage. Need ≥70% technical coverage; missing inputs are not reweighted.`
   else if (!directionalRoute) reason = confirmationContext ? `Waiting for accepted price action and the explicitly selected ${confirmation?.indicator ?? 'indicator'} confirmation.` : 'Waiting for an EMA trajectory/crossover, Supertrend trajectory/flip or support/resistance break/reversal in the setup direction.'
   else if (!dominates(dominant, opposing)) reason = `Evidence is weak or conflicting: ${dominant}/100 support versus ${opposing}/100 opposition. ${confirmationContext ? `${confirmation?.setupType ?? 'Setup'} needs ≥${requiredScore} support and ≥${requiredGap} lead; VIX floors also apply.` : `Need positive support ≥1.5× opposition${requiredScore > 0 ? `, ≥${requiredScore} support and ≥${requiredGap} lead for elevated VIX` : ''}.`}`
-  else if (!finite(stopLoss) || stopLoss <= 0 || !finite(rewardRisk) || !meetsMinimumRewardRisk(rewardRisk)) reason = 'Chart target fails the ATR / reward-to-risk check. The stop covers chart invalidation and at least 1 ATR; the target is not stretched to force a trade.'
+  else if (!finite(stopLoss) || stopLoss <= 0 || !finite(rewardRisk) || !hasValidRewardRisk(rewardRisk)) reason = 'Chart target fails the ATR / reward-to-risk check. The stop covers chart invalidation and at least 1 ATR; the target is not stretched to force a trade.'
   else if (confirmation && !confirmation.passed) reason = `Price quality: ${confirmation.reason}`
   else if (confirmation && !confirmedVwap) reason = indexVwap ? `Waiting for fresh paired ATM CE/PE VWAP supporting ${side}; mixed, opposite or missing VWAP cannot confirm.` : `Waiting for traded-volume session VWAP supporting ${side}.`
   const checks = [
     { label: 'Recent completed candles', passed: chartCurrent, detail: chartCurrent ? `Latest completed candle ${analysis.latestCandleTime}` : 'Saved or forming candles cannot create a current entry.' },
     { label: 'Confirmed price pattern', passed: side !== 'WAIT' && analysis.pattern !== 'NO_CONFIRMED_PATTERN', detail: side === 'WAIT' ? analysis.reason : analysis.setup },
-    { label: 'Indicator warmup', passed: coreIndicators, detail: `${closed.length} closed candles · EMA20/50, RSI and Supertrend require at least 50.` },
+    { label: 'Indicator warmup', passed: coreIndicators, detail: `${closed.length}/50 completed bars · ${indicatorHistory.currentSessionBars} today + ${indicatorHistory.previousSessionBars} from previous sessions. EMA20/50, RSI and Supertrend update with each completed candle; no daily warmup reset.` },
     { label: 'ATR risk', passed: Boolean(atr), detail: atr ? `ATR(14) ${atr.toFixed(2)} points · Stop covers at least 1 ATR.` : 'A current, positive ATR estimate is required.' },
-    { label: 'Technical coverage', passed: coverage >= tradingEvidenceRules.minimumCoverage, detail: `${coverage}% available / ${tradingEvidenceRules.minimumCoverage}% required. Missing inputs are not reweighted.` },
+    { label: 'Technical coverage', passed: coverage >= tradingEvidenceRules.minimumCoverage, detail: `${coverage}% available / ${tradingEvidenceRules.minimumCoverage}% required, using rolling historical and current indicator values. Missing inputs are not reweighted; session VWAP needs current traded data.` },
     { label: 'Directional agreement', passed: side !== 'WAIT' && directionalRoute && dominates(dominant, opposing), detail: `${confirmationContext ? `${confirmation?.setupType ?? 'TRANSITION'} / ${confirmation?.indicator ?? 'unavailable'}` : `Matched route: ${directionalRoute ? matchingRoutes.map(route => route.name).join(' or ') : 'none'}`}. Bullish ${bullishScore}/100 · Bearish ${bearishScore}/100 · ${confirmationContext ? 'Separate score/lead floors replace the legacy 1.5× ratio' : 'Need support ≥1.5× opposition'}; floors ${requiredScore} support / ${requiredGap} lead.` },
-    { label: 'Reward/risk on confirmed setup', passed: finite(stopLoss) && stopLoss > 0 && finite(rewardRisk) && meetsMinimumRewardRisk(rewardRisk), detail: finite(rewardRisk) ? `${rewardRisk.toFixed(2)} : 1 after ATR stop adjustment / ${minimumRewardRisk.toFixed(2)} : 1 required.` : 'A confirmed price setup and its validated entry, stop and target are required.' },
+    { label: 'Reward/risk on confirmed setup', passed: finite(stopLoss) && stopLoss > 0 && finite(rewardRisk) && hasValidRewardRisk(rewardRisk), detail: finite(rewardRisk) ? `${rewardRisk.toFixed(2)} : 1 after ATR stop adjustment; no minimum ratio. Positive risk and remaining reward are required.` : 'A confirmed price setup and its validated entry, stop and target are required.' },
     ...(confirmation ? [...confirmation.checks.map(({ label, passed, detail }) => ({ label, passed, detail })), { label: 'VWAP confirmation', passed: confirmedVwap, detail: indexVwap ? atmContext?.reason ?? 'Paired ATM CE/PE VWAP is unavailable' : `Price ${format(price)} versus session VWAP ${format(vwap)}` }] : []),
   ]
   const canConfirm = reason === `${side} completed chart setup and technical evidence align.`
   const riskySetup = canConfirm || confirmationContext ? undefined : findRiskyLevelSetup({ analysis, candles: closed, checks, bullishScore, bearishScore, interval, now, instrument })
-  return { version: 'technical-v2', instrument, interval, asOf: analysis.latestCandleTime, bullishScore, bearishScore, coverage, bias, canConfirm, reason, checks, riskySetup, historicalOutcomes, layers, sentiment, confirmation, turns: chartCurrent ? trajectory.turns : [],
+  return { version: 'technical-v2', indicatorHistory, instrument, interval, asOf: analysis.latestCandleTime, bullishScore, bearishScore, coverage, bias, canConfirm, reason, checks, riskySetup, historicalOutcomes, layers, sentiment, confirmation, turns: chartCurrent ? trajectory.turns : [],
     bullishEvidence: [...new Set(bullishEvidence)], bearishEvidence: [...new Set(bearishEvidence)], missing, riskNotes, atr14: atr, vwap, atmVwap: atmBias !== undefined ? atmVwap : undefined, indiaVix: currentVix, requiredScore, requiredGap, quality: canConfirm ? dominant >= tradingEvidenceRules.strongScore && directionalLead >= tradingEvidenceRules.strongGap ? 'STRONG' : 'STANDARD' : undefined, stopLoss, observedFlowReports }
 }
 
 /** Score CE and PE independently before selecting an entry candidate. Shared indicators stay memory-cached. */
 export function analyzeTradingEvidence(input: Parameters<typeof analyzeSetupEvidence>[0]): TradingEvidence {
   const roundPrice = (price: number) => Math.round(price * 100) / 100
-  const base = analyzeSetupEvidence(input), { closed } = cachedCandleIndicators(input.candles, input.interval, input.now)
+  const base = analyzeSetupEvidence(input), { closed } = cachedCandleIndicators(input.candles, input.interval, input.now, input.instrument)
   const sides = (['CALL', 'PUT'] as const).map(side => {
     if (base.canConfirm && input.analysis.side === side) return { analysis: input.analysis, evidence: base, decision: buildCandidateDecision(input.analysis, base, side, closed, input.now, tradingEvidenceRules) }
     const d = side === 'CALL' ? 1 : -1
@@ -307,7 +312,7 @@ export function analyzeTradingEvidence(input: Parameters<typeof analyzeSetupEvid
         const entry = roundPrice(setup.entry), chartRisk = d * (entry - setup.stopLoss)
         const risk = Math.max(chartRisk, input.analysis.atr14 ?? 0)
         const stop = (d === 1 ? Math.floor((entry - risk) * 100) : Math.ceil((entry + risk) * 100)) / 100
-        return chartRisk > 0 && stop > 0 && meetsMinimumRewardRisk(d * (roundPrice(setup.target) - entry) / (d * (entry - stop)))
+        return chartRisk > 0 && stop > 0 && hasValidRewardRisk(d * (roundPrice(setup.target) - entry) / (d * (entry - stop)))
       }
       return Number(eligible(b)) - Number(eligible(a)) || b.score - a.score
     })
@@ -336,12 +341,18 @@ export function analyzeTradingEvidence(input: Parameters<typeof analyzeSetupEvid
     const candidate = candidates[0] ?? fallback
     const analysis: PriceActionAnalysis = candidate ? { ...input.analysis, ...candidate, detectedSetups: undefined, confidence: candidate.score } : input.analysis.side === side ? input.analysis : { ...input.analysis, side: 'WAIT', pattern: 'NO_CONFIRMED_PATTERN', setup: 'No completed setup', entry: undefined, stopLoss: undefined, target: undefined }
     const same = analysis.side === input.analysis.side && analysis.pattern === input.analysis.pattern && analysis.entry === input.analysis.entry && analysis.stopLoss === input.analysis.stopLoss && analysis.target === input.analysis.target
-    const evidence = same ? base : analyzeSetupEvidence({ ...input, analysis, historicalReference: false })
+    // A missing price pattern must still report this side's current adaptive
+    // checks. It must not silently fall back to the legacy ratio diagnostics.
+    const evidence = same && (!input.confirmationContext || base.confirmation?.side === side) ? base : analyzeSetupEvidence({ ...input, analysis, assessmentSide: side, historicalReference: false })
     return { analysis, evidence, decision: buildCandidateDecision(analysis, evidence, side, closed, input.now, tradingEvidenceRules) }
   })
   // Preserve the existing selected setup when eligible; otherwise consider the other independent pipeline.
-  const selected = base.canConfirm ? { analysis: input.analysis, evidence: base } : sides.find(item => item.evidence.canConfirm) ?? sides.find(item => item.evidence.riskySetup) ?? sides.find(item => item.decision.state === 'EARLY') ?? { analysis: input.analysis, evidence: base }
+  const qualifiedCandidate = sides.filter(item => item.analysis.side !== 'WAIT' && item.evidence.confirmation?.family)
+    .sort((a, b) => a.decision.reasons.length - b.decision.reasons.length || b.decision.supportScore - a.decision.supportScore)[0]
+  // Show the actual blocking checks of an accepted price candidate even when
+  // risk, VWAP or score rejects it. Reporting it never makes it confirmable.
+  const selected = base.canConfirm ? { analysis: input.analysis, evidence: base } : sides.find(item => item.evidence.canConfirm) ?? sides.find(item => item.evidence.riskySetup) ?? sides.find(item => item.decision.state === 'EARLY') ?? qualifiedCandidate ?? { analysis: input.analysis, evidence: base }
   const decisions = sides.map(item => item.decision)
-  recordTradeDiagnostics(input.instrument, input.interval, input.analysis.latestCandleTime, input.now, decisions)
+  if (input.recordDiagnostics !== false) recordTradeDiagnostics(input.instrument, input.interval, input.analysis.latestCandleTime, input.now, decisions)
   return { ...selected.evidence, historicalOutcomes: base.historicalOutcomes, selectedAnalysis: selected.analysis, decisions }
 }

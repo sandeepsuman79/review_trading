@@ -112,6 +112,8 @@ export function createPredictionHistoryStore({ backend, storage, now = Date.now 
       return !old || old.status !== record.status || old.entryPrice !== record.entryPrice || old.entryAt !== record.entryAt
         || old.exitAt !== record.exitAt || old.exitPrice !== record.exitPrice || old.points !== record.points
         || JSON.stringify(old.protection) !== JSON.stringify(record.protection)
+        || JSON.stringify(old.targetManagement) !== JSON.stringify(record.targetManagement)
+        || old.targetPolicy !== record.targetPolicy
     }))
   }
   function clearCommittedCheckpoints(records: PredictionRecord[]) {

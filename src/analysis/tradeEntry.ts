@@ -1,4 +1,5 @@
-import { minimumRewardRisk, meetsMinimumRewardRisk } from './tradeRisk'
+import { isCandleStrategy } from './strategyPolicy'
+import { hasValidRewardRisk } from './tradeRisk'
 import type { AngelOneStreamTick } from '../api/angelOne'
 import type { PredictionPlan } from './earlyPrediction'
 import { candleIntervalMs, tickTimestamp } from './candleData'
@@ -11,7 +12,7 @@ export function diagnoseTradeEntry(plan: PredictionPlan | undefined, tick: Angel
   const checks: DecisionCheck[] = []
   const add = (code: DecisionCheck['code'], label: string, pass: boolean, detail: string, checked = true) => checks.push({ code, label, status: !checked ? 'NOT_CHECKED' : pass ? 'PASS' : 'FAIL', detail })
   const confirmed = plan?.stage === 'CONFIRMED'
-  add('SETUP_NOT_CONFIRMED', 'Technical setup', confirmed, confirmed ? 'Technical confirmation passed; entry is a separate stage' : 'Entry quote not checked until a setup is confirmed')
+  add('SETUP_NOT_CONFIRMED', isCandleStrategy(plan?.strategyVersion ?? '') ? 'Candlestick setup' : 'Technical setup', confirmed, confirmed ? 'Setup confirmation passed; entry is a separate stage' : 'Entry quote not checked until a setup is confirmed')
   if (!confirmed || !plan) return { state: 'NOT CHECKED', checks }
   const signal = Date.parse(plan.signalCandleTime), duration = candleIntervalMs(plan.interval)
   const window = withinEntryWindow(now, plan.instrument) && now < plan.expiresAt && now >= signal + duration && now < signal + 2 * duration
@@ -24,11 +25,12 @@ export function diagnoseTradeEntry(plan: PredictionPlan | undefined, tick: Angel
   add('QUOTE_BEFORE_SIGNAL', 'Quote after setup issue', subsequent, 'Entry needs an observed quote received after the candidate was issued', quoteFresh)
   const d = plan.side === 'CALL' ? 1 : -1, reached = price !== undefined && d * (price - plan.entry) >= 0
   const canCheck = window && streamConnected && subsequent
-  add('TRADE_LEVELS_INVALID', 'Setup invalidation', price !== undefined && d * (price - plan.stopLoss) > 0, 'The entry quote must not invalidate the stop before entry', canCheck)
   add('ENTRY_NOT_REACHED', 'Entry trigger', reached, `Trigger ${plan.entry.toFixed(2)}${price === undefined ? '' : ` · Quote ${price.toFixed(2)}`}`, canCheck)
   const risk = price === undefined ? NaN : d * (price - plan.stopLoss), reward = price === undefined ? NaN : d * (plan.target - price)
   const rr = risk > 0 ? reward / risk : NaN
-  add('RR_BELOW_MINIMUM', 'Reward/risk at entry quote', meetsMinimumRewardRisk(rr), Number.isFinite(rr) ? `${rr.toFixed(2)}:1 / ${minimumRewardRisk.toFixed(2)}:1 required` : 'No eligible entry quote', canCheck && reached)
+  const levelsValid = [plan.entry, plan.stopLoss, plan.target].every(value => Number.isFinite(value) && value > 0)
+    && d * (plan.entry - plan.stopLoss) > 0 && d * (plan.target - plan.entry) > 0 && hasValidRewardRisk(rr)
+  add('TRADE_LEVELS_INVALID', 'Entry price levels', levelsValid, `The quote must remain between the stop and reference target. ${Number.isFinite(rr) ? `Reference reward/risk ${rr.toFixed(2)}:1; no minimum ratio.` : 'No valid remaining reward/risk geometry.'}`, canCheck)
   const paused = checks.some(check => check.status === 'FAIL' && check.code !== 'ENTRY_NOT_REACHED')
   return { state: paused ? 'ENTRY PAUSED' : reached && canCheck ? 'ELIGIBLE QUOTE' : 'AWAITING ENTRY', checks }
 }

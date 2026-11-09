@@ -1,3 +1,4 @@
+import ChartIndicatorLegend from './ChartIndicatorLegend'
 import { atmVwapBias, type AtmVwapSnapshot } from '../api/atmVwap'
 import type { MovingAveragePoint } from '../analysis/movingAverages'
 import type { TechnicalIndicatorPoint } from '../analysis/technicalIndicators'
@@ -7,17 +8,11 @@ export type ChartIndicator = 'supertrend' | 'vwap' | 'ema20' | 'ema50' | 'sma20'
 export type ChartIndicatorVisibility = Record<ChartIndicator, boolean>
 export type ChartTradeLevels = { entry: number; target: number; stopLoss: number; trailingStop?: number }
 
-const controls: Array<{ key: ChartIndicator; label: string; color: string }> = [
-  { key: 'supertrend', label: 'Supertrend (10,3)', color: '#16A34A' },
-  { key: 'vwap', label: 'VWAP', color: '#A855F7' },
-  { key: 'ema20', label: 'EMA 20', color: '#0EA5E9' },
-  { key: 'ema50', label: 'EMA 50', color: '#F59E0B' },
-  { key: 'sma20', label: 'SMA 20', color: '#64748B' },
-]
+
 const number = (value?: number) => value === undefined ? '—' : value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-export default function ChartIndicators({ onShowAtm, visibility, onToggle, average, technical, atmVwap, atmVwapError, atmIndexPrice, vwap, hasVwap, spotIndex, showIndexContext = true, showTradeContext = showIndexContext, close, context, trade, indiaVix, indiaVixLoading, now }: {
-  onShowAtm?: () => void;
+export default function ChartIndicators({ showLegend = true, onShowAtm, visibility, onToggle, average, technical, atmVwap, atmVwapError, atmIndexPrice, vwap, hasVwap, spotIndex, showIndexContext = true, showTradeContext = showIndexContext, close, context, trade, indiaVix, indiaVixLoading, now }: {
+  showLegend?: boolean; onShowAtm?: () => void;
   visibility: ChartIndicatorVisibility; onToggle: (key: ChartIndicator) => void;
   average: MovingAveragePoint; technical: TechnicalIndicatorPoint; vwap?: number;
   atmVwap?: AtmVwapSnapshot; atmVwapError?: string; atmIndexPrice?: number;
@@ -38,20 +33,7 @@ export default function ChartIndicators({ onShowAtm, visibility, onToggle, avera
   const vixColor = !vixCurrent || !vix ? 'neutral' : vix.changePercent < 0 ? 'positive' : vix.changePercent > 0 ? 'negative' : 'neutral'
   const vixNumber = (value: number) => value.toLocaleString('en-IN', { minimumFractionDigits: 1, maximumFractionDigits: 2 })
   return <div className="chart-indicator-panel">
-    <div className="chart-indicator-controls" role="group" aria-label="Chart indicator visibility">
-      <span className="chart-indicator-controls-label">Indicators <small>(tap to show/hide)</small></span>
-      {controls.map(control => spotIndex && control.key === 'vwap'
-        ? <button key={control.key} type="button" onClick={onShowAtm} disabled={!onShowAtm} title="View the current ATM CE/PE price, volume and VWAP charts" aria-label="View ATM option VWAP charts"><i aria-hidden="true" style={{ background: control.color }} />VWAP <small>ATM</small></button>
-        : <button key={control.key} type="button" aria-pressed={visibility[control.key] && (control.key !== 'vwap' || hasVwap)} disabled={control.key === 'vwap' && !hasVwap}
-          onClick={() => onToggle(control.key)} title={control.key === 'vwap' && !hasVwap ? 'VWAP needs traded candle volume. Waiting for historical or observed volume.' : `${visibility[control.key] ? 'Hide' : 'Show'} ${control.label}`}>
-          <i aria-hidden="true" style={{ background: control.color }} />{control.label}{control.key === 'vwap' && !hasVwap && <small>N/A</small>}
-        </button>)}
-    </div>
-    {showTradeContext && <div className="chart-trade-legend" aria-label="Trade level legend">
-      <span><i className="is-entry" />Entry</span><span><i className="is-stop" />Initial stop-loss</span><span><i className="is-target" />Reference target · Open profit</span>
-      {trade?.trailingStop !== undefined && <span><i style={{ background: '#D97706' }} />TSL {number(trade.trailingStop)}</span>}
-      <small>{trade ? 'Current live trade' : 'Levels appear when a confirmed trade is live'}</small>
-    </div>}
+    {showLegend && <ChartIndicatorLegend visibility={visibility} onToggle={onToggle} hasVwap={hasVwap} spotIndex={spotIndex} onShowAtm={onShowAtm} showTradeContext={showTradeContext} trade={trade} />}
     <div className="chart-indicator-context">{context}</div>
     <div className="chart-indicator-metrics" role="region" aria-label="Chart indicator values" tabIndex={0}>
       {spotIndex ? <div className="chart-indicator-metric" aria-label="VWAP indicator">

@@ -1,32 +1,30 @@
 # Offline strategy replay
 
-This is a bounded, chronological simulation for reviewing a **five-minute baseline**
-of the technical entry rules. The live agent now independently evaluates 5-minute,
-15-minute and hourly candles; this simulator does not reproduce that cross-timeframe
-selection or its reversal exits. It does not train the agent, tune live thresholds,
-send orders, fetch broker data or establish prediction accuracy.
+The default evaluator is the live **five-minute-candles-v2** entry policy.
+This bounded chronological simulator reviews entries under a **fixed-target
+comparison exit model**. It does not reproduce live trailing stops or opposite
+candlestick exits, fetch broker data, send orders or establish profitability.
+See [the live candlestick rules](candlestick-agent.md).
 
-Run it from the repository root with Node and the installed development dependencies:
+Run from the repository root with Node and installed development dependencies:
 
 ```sh
 node scripts/replay-agent.cjs /path/to/candles.json
 node scripts/replay-agent.cjs /path/to/candles.json --output /path/to/report.json
-node --test tests/strategyReplay.test.cjs
+npm run agent:compare -- /path/to/candles.json --output /path/to/comparison.json
 npm run test:replay
 ```
 
-The first command writes JSON to standard output. `--output` creates a new file and
-refuses to overwrite an existing file or the input. Errors go to standard error.
-No API keys, network access or login are needed.
-In the dashboard, expand **Agent monitoring** and use **Export candles for offline
-replay** to download completed candles with matching contract metadata. Use that
-file as the CLI input. It contains the current chart instrument, even when an old
-held futures contract remains under separate monitoring.
+The first command prints JSON. `--output` creates a new file and refuses to
+overwrite an existing file or the input. Errors go to standard error. No login
+or API keys are needed. In the dashboard, **Agent monitoring → Export candles
+and agent diagnostics** downloads completed candles, contract metadata, observed
+decisions/transitions and current entry/quote/connection context. The current
+snapshot is never injected into historical evaluations.
 
 ## Input
 
-Wrap exported SmartAPI candles in this structure. Use the full saved, real candle
-history; the abbreviated example below has insufficient history to make a setup:
+Use real saved history; this abbreviated example has insufficient warmup:
 
 ```json
 {
@@ -42,102 +40,82 @@ history; the abbreviated example below has insufficient history to make a setup:
 }
 ```
 
-Accepted instruments: Nifty 50, Sensex, Bank Nifty, Natural Gas, Crude Oil, Silver
-and Gold. A commodity additionally requires `contract`, copied from its actual
-resolved MCX contract: `name`, `root`, `exchange: "MCX"`, `exchangeType: 5`, `token`,
-`symbol`, `expiry` (YYYY-MM-DD), `expiresAt` (Unix milliseconds at that expiry's
-configured MCX close), and optional `tickSize`/`lotSize`. Do not combine contracts
-or splice prices across rollover. Replay each exact contract separately.
+Accepted instruments are Nifty 50, Sensex, Bank Nifty, Natural Gas, Crude Oil,
+Silver and Gold. A commodity also needs its actual resolved MCX `contract`:
+`name`, `root`, `exchange: "MCX"`, `exchangeType: 5`, `token`, `symbol`, `expiry`
+(YYYY-MM-DD), `expiresAt` (Unix milliseconds at configured expiry close), and
+optional `tickSize`/`lotSize`. Replay each exact contract separately; do not splice
+prices across rollover.
 
-Rows must be unique and increasing, five-minute aligned, timezone-qualified OHLCV
-with positive consistent prices and nonnegative volume. No guessed volume is
-added for spot indices. Maximum input is 5 MB / 5,000 candles. Each evaluation uses
-at most the latest 1,000 observed completed bars, with a minimum 50-bar warmup.
-This bounded history can differ from a dashboard with a larger local cache.
+Rows must be unique, increasing, five-minute aligned and timezone-qualified,
+with consistent positive OHLC prices and nonnegative volume. Spot-index volume
+is not invented. Maximum input is 5 MB / 5,000 candles. Evaluations use at most
+the latest 1,000 observed completed bars. The current candle policy needs 20
+completed bars across available history and three contiguous current-session
+pattern bars. Archived indicator evaluators retain their 50-bar warmup.
 
-## Simulation policy
+## Entry and comparison exits
 
-The engine runs the existing price-pattern, evidence-score and confirmed-plan
-builders at each completed candle's close, giving them only a chronological
-prefix. It supplies **no reconstructed OI/PCR, India VIX, news, FII/DII or global
-quotes**. Paired option VWAP is also absent unless genuine recorded
-`atmVwapSnapshots` are provided. Each snapshot uses the `AtmVwapSnapshot` shape in
-`src/api/atmVwap.ts`, including instrument, strike, expiry, fetch time and both
-legs' prices, VWAPs, timestamps, traded volume and session coverage. Only recorded
-snapshots fetched by the evaluation time are visible; normal freshness and ATM
-matching checks still apply. Today's data must never be injected into a past
-assessment.
+Each evaluation receives only the completed chronological prefix. Current
+candle-only signals use no RSI, VWAP, volume, sentiment, coverage score or higher
+timeframe inputs. Historical ATM snapshots are unnecessary for this policy.
 
-A confirmed setup may enter only at the **immediate next observed bar's open**,
-with its trigger already reached, in the same session and before expiry. The
-actual simulated entry including adverse slippage must retain at least 1.20:1
-reward/risk. The simulation does not infer an intrabar entry from the candle high
-or low and does not assume a same-close fill. The next open is a simulation
-convention, not a live quote proven to have arrived after signal computation.
-Missed triggers are skipped; a later retracement cannot resurrect the candidate.
+A confirmed setup can enter only at the **immediate next observed bar's open**,
+with its trigger reached, in the same session and before expiry. Actual entry
+including adverse slippage must retain positive risk and remaining reward; no
+minimum reward/risk ratio applies. An intrabar
+high/low does not imply an entry, and no same-close fill is assumed. Missed
+triggers are skipped. This conservative convention can produce far fewer entries
+than confirmed candidates; it is not an observed live quote sequence.
 
-This simulator remains a **fixed-target comparison model**. The live ledger now
-lets profit run beyond its reference target with TSL; these replay results do
-not validate that exit policy or its profitability.
+Only one position is active per instrument. The comparison uses original stops
+and reference targets. Stop gaps use the worse observed open; favourable target
+gaps are capped at the target. Touching both in one bar is **AMBIGUOUS**. Missing
+observations produce **DATA_GAP**; an unclosed final position is **END_OF_DATA**.
+These unknown outcomes are excluded from resolved performance. After a missing
+observation affects an active position, further entries are blocked for that
+IST session because its exit is unknown.
 
-Only one position is active per input instrument. Stops/targets are the plan's
-original levels. Stop gaps use the worse observed open; favourable target gaps
-are capped at the target. A candle touching both is **AMBIGUOUS**: neither a win
-nor a loss is invented. Missing bars/session observations produce **DATA_GAP**;
-an unclosed final position is **END_OF_DATA**. These outcomes are excluded from
-resolved performance, so always inspect the excluded count alongside any win rate.
-After an active position encounters missing observations, new entries are blocked
-for the rest of that IST session: an unknown exit cannot justify replacing it.
+The cutoff is 15:15 IST for indices and the configured daylight-saving-aware MCX
+close for commodities. Square-off uses a complete final candle's observed close;
+without that observation the exit is unknown. Dated special-session overrides
+also apply, including 8 November 2026 Muhurat; a complete holiday calendar is not
+connected. OHLC does not establish intrabar touch order or exact exit time.
 
-The configured weekday cutoff is 15:15 IST for indices and the MCX daylight-saving
-aware close for commodities. With a complete final candle, square-off uses its
-observed close. Without that observation, the exit is unknown. There is no holiday
-or special-session calendar in this simulator. Intrabar exit times are reported
-at candle close, because OHLC does not reveal the actual touch timestamp.
+**Live uncapped-profit TSL, opposite-pattern exits, intrabar trigger fills and
+execution latency are not simulated.** A fixed-target result cannot validate
+the new live exit policy or reproduce a particular browser incident.
 
-**Multi-timeframe candidate selection, opposite-frame reversal exits, tick-based
-protection, trailing stops and execution latency are not simulated by five-minute
-OHLC.** The live strategy no longer performs one-minute technical analysis.
-This tool therefore cannot reproduce the complete live strategy or validate a
-particular browser incident. It cannot recover unknown tick ordering.
+## Output and archived comparisons
 
-## Reading the output
+Reports include confirmed-candidate and entry counts, trade assumptions, resolved
+and excluded outcomes, wins/losses, resolved-only win rate, price points, R and
+maximum realised drawdown. R uses actual simulated entry-to-original-stop risk.
+Drawdown starts at zero and excludes unrealised moves and unknown outcomes.
+No option premium, position size, account return or rupee profit is inferred.
 
-Each trade reports its signal, observed entry and assumptions, outcome, price
-points and R when resolvable. R uses actual simulated entry-to-original-stop risk.
-An adverse `slippagePointsPerSide` is applied at both fills; `roundTripCostPoints`
-is deducted once from each resolved trade. Defaults are zero and prominently
-reported; zero-cost output must not be presented as executable returns. Supply
-instrument-specific point costs if you have defensible estimates.
-`grossPoints` already includes the assumed slippage; `netPoints` additionally
-deducts the supplied round-trip point cost.
+`slippagePointsPerSide` applies adversely to both fills; `roundTripCostPoints`
+is deducted once per resolved trade. Defaults are zero and are labelled.
+`grossPoints` includes assumed slippage; `netPoints` also deducts point costs.
+Zero-cost results are not executable returns.
 
-The summary includes entered/resolved/excluded counts, wins/losses, resolved-only
-win rate, gross/net points, net R and maximum realised drawdown in points and R.
-Drawdown starts at zero and uses only chronologically closed, resolved outcomes;
-it excludes unrealised drawdown and all unknown outcomes. No position size,
-compounding, option premium, account return or rupee profit is inferred.
+`diagnostics` contains reconstructed per-direction failures and the last 20
+evaluations. These are separate from exported actual observed `assessments`.
+Several blockers can apply to a candidate; a price-qualified pattern is not an
+entered trade. Current diagnostics use candle checks. Archived adaptive/fixed
+diagnostics retain their original indicator and mandatory historical-context
+checks; no missing inputs are invented.
 
-The test injection parameter exists solely to stress the execution engine with
-controlled scenarios. The CLI always uses the current production technical rules.
-Validate on unseen sessions and multiple volatility conditions before proposing
-any live parameter changes. This tool does not modify those parameters.
+`agent:compare` writes four results under identical costs and comparison exits:
+`legacy`, `fixed`, `adaptive` and `revised` (the current candle-only policy).
+Archived index indicator policies require genuine recorded `atmVwapSnapshots`;
+the current quote/context cannot stand in for historical snapshots. Genuine
+snapshots must be ordered by fetch time and visible only after they were fetched.
+Missing snapshots can explain zero archived confirmations without establishing
+a live-feed fault. The [earlier monitoring investigation](nifty-monitoring-investigation.md)
+documents such an archived example.
 
-
-The current technical budget excludes OI/PCR. Index OHLC alone can have at most
-75% coverage without ATM VWAP, but still cannot confirm: matching VWAP is an
-explicit mandatory gate. The legacy baseline has at most 65% coverage without
-ATM/OI and cannot reach 70%. The optional `atmVwapSnapshots` input accepts recorded
-ATM snapshots in fetch-time order; future snapshots are never exposed to an
-earlier evaluation. Missing or stale snapshots do not earn their weight. Zero
-index entries therefore do not establish strategy
-performance. MCX OHLCV includes its own genuine volume and can still supply VWAP.
-Live index analysis obtains ATM context separately; it must not be substituted
-into a past replay.
-
-The default entry evaluator now applies `adaptive-confirmation-v3`. Use
-`npm run agent:compare -- candles.json --output comparison.json` to compare it
-with both the explicit legacy technical-v2 baseline and the preceding fixed-v2
-confirmation policy under identical supplied costs
-and fixed-target comparison exits. This does not validate live open-profit TSL.
-See [the confirmation algorithm](chart-confirmation.md) for its gates and limits.
+The CLI always uses the current entry evaluator; a test-only injection parameter
+allows controlled execution scenarios. These tools do not tune live parameters.
+Use unseen sessions and realistic costs for further evaluation; a sample result
+does not establish improvement or market prediction accuracy.

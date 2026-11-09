@@ -2,17 +2,18 @@ import type { AngelOneCandle } from '../api/angelOne'
 import type { EarlyPrediction, PredictionPlan } from './earlyPrediction'
 import type { PredictionRecord } from './predictionHistory'
 import { candleIntervalMs } from './candleData'
+import { usesCurrentEntryWindow } from './strategyPolicy'
 
 /** A completed technical setup is current only until the following candle closes. */
 export function setupEntryDeadline(plan: PredictionPlan) {
-  return plan.strategyVersion === 'technical-v2' && plan.stage === 'CONFIRMED'
+  return usesCurrentEntryWindow(plan.strategyVersion) && plan.stage === 'CONFIRMED'
     ? Math.min(plan.expiresAt, Date.parse(plan.signalCandleTime) + 2 * candleIntervalMs(plan.interval))
     : plan.expiresAt
 }
 
 /** Forming bars may invalidate an entry, but can never confirm a new one. */
 export function consumedSetupReason(plan: PredictionPlan, candles: AngelOneCandle[], now: number): string | undefined {
-  if (plan.stage !== 'CONFIRMED' || plan.strategyVersion !== 'technical-v2') return
+  if (plan.stage !== 'CONFIRMED' || !usesCurrentEntryWindow(plan.strategyVersion)) return
   if (now >= setupEntryDeadline(plan)) return 'Setup entry window ended at the next candle close; waiting for a fresh completed setup.'
   const after = Date.parse(plan.signalCandleTime) + candleIntervalMs(plan.interval), d = plan.side === 'CALL' ? 1 : -1
   for (let i = candles.length - 1; i >= 0; i--) {

@@ -53,9 +53,9 @@ test('insufficient baselines use explicit conservative fallback; absent regime d
  const reversal=calculate(f,{reversal:true});assert.equal(reversal.minimumScore,65);assert.equal(reversal.minimumLead,20);assert.equal(reversal.minimumAdx,0)
  assert(calculate({...f,candles:[]}).blocked)
 })
-test('a known extreme volatility reading cannot be bypassed while early-session chop warms up',()=>{
+test('a known extreme volatility reading cannot be bypassed while a missing-bar chop window warms up',()=>{
  const early=Date.parse('2026-10-26T10:00:00+05:30'),f=fixture(markets[0],1,'FIFTEEN_MINUTE',early,'ACCEPTED_BREAK',100)
- const candles=f.candles.map((bar,i)=>i>=f.candles.length-3?[bar[0],bar[1],bar[4]+30,bar[4]-30,bar[4],bar[5]]:bar)
+ const candles=f.candles.map((bar,i)=>i>=f.candles.length-3?[bar[0],bar[1],bar[4]+30,bar[4]-30,bar[4],bar[5]]:bar).filter((_,i)=>i!==f.candles.length-3)
  const result=calculate({...f,candles},{now:early})
  assert.equal(result.ready,false);assert.equal(result.chop,undefined);assert(result.relativeAtr>=2.5);assert(result.blocked)
  assert(!validSavedAdaptive({...result,blocked:false},early,false))
@@ -105,15 +105,17 @@ test('VIX cannot relax adaptive floors, and the actual applied thresholds are sa
  let saved;writePredictionHistory({setItem:(_,v)=>saved=v},[createPredictionRecord(review.plan)])
  assert.equal(readPredictionHistory({getItem:()=>saved})[0].confirmationSnapshot.appliedScore,65)
 })
-test('the 1.20 risk boundary and actual quote checks still hold under adaptive thresholds',()=>{
+test('adaptive entry accepts sub-1.20 ratios but still requires a fresh connected quote and unconsumed target',()=>{
  const {diagnoseTradeEntry}=require('../src/analysis/tradeEntry.ts')
  const f=fixture(),frames={FIVE_MINUTE:f.candles,FIFTEEN_MINUTE:regime().candles,ONE_HOUR:fixture(markets[0],1,'ONE_HOUR',now).candles}
  const plan=analyzeMultiTimeframe({instrument:f.instrument,now,candlesByInterval:frames,atmVwap:atm(f.instrument,f.candles.at(-1)[4],now)}).reviews[0].plan
  assert(plan);const quote=plan.target-1.2*(plan.target-plan.stopLoss)/2.2
  const tick=ltp=>({token:'99926000',exchangeType:1,ltp,timestamp:now+1000,receivedAt:now+1000})
  const eligible=diagnoseTradeEntry(plan,tick(plan.entry),true,now+1000,false)
- assert.equal(eligible.state,'ELIGIBLE QUOTE');assert(eligible.checks.some(c=>c.code==='RR_BELOW_MINIMUM'&&c.status==='PASS'))
+ assert.equal(eligible.state,'ELIGIBLE QUOTE');assert(eligible.checks.some(c=>c.code==='TRADE_LEVELS_INVALID'&&c.status==='PASS'))
  const late=diagnoseTradeEntry(plan,tick(quote+.1),true,now+1000,false)
- assert(late.checks.some(c=>c.code==='RR_BELOW_MINIMUM'&&c.status==='FAIL'))
+ assert.equal(late.state,'ELIGIBLE QUOTE')
+ assert.equal(diagnoseTradeEntry(plan,tick(plan.target),true,now+1000,false).state,'ENTRY PAUSED')
+ assert.equal(diagnoseTradeEntry(plan,{...tick(plan.entry),timestamp:now-31000},true,now+1000,false).state,'ENTRY PAUSED')
  assert.equal(diagnoseTradeEntry(plan,tick(plan.entry),false,now+1000,false).state,'ENTRY PAUSED')
 })

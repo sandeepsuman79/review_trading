@@ -4,24 +4,25 @@ import { completedCandles, candleBucketTime } from './candleData'
 import { calculateMovingAverageSeries } from './movingAverages'
 import { calculateSessionVwap } from './vwap'
 import { analyzeIndicatorTrajectory } from './indicatorTrajectory'
+import { instrumentSession } from './tradingSession'
 
-function calculate(candles: AngelOneCandle[], interval: PriceActionInterval, now: number) {
+function calculate(candles: AngelOneCandle[], interval: PriceActionInterval, now: number, instrument?: string) {
   const closed = completedCandles(candles, interval, now)
   return {
     closed,
     averages: calculateMovingAverageSeries(closed.map(candle => candle[4])),
-    trajectory: analyzeIndicatorTrajectory(closed, interval, now),
+    trajectory: analyzeIndicatorTrajectory(closed, interval, now, instrument),
     vwap: calculateSessionVwap(closed),
   }
 }
 
 // The candle book uses immutable snapshots. Weak keys release unused histories automatically.
-const cache = new WeakMap<AngelOneCandle[], { interval: PriceActionInterval; boundary: number; inputs: ReturnType<typeof calculate> }>()
-export function cachedCandleIndicators(candles: AngelOneCandle[], interval: PriceActionInterval, now: number) {
-  const boundary = candleBucketTime(now, interval)
+const cache = new WeakMap<AngelOneCandle[], { interval: PriceActionInterval; boundary: number; instrument?: string; inputs: ReturnType<typeof calculate> }>()
+export function cachedCandleIndicators(candles: AngelOneCandle[], interval: PriceActionInterval, now: number, instrument?: string) {
+  const boundary = candleBucketTime(now, interval, instrumentSession(now, instrument).openMinute)
   const cached = cache.get(candles)
-  if (cached?.interval === interval && cached.boundary === boundary) return cached.inputs
-  const inputs = calculate(candles, interval, now)
-  cache.set(candles, { interval, boundary, inputs })
+  if (cached?.interval === interval && cached.boundary === boundary && cached.instrument === instrument) return cached.inputs
+  const inputs = calculate(candles, interval, now, instrument)
+  cache.set(candles, { interval, boundary, instrument, inputs })
   return inputs
 }

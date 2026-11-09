@@ -1,4 +1,5 @@
 import type { AngelOneInstrument } from '../api/angelOne'
+import { exchangeSession } from './exchangeCalendar'
 
 export const commoditySpecs = [
   { name: 'Natural Gas', root: 'NATURALGAS' }, { name: 'Crude Oil', root: 'CRUDEOIL' },
@@ -8,16 +9,11 @@ export type CommodityContract = { name: string; root: string; exchange: 'MCX'; e
 export const isCommodity = (instrument?: string) => commoditySpecs.some(spec => spec.name === instrument)
 export const tradeDirection = (instrument: string, side: string) => isCommodity(instrument) ? side === 'CALL' ? 'LONG' : side === 'PUT' ? 'SHORT' : side : side
 const months = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC']
-const newYorkHour = new Intl.DateTimeFormat('en-GB', { timeZone: 'America/New_York', hour: '2-digit', hourCycle: 'h23' })
 
-/** Regular bullion/energy MCX hours follow US daylight saving, not index square-off hours. */
+/** Bullion/energy regular hours follow US daylight saving; dated special
+ * sessions override the regular hours (including weekend Muhurat trading). */
 export function mcxSession(now: number) {
-  const date = new Date(now + 330 * 60_000), day = date.getUTCDay()
-  const start = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) - 330 * 60_000
-  const dst = Number(newYorkHour.format(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 12))) === 8
-  const closeMinute = dst ? 23 * 60 + 30 : 23 * 60 + 55
-  return { start, date: date.toISOString().slice(0, 10), open: start + 540 * 60_000, close: start + closeMinute * 60_000,
-    closeLabel: dst ? '23:30' : '23:55', regularSession: day >= 1 && day <= 5 && now >= start + 540 * 60_000 && now < start + closeMinute * 60_000 }
+  return exchangeSession(now, 'MCX')
 }
 
 function expiryTime(value?: string) {

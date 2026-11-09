@@ -6,8 +6,7 @@ import type { TechnicalIndicatorPoint } from './technicalIndicators'
 import type { PriceActionInterval } from './priceAction'
 import { candleIntervalMs } from './candleData'
 import { candleSession } from './vwap'
-import { inTradingEntryWindow } from './tradingSession'
-import { isCommodity } from './commodities'
+import { inTradingEntryWindow, instrumentSession } from './tradingSession'
 
 export type MomentumCandidate = {
   side: 'CALL' | 'PUT'; pattern: TrendCandidate['pattern'] | 'TREND_MOMENTUM_BREAK' | 'EMA_PULLBACK_RECLAIM' | 'OPENING_RANGE_BREAKOUT' | 'LEVEL_BREAK_REVERSAL' | 'THREE_CANDLE_REVERSAL'
@@ -34,13 +33,13 @@ export function findMomentumSetups(candles: AngelOneCandle[], averages: MovingAv
   if (candleRange <= 0 || candleRange > 2 * atr || body < .4 * candleRange || Math.abs(latest[4] - avg.ema20) > 1.8 * atr) return candidates
   const buffer = Math.max(.05 * atr, latest[4] * .00003)
   const sameSession = candles.filter(bar => candleSession(bar[0]) === session)
-  const openMinute = isCommodity(instrument) ? 540 : 555
+  const schedule = instrumentSession(Date.parse(latest[0]), instrument), openMinute = schedule.openMinute
   const opening = sameSession.filter(bar => {
     const time = new Date(Date.parse(bar[0]) + 330 * 60_000), minute = time.getUTCHours() * 60 + time.getUTCMinutes()
     return minute >= openMinute && minute < openMinute + 15
   })
   const openingReady = interval !== 'ONE_HOUR' && opening.length === 900_000 / candleIntervalMs(interval)
-    && new Date(Date.parse(opening[0][0]) + 330 * 60_000).toISOString().slice(11, 16) === (isCommodity(instrument) ? '09:00' : '09:15')
+    && Date.parse(opening[0][0]) === schedule.open
     && opening.every((bar, i) => Date.parse(bar[0]) === Date.parse(opening[0][0]) + i * candleIntervalMs(interval))
     && Date.parse(latest[0]) >= Date.parse(opening[0][0]) + 900_000
   for (const d of [1, -1] as const) {

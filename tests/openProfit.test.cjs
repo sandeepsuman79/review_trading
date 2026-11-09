@@ -49,11 +49,12 @@ test('all seven instruments and both directions run beyond 1.2R, 2R, 3R and 5R a
   }
 })
 
-test('entry retains the 1.20 minimum and cannot chase a consumed reference move', () => {
+test('entry has no minimum ratio and cannot chase a consumed reference move', () => {
   for (const side of ['CALL', 'PUT']) {
     const d = side === 'CALL' ? 1 : -1, candidate = pending('Nifty 50', side)
     assert.equal(observePredictionTick(candidate, 1000, now + 1).status, 'ACTIVE')
-    assert.equal(observePredictionTick(candidate, 1000 + d * .01, now + 1).status, 'EXPIRED')
+    assert.equal(observePredictionTick(candidate, 1000 + d * .01, now + 1).status, 'ACTIVE')
+    assert.equal(observePredictionTick(candidate, 1000 + d * 10, now + 1).status, 'ACTIVE')
     assert.equal(observePredictionTick(candidate, candidate.target, now + 1).status, 'EXPIRED')
   }
 })

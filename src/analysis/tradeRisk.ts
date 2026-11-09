@@ -1,6 +1,5 @@
-/** Shared by setup selection, confirmation, observed entry and offline replay. */
-export const minimumRewardRisk = 1.2
-export function meetsMinimumRewardRisk(ratio: number) {
-  // Price/tick arithmetic can place an exact boundary a few ulps below the floor.
-  return Number.isFinite(ratio) && ratio + 1e-9 >= minimumRewardRisk
+/** Validate finite, positive reward/risk geometry without a minimum ratio.
+ * The reference target must remain ahead of entry and the stop behind it. */
+export function hasValidRewardRisk(ratio: number) {
+  return Number.isFinite(ratio) && ratio > 0
 }

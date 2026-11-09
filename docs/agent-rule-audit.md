@@ -8,12 +8,14 @@ It applies to Nifty 50, Sensex, Bank Nifty, Natural Gas,
 Crude Oil, Silver and Gold. It does not certify the version currently deployed on
 Render or establish prediction accuracy.
 
-Current confirmation is **adaptive-confirmation-v3** (section 25 and
-[adaptive rules](adaptive-confirmation.md)). Price/indicator rules retain
-**structure-confirmation-v2** (section 23 and
-[full rules](chart-confirmation.md)). It supersedes section 22's mandatory
-EMA/RSI/DMI agreement and matching-higher-trend policy. Older dated sections
-describe previous revisions where explicitly identified.
+Current live confirmation is **five-minute-candles-v2**, a single five-minute
+candlestick-only agent (section 29 and [current rules](candlestick-agent.md)).
+It supersedes RSI/VWAP scoring, indicator coverage, ADX/EMA gates and higher-
+timeframe confirmation for new live entries. Sections 1–28 describe historical
+policies and fixes. The adaptive/indicator algorithms remain explicit archived
+comparison policies; they no longer control live confirmation.
+Rolling historical indicator readiness and early-session coverage are clarified
+and updated in section 26.
 
 ## 1. What the agent actually does
 
@@ -964,3 +966,431 @@ check verifies distinct policy labels and identical cost/exit assumptions. These
 checks verify implementation, not improved returns. Actual private browser trade
 history, authenticated feeds, live execution and unseen-session performance were
 not validated. Prepared for manual review; no merge or deployment is included.
+
+## 26. Rolling historical warmup and technical coverage
+
+The 4 November update keeps the minimum 50 completed indicator bars and 70%
+technical coverage. The bar minimum already includes previous sessions; it never
+required 50 bars from the current date. The change repairs daily resets in
+EMA/RSI momentum/trajectory comparisons, indicator HH/HL/LH/LL swings and regime
+chop. These calculations now carry across regular overnight and weekend closures
+and update when a new candle closes. Forming/future bars cannot advance readiness.
+
+Indicator continuity distinguishes a scheduled closure from a missing trading bar.
+Only the regular closing bar followed by the next regular weekday opening bar
+can bridge sessions. Missing opening/closing/intraday bars and an absent weekday
+still interrupt trajectory windows. MCX uses its own closing time, including
+the existing daylight-saving adjustment. A holiday/special-session calendar is
+not connected; an unexplained absent weekday is not guessed to be a holiday.
+
+The timeframe card and warmup details show the actual counts of completed bars,
+today's bars and bars from previous sessions. Coverage uses the resulting rolling
+indicator values and keeps the same fixed weights; it is not the share of today's
+candles collected. Missing VWAP, unavailable swings or insufficient indicator
+history retain their missing budget instead of inheriting an old score.
+
+Current price-pattern acceptance, three consecutive current-session setup bars,
+higher-context freshness, current quote/ATM matching and entry deadlines remain
+separate from indicator warmup. Session VWAP uses only the appropriate session's
+real traded volume. No previous-session VWAP or daily reset becomes a current
+crossing. A technical score alone still cannot create an entry.
+
+New regressions exercise previous-session warmup with only three new five-minute
+bars across all seven markets and both directions, rolling RSI swing coverage,
+weekend/DST boundaries, displayed swings, forming/new candles, unavailable current
+VWAP, missing trading bars and stale regime inputs. No thresholds, weights,
+reward/risk requirements or existing SL/TSL rules are changed by this update.
+
+Validation: 254 targeted tests pass: confirmation/history-readiness (42), technical
+analysis (42), agent (120), commodities (25), history synchronization (22) and
+swing trajectories (3). Production build, lint and diff checks pass; Vite retains
+its existing large-chunk advisory. The supplied Nifty replay also shows EMA50/RSI
+ready with 73 previous-session bars plus three new bars. Its sample missing
+intraday bars remain gaps rather than being synthesized. No live authenticated
+feed or improvement in trading returns was validated. Changes remain local.
+
+## 27. Nifty monitoring investigation and truthful rejection diagnostics
+
+The supplied 1,119-candle Nifty file spans 13 October through 4 November 11:00 IST.
+It contains spot candles rather than observed monitoring decisions, native higher
+views, archived ATM VWAP or live entry quotes. The chronological replay produces
+1,038 eligible evaluations, 11 CALL and 9 PUT price-qualified candidates, zero
+fully confirmed setups and zero entries. Every replay evaluation lacks the
+mandatory archived paired ATM context. This does not establish a live feed outage.
+Historical indicator warmup is available; it is not waiting for 50 bars today.
+
+The main card now preserves rejected accepted-price candidates with their real
+score/risk/VWAP blockers, instead of discarding them and saying no pattern. Each
+direction keeps adaptive checks even without a price candidate; legacy ratio
+rules no longer leak into those diagnostics. Neither repair bypasses entry gates.
+
+Monitoring exports now combine completed candles, observed assessments/transitions,
+saved outcomes and current plan/quote/connection/ATM/entry checks, without broker
+credentials or invented history. Replay outputs include reconstructed failure
+counts and the last 20 assessments, clearly separated from actual live observations.
+The [file-specific report](nifty-monitoring-investigation.md) records examples,
+method, reproducibility and limits. Price acceptance, weights, thresholds,
+coverage, reward/risk and existing SL/TSL rules remain in place.
+
+Validation: 244 targeted tests pass across confirmation/rolling history (44),
+agent (121), analysis (42), commodities (25) and replay (12). Build, lint and diff
+checks pass. The real input completes a chronological zero-entry replay with
+explicit rejection counts; it does not validate live feeds or prove missed fills.
+The existing Vite large-chunk advisory remains. Changes remain local and unpushed.
+
+
+## 28. Single five-minute candlestick agent
+
+The current live entry policy is `five-minute-candles-v1`, persisted as
+`candle-v1`. It supersedes the indicator-confirmation rules described above;
+those implementations remain available for archived comparisons and saved-record
+compatibility. The [current algorithm](candlestick-agent.md) documents exact
+patterns, risk calculations, chart behaviour and limits.
+
+One deterministic agent evaluates completed five-minute OHLC for all three
+indices and supported exact MCX contracts. It recognizes accepted range breaks,
+engulfing reversals, rejection breaks and inside-bar breaks, with mirrored CALL
+and PUT conditions. Overlapping candles without directional acceptance report
+SIDEWAYS. It uses 20 completed price bars across previous/current history and
+three contiguous current-session pattern bars, rather than 50 current-day
+indicator bars. RSI, VWAP, volume, sentiment, higher timeframes, weighted scores
+and technical-coverage thresholds cannot confirm or veto these new setups.
+
+Initial SL sits beyond pattern invalidation. The reference target is a labelled
+2R projection capped by a nearer known opposing swing; the existing 1.20:1 planned
+and actual-entry minimum remains. Fresh matching quotes, session/expiry checks,
+consumed-trigger checks and one-position enforcement still apply. Profit remains
+uncapped. Version-2 protection trails one initial risk behind observed favourable
+quotes, tightens behind confirmed post-entry higher lows/lower highs, reaches
+break-even at +1R and never loosens. A fresh opposite completed pattern can exit
+the held side independently of whether a new opposite entry passes its risk
+check. Stops and session square-off retain priority. Exits require observed fills.
+
+The card displays confirmation, hold, exit or sideways state together with entry,
+reference target, initial SL and current TSL. CE/PE controls now select underlying
+price-action views with no option-candle request or indicator overlays. They do
+not show option-premium prices or force trade direction. New persisted records
+retain candle evidence and protection; older records keep their recorded trailing
+policy. Monitoring separates the current strategy cohort from archived trades.
+The independently displayed market reference does not feed entry decisions.
+
+The supplied 1,187-bar Nifty file produces 75 confirmed candle candidates. The
+fixed-target, immediate-next-open replay enters five positions: one win and four
+losses, approximately -60.74 points before costs. This model does not simulate
+live TSL or opposite-pattern exits and does not establish improved profitability.
+The [replay guide](strategy-replay.md) explains these assumptions and the explicit
+legacy/fixed/adaptive/current comparison outputs. No broker orders are placed.
+
+Validation: 14 candle-engine/UI tests, 121 agent regressions, 12 replay tests,
+45 option/context tests, 19 storage tests and 65 history/protection compatibility
+tests pass (the last group overlaps agent coverage). Production build, lint and
+diff checks pass. Vite retains its existing large-chunk advisory. Live authenticated
+feeds and broker execution were not exercised. Changes remain local and unpushed.
+
+## 29. ChartSchool-based price structure and automatic trend lines
+
+The current policy is `five-minute-candles-v2`, persisted separately as `candle-v2`.
+The user-supplied attachment and ten linked ChartSchool pages were reviewed as
+reference material; they do not reintroduce indicator/volume/sentiment scoring or
+other chart timeframes. [The structure guide](chart-structure-agent.md) maps each
+source to the implemented concepts and documents the numerical adaptations.
+
+Confirmed OHLC pivots now produce HH/HL/LH/LL trend context and clustered price
+zones. A zone changes role after two closes through it. Two well-spaced pivot
+anchors produce a provisional dashed trend line; a third touch validates it.
+The algorithm rejects lines cut by intervening closes rather than forcing a fit.
+Charts draw the validated/provisional lines, nearest zones and confirmed swing
+labels only on the five-minute view, including underlying CE/PE price-action views.
+Other intervals do not receive five-minute geometry.
+
+New routes cover held zone retests, pullbacks in a structured trend, double-top/
+bottom neckline acceptance, and trend-line breaks with a separate swing-level
+break. A slope change alone cannot confirm reversal. Pattern context is known
+before the two accepting bars; no future/forming pivot supplies evidence for its
+own break. Missing trading observations reset geometry. Fully observed previous
+sessions can establish an opening range gap; current observations track partial
+or complete fills without guessing exhaustion or assuming every gap must fill.
+Opposing zones/swings and applicable unfilled gap edges cap reference targets.
+The existing 1.20 reward/risk, observed quote requirements, original protection
+and uncapped-profit rules remain. Saved candle-v1/indicator records retain their
+identity and are not relabelled; candle-v2 evidence is versioned and validated.
+
+The same 1,187-bar Nifty sample produces 70 confirmed candidates and six entries
+in the fixed-target comparison: three wins, three losses, +33.87 underlying
+points, about +0.512R, zero costs. Its realised drawdown is 50.21 points. These six
+model entries do not establish improved prediction or validate live TSL exits.
+No thresholds were optimized against the file. Changes remain local and unpushed.
+
+Validation: 223 targeted tests pass: 26 candle/structure/UI, 185 agent/history/
+storage and 12 replay tests. A final 23-test engine rerun also passes. Tests cover
+mirrored trends, provisional/validated lines, invalid fits, role flips, held/failed
+retests, neckline acceptance, line breaks without swing confirmation, missing and
+forming candles, gap observation/fill states, persisted old/new evidence and chart
+series/annotations. Production build, lint and diff checks pass. The existing Vite
+large-chunk advisory remains. Authenticated live feeds and broker fills were not
+exercised; there is no prediction-accuracy or profitability claim.
+
+## 30. Chart spacing and Nifty swing visibility
+
+Charts now use a 520px desktop / 420px compact plot with a matching vertical
+scrollbar, positive grid padding and 12% price-domain padding for wick/swing labels.
+The structure summary has separate rows and vertical spacing. Other chart intervals
+explicitly point to five minutes for automatic trend/swing annotations.
+
+The display previously kept only the newest contiguous history tail and its last
+eight pivots. A recent gap could erase annotations on older candles still visible,
+and panning into history could show no labels. Chart-only analysis now retains
+separate uninterrupted sections of a bounded visible historical prefix. Each
+section keeps its own lines/swings, without bridging gaps or consulting later
+candles. This does not alter the agent's entry context, patterns, risk or TSL.
+An observed price advance/decline is labelled separately from confirmed swing trend;
+missing confirmed anchors or rejected line fits get an explicit explanation.
+
+The supplied Nifty monitoring file's latest 60-bar view now yields 12 swing labels
+and two historical trend-line segments. Its newest section has no valid unbroken
+line; that condition is explained rather than inventing one. Regression cases
+exercise all three indices across a recent gap, historical panning without future
+data, smooth moves without pivots, rendered height/scrollbar agreement and label
+headroom. Changes remain local and unpushed.
+
+Validation: all 29 candle/structure/UI tests pass, followed by a final 17-test
+chart/structure rerun. Production build, lint and diff checks pass. Vite retains
+its existing large-chunk advisory. Rendering checks inspect the generated plot
+series/options; an authenticated browser session was not exercised.
+
+
+## 31. Fit visible candles rather than distant overlays
+
+The prior taller plot still fitted all visible indicator/trend-line series and
+trade entry/stop/target values. A distant projection or slow moving average could
+therefore stretch the domain and flatten the candle bodies. The prior 12% domain
+padding and 20px top grid padding added further empty space.
+
+The price axis now fits visible candle highs/lows, plus the current live quote
+when the viewport reaches the latest bar. All observed candle wicks remain intact.
+Overlays and trade levels retain their values and are clipped outside the viewport;
+they do not expand it. Headroom is sized to about 20px per edge, top grid padding
+is zero and bottom is 4px. Tiny/flat ranges retain at least two ticks of span.
+No strike level is forced into a narrow domain; the native axis remains visible
+when the custom strike ladder has no levels. The Fit price button clears manual
+vertical offset. Responsive height changes also synchronize the vertical scrollbar
+so resizing cannot introduce an unintended offset.
+
+Validation: all 29 candle/chart tests and three scale tests pass, including all
+three indices with far-away indicators/targets, complete wick visibility and fresh
+live quotes. Build, lint and diff checks pass, with the existing Vite chunk advisory.
+A local isolated headless Chrome preview of the real plot series/options with
+synthetic data was visually inspected for all three indices. It verifies plot
+layout, not an authenticated dashboard or live feeds. No trade-confirmation,
+SL/TSL, broker-execution or stored-history rules change. Work remains unpushed.
+
+
+## 32. Isolated Sensex wick and reversible price focus
+
+The remaining screenshot compression is caused by a roughly 77,500 Sensex low
+while most candles trade near 79,000–79,500. The candle-only full-wick fit in section
+31 must include that extreme, so increasing chart height cannot resolve it alone.
+Index charts now default to a display-only focused range for isolated far wick
+tips, while retaining all candle opens/closes and the current live quote. The
+[structure guide](chart-structure-agent.md) records the explicit eligibility and
+minority rules. Short histories and recurring long wicks keep their full ranges.
+
+Original OHLC stays in chart series, tooltips, storage and all agent/risk inputs.
+Off-screen extremes receive an edge label with their true price and a disclosure.
+Show full wicks restores the entire observed range; Focus candles restores focus.
+No spike is silently deleted or labelled a proven bad broker tick. Commodity
+charts retain their existing full-wick default. This supersedes section 31's
+claim that every index wick tip is always inside the auto-fitted viewport.
+
+Validation: all 34 candle/structure/UI/domain tests pass, plus a final eight-test
+UI/domain rerun with the screenshot-shaped case. Tests preserve actual body moves,
+live quotes, all three indices, recurring/ordinary wicks, short/flat history and
+raw OHLC. A real React/ApexCharts preview in isolated headless Chrome was inspected;
+its actual range button changed the minimum displayed Sensex scale from 78,700
+(focused) to 77,500 (full), with the low explicitly marked in focused mode. These
+are synthetic screenshot-shaped data, not an authenticated broker feed. Build,
+lint and diff checks pass; Vite retains its existing chunk advisory. Work remains
+local and unpushed.
+
+
+## 33. Automatic five-minute trend guides and recent swings
+
+Sensex/Crude Oil could show no trend line when the strict pivot fitter had no two
+usable anchors, rejected a crossing/steep line, or had not yet confirmed a third
+touch. Those swing-validation rules are retained. A separately labelled blue
+dashed recent-price guide now fits the latest up to 12 completed closes (at least
+two) in each uninterrupted chart section. It works across all seven markets,
+including a smooth move with no confirmed swing anchors. It ends at the latest
+completed bar and is not a validated support/resistance line or a trade signal.
+
+Recent H?/L? markers are explicitly tentative, hollow blue markers on the latest
+section's final two completed bars. Observed neighbours can invalidate them;
+two right-hand completed bars still confirm normal HH/HL/LH/LL labels. The guide
+and tentative swings never feed the agent's entries, exits, stop/target or TSL.
+
+Chart geometry now uses the existing stable completed-candle hook and a five-minute
+boundary, driven by the page's existing one-second heartbeat. It advances on the
+next close without a refresh, even before the next forming tick, and responds to
+broker history corrections. The chart names its actual latest source close.
+Forming/future observations, data holes and historical panning retain their guards.
+
+Validation: all 38 candle/chart/domain tests pass, including smooth trends in both
+directions across all seven markets, Sensex/Crude five-minute close transitions,
+forming/future-bar exclusion, swing candidate confirmation/invalidation, corrections
+and data gaps. In an isolated real React/ApexCharts Chrome preview, both Sensex and
+Crude Oil advanced from the 13:55 source close to 14:05 over two simulated clock
+boundaries without a reload; both recent-guide SVG paths changed automatically.
+The preview uses synthetic data, not a live authenticated feed. Build, lint and
+diff checks pass; the existing Vite chunk advisory remains. Changes are local
+and unpushed.
+
+## 34. App-wide monitoring after login
+
+User scope: continue confirming and protecting tracked trades while the app stays
+open on another page or in a hidden tab. Browser-closed monitoring is excluded.
+
+`BackgroundPredictionSession` now owns the single lazy dashboard instance above
+the routes. Navigation hides the dashboard and unmounts expensive visual/reference
+children while its candle book, seven agents, quote handling and persisted trade
+ledger continue. The historical scheduler no longer returns merely because the
+document is hidden; focus, visibility and online events also request due catch-up.
+
+The shared monitoring policy guards host lifetime and asynchronous data/trade
+callbacks against current JWT expiry and regular per-instrument market hours.
+Login anchors the IST session date; old sessions cannot silently restart tomorrow.
+Pre-open sessions arm until 09:00. Index observations end at 15:30, preserving
+the strategy's 15:15 entry/square-off cutoff. MCX retains the existing DST-aware
+23:30/23:55 close. Closing permits only 30 seconds of final observed quote
+settlement; new entries stop at close and token expiry always stops immediately.
+Logout and definitive broker rejection stop monitoring. Stale rejection from an
+older token cannot block a newer login. Failed login responses no longer update
+the saved authentication session. No broker orders or server worker are added.
+Transient quote disconnects now retry with a 60-second backoff cap rather than
+stopping after five retries; online/focus/visibility recovery avoids replacing
+an already connected stream.
+
+Details and operational limits are in [background-monitoring.md](background-monitoring.md).
+Browser/OS suspension can interrupt callbacks; catch-up never invents missing ticks.
+
+Validation: 19 monitoring/session tests, 38 candle/chart tests, 22 sync tests,
+50 history tests, 19 storage/resilience tests and 15 stream tests pass. Build and lint pass, with
+the existing Vite chunk advisory. A real React/Chrome lifecycle preview passed
+16 navigation/authentication/close assertions. A second Chrome preview used the
+actual dashboard, agents and persisted local ledger with simulated broker data
+and hidden visibility: all seven markets confirmed entries, tightened TSL and
+persisted observed protective exits; completed-bar history refreshed off-route,
+and simultaneous online/focus recovery created just one replacement stream.
+No authenticated live broker test was performed. Changes remain local and unpushed.
+
+## 35. Remove minimum entry reward/risk
+
+The user removed the 1.20:1 minimum from setup confirmation and actual entry for
+all tracked indices and commodities. This supersedes earlier audit sections
+that describe a numerical floor. Shared setup selection, candle confirmations,
+saved-candle validation, legacy technical paths, quote/candle entry, monitoring
+diagnostics and offline replay now validate positive finite risk/reward geometry
+without a minimum ratio. A nearby opposing level can cap the reference target
+without blocking an otherwise valid price pattern because its ratio is below 1.20.
+
+The actual ratio remains visible as information. Entry, initial SL, reference
+target, uncapped profit and trailing-stop calculations remain. Quotations at or
+beyond the reference target, invalidated stops, stale/mismatched quotes, expired
+setups/contracts, session cutoffs and duplicate open positions remain ineligible.
+Reward/risk no longer emits an RR_BELOW_MINIMUM rejection or required-floor text.
+Ratios are stored at full precision so small positive values do not round to zero.
+Existing records retain their original levels and protection; no saved records
+are rewritten or deleted. No orders, deployment, commit or push are requested.
+
+Validation: mirrored sub-1.20 candle patterns confirm, persist, reload and enter
+across all seven markets without moving their observed target. Entry diagnostics,
+live/slipped fills and offline next-open replay accept small positive ratios.
+Updated regressions retain consumed-target, invalid-stop, data/quote/session and
+contract guards. Candle/chart, legacy technical confirmation, UI, history,
+open-profit/TSL and replay checks pass after updating former-floor expectations.
+Build, lint and diff checks pass; the existing Vite chunk-size advisory remains.
+This parameter change is not evidence of improved trading performance. Changes
+remain local and unpushed.
+
+## 36. Target exits/extensions, opposite-pattern protection and visible legends
+
+The current candle agent now books a reached target unless a fresh matching
+completed five-minute review supports the held direction and supplies another
+known level at least two ticks beyond quote and target. It selects nearest
+confirmed resistance for CALL or support for PUT, including repeated zones and
+eligible gap edges. Reached zones are not reused via one of their internal pivots.
+Absent/stale/opposite evidence or no farther observed level means TARGET_HIT at
+the observed quote, including gap prices. Target updates never loosen SL/TSL.
+
+Original confirmation levels stay immutable. A validated target-management record
+stores current target, revisions, source time and basis, and critical target/policy
+changes receive write-ahead checkpoints. Cards, chart levels, notifications and
+monitoring exports use the current target. Current candle trades adopt this
+directly; older open indicator-era trades adopt on fresh live five-minute review.
+Closed historical outcomes remain unchanged.
+
+Same-side accepted patterns hold positions. A fresh opposite accepted pattern
+can close at the first completed candle after entry even when the candle began
+before entry, without waiting for a new opposite entry or distant TSL. After an
+observed +1R peak, a 35% giveback guard can exit while the quote is still profitable
+and before a wider TSL is reached. These configured numbers are not a performance
+claim. Session square-off and observed original/protective stops retain priority.
+
+Recovery uses only historically known observations; a dual target/stop candle
+with unknown ordering is ambiguous. A later live review cannot retroactively
+extend an already touched historical target. The normal no-overlap, fresh quote,
+market/contract and removed-minimum-RR rules remain.
+
+The five plotted indicator names/colors now sit outside collapsed details on all
+seven charts, including empty charts and CE/PE price-action views. INDEX overlays
+remain toggleable; CE/PE keeps the price-action-only behavior and marks controls
+inactive. Spot VWAP remains clearly labelled ATM reference rather than fabricated
+index traded volume. The target legend now states exit/extend rather than open profit.
+
+Details, primary-source references and test command are in
+[adaptive-target-exits.md](adaptive-target-exits.md). An isolated real React/Apex
+Chrome preview with synthetic data passed ten checks across Nifty/Sensex/Bank Nifty,
+including visible legends, indicator/CE/PE switches, target extensions on cards
+and eventual target exits. No authenticated live broker execution was tested.
+
+Validation: target/legend tests, existing candle/history/TSL/storage/monitoring/
+replay regressions and the new quote-gap opposite-exit checks pass. A target-only
+change is checkpointed before database commit. Final build, lint and diff checks
+pass; Vite retains its existing chunk-size advisory. Changes remain local and
+unpushed. The 35% giveback default is configurable and has not been shown to
+improve returns by these correctness checks.
+
+## 37. Muhurat special-session monitoring and live data
+
+The previous weekday-only gates incorrectly classified Sunday, 8 November 2026
+as closed. They blocked the app-open background engine, new entries and completed
+candle refresh; cross-session history also rejected the valid Friday-to-Sunday
+transition. Independently, ATM VWAP's server skipped every Sunday and requested
+Friday's option candles.
+
+A shared dated special-session list now supplies per-segment exchange hours to
+browser scheduling and server ATM history. This Muhurat session opens at 14:20
+IST. Underlying index and MCX monitoring ends at 15:30 plus the existing bounded
+30-second quote grace; option VWAP history uses NFO/BFO's 15:40 close. Existing
+index strategy square-off is 15:15 and special-session MCX square-off is 15:30.
+Pre-open/auction candles cannot count as the current pattern's three completed
+continuous-session bars. Prior history can supply warmup, so a qualifying pattern
+can be assessed from 14:35 without waiting for 20/50 new bars today.
+
+The app identifies Muhurat hours in its status/commodity information. Live
+candle buckets, historical-refresh timing, opening ranges, chart gaps, continuity
+and session review use the relevant session. Friday history joins Sunday's actual
+open, Sunday joins Monday, and missing scheduled observations still break the
+chain. Token expiry, rejected auth, logout and login-date restrictions remain.
+
+This is a reviewed special-session override list, not a complete holiday calendar
+or automatic prediction of future Diwali dates/hours. Future exchange circulars
+must be added by date and segment. Full rules and primary-source links are in
+[special-trading-sessions.md](special-trading-sessions.md).
+
+Validation includes mirrored CALL/PUT setup/entry and persisted observed exits
+across all seven markets, session boundaries, history continuity, ATM Sunday
+requests and normal-session regressions. An isolated real React/Chrome preview
+with simulated broker responses passed 11 background checks: pre-open arming,
+Sunday stream activation, seven setups/entries/exits, hidden history refresh and
+special-session shutdown. No authenticated live broker feed was accessed. Changes
+remain local and unpushed.

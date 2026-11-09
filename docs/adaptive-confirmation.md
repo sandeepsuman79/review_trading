@@ -1,6 +1,10 @@
 # Bounded adaptive confirmation
 
-Current policy: `adaptive-confirmation-v3`. The live dashboard uses it for Nifty
+Archived policy since 5 November 2026. The live agent now uses
+[five-minute candlesticks only](candlestick-agent.md). The formulas below remain
+available through the explicit adaptive comparison evaluator.
+
+Archived policy: `adaptive-confirmation-v3`. It previously applied to Nifty
 50, Sensex, Bank Nifty and all four supported MCX futures. Explicit FIXED mode
 retains the preceding structure-confirmation-v2 gates for comparison. V1, v2 and
 older trade records remain readable. No broker-order placement is added.
@@ -42,9 +46,12 @@ Features:
   The current ATR is excluded from the baseline. At least 50 prior valid ATR
   values are required; 50 raw candles alone do not provide that many ATR values.
 - Chop `C`, between zero and one: direction-change frequency across up to twelve
-  completed current-session close changes. Changes smaller than 0.03 ATR are
-  treated as noise. At least six contiguous changes are required; a flat sequence
-  is choppy rather than a fabricated directional trend.
+  completed trading-bar close changes, including previous-session history across
+  normal overnight/weekend closures. Changes smaller than 0.03 ATR are treated
+  as noise. At least six adjacent trading-bar changes are required; a flat sequence
+  is choppy rather than a fabricated directional trend. Missing trading bars still
+  interrupt the window. MCX VWAP crossings are measured within the current session
+  only; the daily VWAP reset is never counted as a crossing.
 - For MCX only, genuine same-session futures-VWAP crossing frequency can raise
   chop. Index spot volume and historical option crossings are never invented.
 
@@ -100,13 +107,20 @@ provider. Score remains an evidence rating, not a probability or expected value.
 
 Technical coverage remains at least 70%. Current price-event, selected-indicator,
 VWAP, volume, freshness, entry-window and one-position requirements remain.
+The 50-bar indicator minimum counts completed history plus today's completed bars,
+not 50 bars from today. EMA/RSI momentum, indicator swings and coverage continue
+across regular session closures and update on each new completed bar. Coverage is
+the percentage of available indicator budgets, not a percentage of today's bars.
+Missing inputs remain unavailable. The current price setup still needs three
+consecutive current-session bars; full ATR/chop warmup and higher views can need
+additional history beyond the minimum 50. VWAP remains session-specific.
 The initial stop already varies with structural invalidation and current ATR,
 rounded outward, and covers at least one ATR. A reversal also covers the opposite
 confirmed swing. Reference targets remain observed levels or explicitly labelled
 projections; they are not extended to force approval after a stop widens.
 
-The user's approved minimum reward/risk stays **1.20:1**, rechecked after contract
-rounding and at the actual observed entry quote. This is underlying/futures point
+The user removed the minimum reward/risk ratio. Finite positive risk and remaining
+reward are rechecked after contract rounding and at the actual observed entry quote. This is underlying/futures point
 risk, not option-premium risk. No option spread/Greek/cost model, account position
 sizing, rupee risk budget or daily monetary-loss limit is fabricated. No claim of
 after-cost option execution is made. Those controls need their own actual data

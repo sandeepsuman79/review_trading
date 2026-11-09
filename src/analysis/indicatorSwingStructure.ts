@@ -2,8 +2,9 @@ import type { AngelOneCandle } from '../api/angelOne'
 import type { MovingAveragePoint } from './movingAverages'
 import type { TechnicalIndicatorPoint } from './technicalIndicators'
 import { analyzeSwingTrajectory } from './swingTrajectory'
+import { adjacentIndicatorBars } from './indicatorHistory'
 
-export function indicatorSwingEvidence(candles: AngelOneCandle[], averages: MovingAveragePoint[], indicators: TechnicalIndicatorPoint[], intervalMs: number) {
+export function indicatorSwingEvidence(candles: AngelOneCandle[], averages: MovingAveragePoint[], indicators: TechnicalIndicatorPoint[], intervalMs: number, instrument?: string) {
   const end = candles.length - 1, atr = indicators[end]?.atr14
   const specs = [
     { name: 'EMA20', values: averages.map(p => p.ema20), noise: (atr ?? 0) * .03 },
@@ -14,6 +15,6 @@ export function indicatorSwingEvidence(candles: AngelOneCandle[], averages: Movi
   return specs.map(spec => {
     const points = candles.slice(-32).map((bar, i) => ({ at: Date.parse(bar[0]), value: spec.values[candles.length - Math.min(32, candles.length) + i] }))
     const previous = spec.values[end - 1], current = spec.values[end]
-    return { name: spec.name, structure: analyzeSwingTrajectory(points, intervalMs, spec.noise), change: previous !== undefined && current !== undefined ? current - previous : undefined }
+    return { name: spec.name, structure: analyzeSwingTrajectory(points, intervalMs, spec.noise, (from, to) => adjacentIndicatorBars(from, to, intervalMs, instrument)), change: previous !== undefined && current !== undefined ? current - previous : undefined }
   })
 }

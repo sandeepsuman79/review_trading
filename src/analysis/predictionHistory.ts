@@ -1,6 +1,9 @@
-import { meetsMinimumRewardRisk } from './tradeRisk'
+import { isCandleStrategy, usesCurrentEntryWindow } from './strategyPolicy'
+import { hasValidRewardRisk } from './tradeRisk'
+import { currentTradeTarget, nextStructureTarget, profitGuardBreached, usesStructureTargets, validTargetManagement, type TargetManagement } from './tradeTargets'
 import { validSavedAdaptive } from './adaptiveConfirmation'
-import { updateTradeProtection, protectiveStopTouched, type TradeProtection, type ProtectionAssessment } from './tradeProtection'
+import { validCandleConfirmation, type CandleSignal } from './candleAgent'
+import { updateTradeProtection, protectiveStopTouched, matchingProtectionAssessment, type TradeProtection, type ProtectionAssessment } from './tradeProtection'
 import type { AngelOneCandle, AngelOneStreamTick } from '../api/angelOne'
 import type { PredictionPlan } from './earlyPrediction'
 import { candleIntervalMs, completedCandles, tickTimestamp } from './candleData'
@@ -26,6 +29,8 @@ export type PredictionRecord = PredictionPlan & {
   latestPriceAt?: number
   latestPriceSource?: 'LIVE' | 'CANDLE'
   protection?: TradeProtection
+  targetManagement?: TargetManagement
+  targetPolicy?: 'STRUCTURE_TARGETS_V1'
   reversalInterval?: PriceActionInterval
   earlyExitSource?: 'MANUAL' | 'AGENT_REVERSAL' | 'AGENT_PROTECTION' | 'SESSION_SQUARE_OFF'
   earlyExitAcknowledgedAt?: number
@@ -66,7 +71,7 @@ export function registerConfirmedPrediction(records: PredictionRecord[], plan: P
     || record.entryAt !== undefined && record.instrument === plan.instrument && record.contract?.token === plan.contract?.token && record.interval === plan.interval && record.side === plan.side && record.signalCandleTime === plan.signalCandleTime)) return current
   const existing = current.find(record => record.id === plan.id)
   if (existing) {
-    if (existing.status !== 'PENDING' || !['combined-v1', 'technical-v2'].includes(plan.strategyVersion) || now >= existing.expiresAt) return current
+    if (existing.status !== 'PENDING' || !['combined-v1', 'technical-v2', 'candle-v1', 'candle-v2'].includes(plan.strategyVersion) || now >= existing.expiresAt) return current
     return current.map(record => record.id === plan.id ? { ...record, ...plan, generatedAt: record.generatedAt, expiresAt: Math.min(record.expiresAt, plan.expiresAt), outcomeNote: 'Current chart levels and market evidence revalidated; awaiting observed entry.' } : record)
   }
   const generatedAt = current.reduce((time, record) => record.instrument === plan.instrument && record.exitAt !== undefined ? Math.max(time, record.exitAt) : time, Math.max(now, plan.generatedAt))
@@ -84,7 +89,7 @@ const round = (value: number) => Math.round(value * 100) / 100
 const recordCutoff = (record: PredictionRecord) => Math.min(squareOffTime(record.entryAt ?? record.generatedAt, record.instrument), record.contract?.expiresAt ?? Infinity)
 
 export function createPredictionRecord(plan: PredictionPlan): PredictionRecord {
-  return { ...plan, expiresAt: setupEntryDeadline(plan), status: 'PENDING', observedThrough: plan.generatedAt, outcomeNote: plan.strategyVersion === 'technical-v2' ? 'Waiting for a fresh observed entry before the next candle close; an already-ended setup cannot enter.' : 'Waiting for entry; expires after three timeframe intervals.' }
+  return { ...plan, expiresAt: setupEntryDeadline(plan), status: 'PENDING', observedThrough: plan.generatedAt, outcomeNote: usesCurrentEntryWindow(plan.strategyVersion) ? 'Waiting for a fresh observed entry before the next candle close; an already-ended setup cannot enter.' : 'Waiting for entry; expires after three timeframe intervals.' }
 }
 
 export function readPredictionHistory(storage: Pick<Storage, 'getItem'>): PredictionRecord[] {
@@ -103,7 +108,9 @@ function validRecord(value: unknown): value is PredictionRecord {
   if (!value || typeof value !== 'object') return false
   const record = value as PredictionRecord
   const d = record.side === 'CALL' ? 1 : -1
-  return typeof record.id === 'string' && record.id.length > 0 && ['early-v1', 'combined-v1', 'technical-v2'].includes(record.strategyVersion)
+  return typeof record.id === 'string' && record.id.length > 0 && ['early-v1', 'combined-v1', 'technical-v2', 'candle-v1', 'candle-v2'].includes(record.strategyVersion)
+    && (!isCandleStrategy(record.strategyVersion) || record.stage === 'CONFIRMED' && validCandleConfirmation(record.candleConfirmation, record))
+    && (record.candleConfirmation === undefined || isCandleStrategy(record.strategyVersion))
     && ['Nifty 50', 'Sensex', 'Bank Nifty', ...commoditySpecs.map(item => item.name)].includes(record.instrument)
     && (isCommodity(record.instrument) ? validCommodityContract(record.contract, record.instrument) && record.generatedAt < record.contract.expiresAt : record.contract === undefined)
     && (candleIntervals as readonly string[]).includes(record.interval)
@@ -122,7 +129,8 @@ function validRecord(value: unknown): value is PredictionRecord {
     && (record.status !== 'ACTIVE' || (record.entryPrice !== undefined && record.entryAt !== undefined))
     && (record.latestPriceSource === undefined || ['LIVE', 'CANDLE'].includes(record.latestPriceSource))
     && (record.entrySource === undefined || ['LIVE', 'CANDLE'].includes(record.entrySource))
-    && validTradeProtection(record)
+    && validTradeProtection(record) && validTargetManagement(record)
+    && (record.targetPolicy === undefined || record.targetPolicy === 'STRUCTURE_TARGETS_V1')
     && (record.confirmationSnapshot === undefined || record.confirmationSnapshot !== null && ['chart-confirmation-v1', 'structure-confirmation-v2', 'adaptive-confirmation-v3'].includes(record.confirmationSnapshot.policy)
       && record.confirmationSnapshot.passed === true && record.confirmationSnapshot.side === record.side && record.confirmationSnapshot.asOf === record.signalCandleTime
       && record.confirmationSnapshot.vwap?.passed === true && ['ATM_OPTIONS', 'CONTRACT'].includes(record.confirmationSnapshot.vwap.source) && Number.isFinite(record.confirmationSnapshot.vwap.observedAt)
@@ -152,8 +160,9 @@ function validRecord(value: unknown): value is PredictionRecord {
 
 function validTradeProtection(record: PredictionRecord) {
   const p = record.protection, d = record.side === 'CALL' ? 1 : -1
-  return p === undefined || p !== null && p.version === 1 && typeof p.armed === 'boolean'
-    && [p.peakPrice, p.peakAt, p.stop, p.atr, p.risk].every(Number.isFinite) && p.atr > 0 && p.risk > 0 && p.stop > 0 && record.entryPrice !== undefined && record.entryAt !== undefined
+  return p === undefined || p !== null && [1, 2].includes(p.version) && typeof p.armed === 'boolean'
+    && (p.version === 1 ? Number.isFinite(p.atr) && p.atr! > 0 : isCandleStrategy(record.strategyVersion) && p.basis === 'CANDLE_STRUCTURE' && p.atr === undefined)
+    && [p.peakPrice, p.peakAt, p.stop, p.risk].every(Number.isFinite) && p.risk > 0 && p.stop > 0 && record.entryPrice !== undefined && record.entryAt !== undefined
     && p.peakAt >= record.entryAt && (p.peakPrice - record.entryPrice) * d >= 0 && (p.stop - record.stopLoss) * d >= 0 && (p.peakPrice - p.stop) * d > 0
 }
 
@@ -199,17 +208,30 @@ export function observePredictionTick(record: PredictionRecord, price: number, t
     if (!allowEntry) return { ...next, outcomeNote: 'Entry paused while current chart and market evidence is checked.' }
     if ((price - record.entry) * d < 0) return next
     const rr = ((record.target - price) * d) / ((price - record.stopLoss) * d)
-    if (!meetsMinimumRewardRisk(rr)) return { ...next, status: 'EXPIRED', outcomeNote: 'Entry quote passed the trigger with insufficient reward to risk; no simulated entry.' }
+    if (!hasValidRewardRisk(rr)) return { ...next, status: 'EXPIRED', outcomeNote: 'Entry quote has invalid risk or remaining reference reward; no simulated entry.' }
     next = { ...next, status: 'ACTIVE', entryPrice: price, entryAt: time, entrySource: 'LIVE', outcomeNote: 'Entry observed in live instrument quotes.' }
   }
+  // Adopt the requested policy for a still-open older position only when the
+  // live dashboard supplies a fresh matching five-minute review. Never rewrite
+  // a terminal record or use absent/stale historical context to migrate it.
+  if (!usesStructureTargets(next) && protectionAssessment?.interval === 'FIVE_MINUTE' && protectionAssessment.targetEvidence?.structure.asOf === protectionAssessment.asOf
+    && matchingProtectionAssessment(next, protectionAssessment, time)) next = { ...next, targetPolicy: 'STRUCTURE_TARGETS_V1' }
   if (time >= recordCutoff(next)) {
     if (tradingSession(time).date !== tradingSession(next.entryAt!).date) return { ...next, status: 'UNVERIFIED', outcomeNote: `No same-session square-off quote was observed. An overnight price cannot verify the ${squareOffLabel(record.instrument, next.entryAt!)} IST exit.` }
     return close({ ...next, earlyExitSource: 'SESSION_SQUARE_OFF' }, 'EARLY_EXIT', price, time, `Automatic ${squareOffLabel(record.instrument, next.entryAt!)} IST square-off; exit uses the first observed quote at or after the cutoff, not a backdated fill.`)
   }
   if ((price - record.stopLoss) * d <= 0) return close(next, 'STOP_LOSS_HIT', price, time, 'Stop crossed in live instrument quotes; exit uses the observed quote.')
-  // The planned target is an entry eligibility reference, never a profit-taking cap.
   next = updateTradeProtection(next, price, time, protectionAssessment)
   if (protectiveStopTouched(next, price)) return close({ ...next, earlyExitSource: 'AGENT_PROTECTION' }, 'EARLY_EXIT', price, time, `Automatic trailing stop ${next.protection!.stop.toFixed(2)} crossed; exited at the observed quote, not the stop price. New opposite entry confirmation is not required.`)
+  if (usesStructureTargets(next) && profitGuardBreached(next, price)) return close({ ...next, earlyExitSource: 'AGENT_PROTECTION' }, 'EARLY_EXIT', price, time, 'Profit guard: 35% of the best observed profit was given back after +1R. Exited at the observed quote without waiting for the distant TSL.')
+  const opposite = protectionAssessment?.targetEvidence?.signal
+  if (opposite) next = observeCandleAgentExit(next, opposite, time)
+  if (next.status !== 'ACTIVE') return next
+  if (usesStructureTargets(next) && d * (price - currentTradeTarget(next)) >= 0) {
+    const extended = nextStructureTarget(next, price, time, protectionAssessment)
+    if (extended) return { ...next, targetManagement: extended, outcomeNote: `Target achieved; same-direction completed price action extended target to ${extended.target.toFixed(2)} (${extended.basis}). SL/TSL and profit guard remain active.` }
+    return close(next, 'TARGET_HIT', price, time, 'Target achieved; no fresh same-direction confirmation with a farther observed level. Profit booked at the observed quote.')
+  }
   return next
 }
 
@@ -230,12 +252,12 @@ export function observePredictionCandles(record: PredictionRecord, candles: Ange
       // even when the last saved live quote was inside that bar.
       const overlap = next.status === 'ACTIVE' && time < next.observedThrough && end > next.observedThrough
       const stop = next.protection?.stop ?? next.stopLoss
-      const harmless = overlap && (next.side === 'CALL' ? candle[3] > stop : candle[2] < stop)
+      const harmless = overlap && (next.side === 'CALL' ? candle[3] > stop && (!usesStructureTargets(next) || candle[2] < currentTradeTarget(next)) : candle[2] < stop && (!usesStructureTargets(next) || candle[3] > currentTradeTarget(next)))
       if (harmless) {
         next = updateTradeProtection({ ...next, observedThrough: end, latestPrice: candle[4], latestPriceAt: end, latestPriceSource: 'CANDLE' }, candle[4], end)
         continue
       }
-      if (overlap) return { ...next, outcomeNote: 'Recovering saved trade: a reconnect bar touched the saved stop, but its ordering relative to saved quotes is unknown. Entry and TSL are preserved; waiting for an observed exit quote or complete recovery data.' }
+      if (overlap) return { ...next, outcomeNote: 'Recovering saved trade: a reconnect bar touched the saved stop or target, but its ordering relative to saved quotes is unknown. Entry and TSL are preserved; waiting for an observed exit quote or complete recovery data.' }
       return { ...next, outcomeNote: 'Recovering saved trade: waiting for complete candle history over the disconnected period.' }
     }
     const [, open, high, low, closing] = candle
@@ -257,7 +279,7 @@ export function observePredictionCandles(record: PredictionRecord, candles: Ange
       if (end > next.expiresAt) return { ...next, status: 'AMBIGUOUS', outcomeNote: 'Entry touched in a candle spanning the entry deadline; the exact trigger time is unknown.' }
       const fill = (open - next.entry) * d >= 0 ? open : next.entry
       const rr = ((next.target - fill) * d) / ((fill - next.stopLoss) * d)
-      if (!meetsMinimumRewardRisk(rr)) return { ...next, status: 'EXPIRED', outcomeNote: 'Gap through entry left insufficient reward to risk.' }
+      if (!hasValidRewardRisk(rr)) return { ...next, status: 'EXPIRED', outcomeNote: 'Gap through entry left invalid risk or no remaining reference reward.' }
       next = { ...next, status: 'ACTIVE', entryPrice: fill, entryAt: end, entrySource: 'CANDLE', outcomeNote: 'Entry reached in a completed candle; exact fill time is unknown.' }
       // Seed at the reconstructed entry only; an unobserved candle high/low cannot move TSL.
       next = updateTradeProtection(next, fill, end)
@@ -268,14 +290,19 @@ export function observePredictionCandles(record: PredictionRecord, candles: Ange
     const trail = next.protection?.armed && (next.protection.stop - next.stopLoss) * d > 0 ? next.protection.stop : undefined
     const trailTouched = trail !== undefined && (d === 1 ? low <= trail : high >= trail)
     const stopTouched = d === 1 ? low <= next.stopLoss : high >= next.stopLoss
+    const target = currentTradeTarget(next), targetTouched = usesStructureTargets(next) && (d === 1 ? high >= target : low <= target)
     // An opening gap has a known first quote, unlike the subsequent high/low ordering.
     if ((open - next.stopLoss) * d <= 0) return close(next, 'STOP_LOSS_HIT', open, end, 'Opening gap crossed stop; exit uses candle open. Time is the candle close timestamp.')
     if (trail !== undefined && (open - trail) * d <= 0) return close({ ...next, earlyExitSource: 'AGENT_PROTECTION' }, 'EARLY_EXIT', open, end, 'Opening gap crossed the saved protective stop; exit uses the observed candle open.')
+    if (usesStructureTargets(next) && d * (open - target) >= 0) return close(next, 'TARGET_HIT', open, end, 'Opening gap crossed target; exited at the observed candle open. No historical target extension was inferred.')
+    if (targetTouched && (stopTouched || trailTouched)) return { ...next, status: 'AMBIGUOUS', exitAt: end, outcomeNote: 'Target and stop touched in the same completed candle; price ordering and exit cannot be verified.' }
     if (trailTouched) return close({ ...next, earlyExitSource: 'AGENT_PROTECTION' }, 'EARLY_EXIT', trail!, end, 'Saved protective stop touched in a completed candle; reconstructed level, exact fill time unknown.')
     if (stopTouched) return close(next, 'STOP_LOSS_HIT', next.stopLoss, end, 'Stop touched in completed candle; time is the candle close timestamp.')
+    if (targetTouched) return close(next, 'TARGET_HIT', target, end, 'Target touched in completed candle; reconstructed target fill, exact time unknown. No later chart evidence was used to extend this historical target.')
     // Only the known close may tighten protection for the next bar. High/low order
     // is unknown, so never manufacture a peak or a same-bar trailing exit.
     if (next.entryAt !== end) next = updateTradeProtection(next, closing, end)
+    if (usesStructureTargets(next) && profitGuardBreached(next, closing)) return close({ ...next, earlyExitSource: 'AGENT_PROTECTION' }, 'EARLY_EXIT', closing, end, 'Profit guard breached at the observed completed candle close; no intrabar guard fill was invented.')
   }
   if (next.status === 'PENDING' && now >= next.expiresAt) return { ...next, status: 'EXPIRED', outcomeNote: 'Entry not verified before the three-interval deadline.' }
   return next
@@ -322,6 +349,18 @@ export function observeConfirmedAgentReversal(record: PredictionRecord, plan: Pr
   return exitPredictionEarly({ ...record, reversalCheckedCandle: plan.signalCandleTime, reversalInterval: plan.interval }, now, 'AGENT_REVERSAL', `Agent confirmed an opposite ${tradeDirection(plan.instrument, plan.side)} setup on the completed ${timeframeInfo[plan.interval].label} candle ${plan.signalCandleTime}; exited at the observed matching instrument quote before any replacement trade.`)
 }
 
+/** Exit confirmation is the opposite completed price pattern itself. A new
+ * opposite entry's reward/risk is not a requirement for closing an open trade. */
+export function observeCandleAgentExit(record: PredictionRecord, signal: CandleSignal | undefined, now: number): PredictionRecord {
+  if (!signal || !['five-minute-candles-v1', 'five-minute-candles-v2'].includes(signal.policy) || !canExitPredictionEarly(record, now) || record.entryAt === undefined
+    || signal.instrument !== record.instrument || signal.contractToken !== record.contract?.token || signal.side === record.side) return record
+  const start = Date.parse(signal.asOf)
+  if (!Number.isFinite(start) || start % 300000 !== 0 || (usesStructureTargets(record) ? start + 300000 <= record.entryAt : start < record.entryAt) || now < start + 300000 || now >= start + 600000 || record.latestPriceAt! < start + 300000
+    || now < signal.reviewedAt || now - signal.reviewedAt > 30000) return record
+  return exitPredictionEarly({ ...record, reversalCheckedCandle: signal.asOf, reversalInterval: 'FIVE_MINUTE' }, now, 'AGENT_REVERSAL',
+    `Five-minute ${signal.pattern.toLowerCase().replace(/_/g, ' ')} confirmed ${signal.side}; exited ${record.side} at the observed matching quote.`)
+}
+
 export function predictionHistoryStats(records: PredictionRecord[]) {
   const settled = records.filter(record => predictionSuccessScore(record) !== null)
   const wins = settled.filter(record => record.points! > 0).length
@@ -340,13 +379,13 @@ export function canEnterConfirmedPrediction(record: PredictionRecord, plan: Pred
   return Boolean(plan && (chartIntervals as readonly string[]).includes(plan.interval) && plan.stage === 'CONFIRMED' && plan.id === record.id && plan.strategyVersion === record.strategyVersion
     && plan.instrument === record.instrument && plan.contract?.token === record.contract?.token && plan.contract?.symbol === record.contract?.symbol && plan.interval === record.interval && plan.side === record.side && plan.signalCandleTime === record.signalCandleTime
     && plan.entry === record.entry && plan.stopLoss === record.stopLoss && plan.target === record.target
-    && (record.strategyVersion !== 'technical-v2' || withinEntryWindow(now, record.instrument))
+    && (!usesCurrentEntryWindow(record.strategyVersion) || withinEntryWindow(now, record.instrument))
     && (!record.contract || record.contract.expiresAt > now)
     && now < setupEntryDeadline(record) && now < setupEntryDeadline(plan)
     && now >= checkedAt && now - checkedAt <= 30_000 && now >= signal + duration && now < signal + 2 * duration)
 }
 
-export function syncPredictionRecord(record: PredictionRecord, candles: AngelOneCandle[], tick: AngelOneStreamTick | undefined, now: number, allowEntry = true, entryPlan?: PredictionPlan, reversalPlan?: PredictionPlan | null, protectionAssessment?: ProtectionAssessment): PredictionRecord {
+export function syncPredictionRecord(record: PredictionRecord, candles: AngelOneCandle[], tick: AngelOneStreamTick | undefined, now: number, allowEntry = true, entryPlan?: PredictionPlan, reversalPlan?: PredictionPlan | null, protectionAssessment?: ProtectionAssessment, candleExit?: CandleSignal | null): PredictionRecord {
   if (!isOpenPrediction(record)) return record
   if (record.status === 'PENDING') {
     const reason = consumedSetupReason(record, candles, now)
@@ -360,15 +399,22 @@ export function syncPredictionRecord(record: PredictionRecord, candles: AngelOne
     if (allowEntry) record = { ...record, bullishScore: entryPlan.bullishScore, bearishScore: entryPlan.bearishScore, technicalEvidence: entryPlan.technicalEvidence, newsSummary: entryPlan.newsSummary, newsEvidence: entryPlan.newsEvidence, coverage: entryPlan.coverage, evidenceSummary: entryPlan.evidenceSummary, contextMode: entryPlan.contextMode }
   }
   const continuous = tick && Number.isFinite(time) && time <= now + 1_000 && now - time <= 30_000 && time - record.observedThrough <= 30_000
+  const adoptTargetPolicy = protectionAssessment?.interval === 'FIVE_MINUTE' && protectionAssessment.targetEvidence?.structure.asOf === protectionAssessment.asOf
+    && matchingProtectionAssessment(record, protectionAssessment, time)
+  const liveReversal = protectionAssessment?.targetEvidence?.signal ?? candleExit ?? undefined
+  const reversalQuote = tick?.ltp === undefined ? record : { ...record, ...(adoptTargetPolicy ? { targetPolicy: 'STRUCTURE_TARGETS_V1' as const } : {}), latestPrice: tick.ltp, latestPriceAt: time, latestPriceSource: 'LIVE' as const }
+  const confirmedReversalExit = liveReversal && record.status === 'ACTIVE' && observeCandleAgentExit(reversalQuote, liveReversal, time).status === 'EARLY_EXIT'
   // A fresh observed breach of an already saved stop is an actionable local exit,
   // even after a quote gap. An overlapping candle cannot erase that observation.
   // Keep the original quote fill and timestamp; never backdate to an assumed touch.
   const freshStopExit = record.status === 'ACTIVE' && tick?.ltp !== undefined && Number.isFinite(tick.ltp) && tick.ltp > 0
     && Number.isFinite(time) && time > record.observedThrough && time <= now + 1_000 && now - time <= 30_000
     && tradingSession(time).date === tradingSession(record.entryAt!).date
-    && ((tick.ltp - record.stopLoss) * direction(record) <= 0 || protectiveStopTouched(record, tick.ltp))
+    && ((tick.ltp - record.stopLoss) * direction(record) <= 0 || protectiveStopTouched(record, tick.ltp)
+      || (usesStructureTargets(record) || adoptTargetPolicy) && profitGuardBreached(record, tick.ltp) || confirmedReversalExit)
   if (freshStopExit) {
-    const exited = observePredictionTick(record, tick!.ltp!, time, allowEntry, protectionAssessment)
+    let exited = observePredictionTick(record, tick!.ltp!, time, allowEntry, protectionAssessment)
+    if (exited.status === 'ACTIVE' && confirmedReversalExit) exited = observeCandleAgentExit(exited, liveReversal, time)
     return continuous ? exited : { ...exited, outcomeNote: `${exited.outcomeNote} Quote monitoring resumed after a gap; no earlier intrabar fill was assumed.` }
   }
   // Replay gaps before a reconnect quote; a missed stop must not turn into a later win.
@@ -381,7 +427,8 @@ export function syncPredictionRecord(record: PredictionRecord, candles: AngelOne
   if (next.status === 'ACTIVE' && now >= recordCutoff(next)) return tradingSession(now).date !== tradingSession(next.entryAt!).date
     ? { ...next, status: 'UNVERIFIED', outcomeNote: `No same-session square-off quote was observed. The ${squareOffLabel(next.instrument, next.entryAt!)} IST exit and its P/L cannot be verified.` }
     : { ...next, outcomeNote: `${squareOffLabel(next.instrument, next.entryAt!)} IST square-off is due. Waiting for an observed same-session exit quote; no exit price has been invented.` }
-  next = reversalPlan === undefined ? observePredictionReversal(next, candles, now) : observeConfirmedAgentReversal(next, reversalPlan ?? undefined, now)
+  next = candleExit !== undefined ? observeCandleAgentExit(next, candleExit ?? undefined, now)
+    : isCandleStrategy(record.strategyVersion) ? next : reversalPlan === undefined ? observePredictionReversal(next, candles, now) : observeConfirmedAgentReversal(next, reversalPlan ?? undefined, now)
   if (next.status === 'PENDING' && now >= next.expiresAt) next = { ...next, status: 'EXPIRED', outcomeNote: 'Entry not observed before the three-interval deadline.' }
   return next
 }

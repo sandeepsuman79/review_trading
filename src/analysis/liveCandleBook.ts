@@ -14,7 +14,7 @@ export class LiveCandleBook {
   private observedAt = new Map<string, Map<number, number>>()
   private dirty = new Set<string>()
 
-  constructor(private load: (token: string, interval: PriceActionInterval) => AngelOneCandle[], private sessionOpenMinute: (token: string) => number = () => 555, private liveVolume: (tick: AngelOneStreamTick) => boolean = () => false) {}
+  constructor(private load: (token: string, interval: PriceActionInterval) => AngelOneCandle[], private sessionOpenMinute: (token: string, time: number) => number = () => 555, private liveVolume: (tick: AngelOneStreamTick) => boolean = () => false) {}
 
   get(token: string, interval: PriceActionInterval) {
     const key = `${token}:${interval}`
@@ -31,7 +31,7 @@ export class LiveCandleBook {
     for (const interval of intervals) {
       const key = `${tick.token}:${interval}`
       const candles = this.get(tick.token, interval)
-      const openMinute = this.sessionOpenMinute(tick.token), bucket = candleBucketTime(time, interval, openMinute)
+      const openMinute = this.sessionOpenMinute(tick.token, time), bucket = candleBucketTime(time, interval, openMinute)
       // Count only observed within-bar deltas; the first quote/reconnect cannot invent earlier volume.
       const volumeDelta = this.liveVolume(tick) && previous && Number.isFinite(tick.volume) && Number.isFinite(previous.volume) && tick.volume! >= previous.volume!
         && time - tickTimestamp(previous) <= 30_000 && candleSession(new Date(time).toISOString()) === candleSession(new Date(tickTimestamp(previous)).toISOString())
@@ -54,7 +54,7 @@ export class LiveCandleBook {
     for (const candle of normalizeCandles(incoming)) {
       const time = Date.parse(candle[0])
       const observed = byTime.get(time)
-      const receivedAt = this.observedAt.get(key)?.get(candleBucketTime(time, interval, this.sessionOpenMinute(token)))
+      const receivedAt = this.observedAt.get(key)?.get(candleBucketTime(time, interval, this.sessionOpenMinute(token, time)))
       // A response requested before these ticks cannot replace their high, low or latest close.
       byTime.set(time, observed && receivedAt !== undefined && receivedAt >= requestedAt
         ? [candle[0], candle[1], Math.max(candle[2], observed[2]), Math.min(candle[3], observed[3]), observed[4], candle[5]]

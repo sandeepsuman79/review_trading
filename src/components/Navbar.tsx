@@ -1,3 +1,4 @@
+import { monitoringStartedKey } from '../analysis/monitoringSession'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { logoutFromAngelOne } from '../api/angelOne'
@@ -32,6 +33,7 @@ export default function Navbar() {
       localStorage.removeItem('angelone_refresh_token')
       localStorage.removeItem('angelone_feed_token')
       localStorage.removeItem('angelone_clientcode')
+      localStorage.removeItem(monitoringStartedKey)
       window.dispatchEvent(new Event('angelone-auth-changed'))
       navigate('/angelone/login')
     } catch (error) {

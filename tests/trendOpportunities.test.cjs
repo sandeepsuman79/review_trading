@@ -110,7 +110,7 @@ for(const kind of ['continuation','impulse'])for(const date of ['2026-10-14','20
    assert.equal(evidence.canConfirm,true,label)
    assert.equal(prediction.plan?.stage,'CONFIRMED',`${label}; ${prediction.reason}`)
    assert.equal(prediction.side,d===1?'CALL':'PUT',label)
-   assert(prediction.plan.riskReward>=1.2);assert(evidence.coverage>=70)
+   assert(prediction.plan.riskReward>0);assert(evidence.coverage>=70)
    assert.equal(evidence.layers.find(layer=>layer.key==='rsiVwap').weight,50)
    assert.equal(evidence.requiredScore,0);assert.equal(evidence.requiredGap,0)
    if(interval==='ONE_HOUR'&&!input.root){
@@ -121,7 +121,7 @@ for(const kind of ['continuation','impulse'])for(const date of ['2026-10-14','20
  })
 }
 
-test('a forming move, stale assessment, absent ATM data or nearby target cannot force full confirmation',()=>{
+test('freshness and ATM checks remain while a nearby positive target no longer applies a ratio floor',()=>{
  const input=scenario(markets[0],1),base=assess(input,1)
  const forming=[new Date(input.now).toISOString(),25000,27000,24000,26000,1000]
  assert.deepEqual(analyzePriceAction([...input.candles,forming],input.interval,input.now,input.instrument),base.analysis)
@@ -131,9 +131,9 @@ test('a forming move, stale assessment, absent ATM data or nearby target cannot 
  const target=selected.entry+.1*base.analysis.atr14
  const capped={...base.analysis,target,detectedSetups:base.analysis.detectedSetups.map(item=>({...item,target}))}
  const rejected=analyzeTradingEvidence({...input,analysis:capped,atmVwap:atmVwapFixture(input.instrument,base.analysis.currentPrice,input.now,1)})
- assert.equal(rejected.canConfirm,false)
- assert(rejected.decisions.find(item=>item.side==='CALL').reasons.includes('RR_BELOW_MINIMUM'))
- assert.equal(tradingEvidenceRules.minimumCoverage,70);assert.equal(tradingEvidenceRules.minimumRewardRisk,1.2)
+ assert.equal(rejected.canConfirm,true,rejected.reason)
+ assert(!rejected.decisions.find(item=>item.side==='CALL').reasons.includes('RR_BELOW_MINIMUM'))
+ assert.equal(tradingEvidenceRules.minimumCoverage,70);assert.equal(tradingEvidenceRules.minimumRewardRisk,undefined)
 })
 
 test('newly detected opposite setups use the existing fresh post-entry reversal exit checks',()=>{

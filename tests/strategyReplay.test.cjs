@@ -1,12 +1,27 @@
 const { test } = require('node:test'), assert = require('node:assert/strict')
 const fs = require('node:fs'), ts = require('typescript')
 require.extensions['.ts'] = (module, filename) => module._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true } }).outputText, filename)
-const { replayStrategy, evaluateReplaySetup, replayLimits } = require('../src/analysis/strategyReplay.ts')
+const { replayStrategy, evaluateReplaySetup, evaluateReplayAdaptiveSetup, replayLimits } = require('../src/analysis/strategyReplay.ts')
 const { mcxSession } = require('../src/analysis/commodities.ts')
 const duration = 300000, start = Date.parse('2026-10-16T09:15:00+05:30')
 const row = (time, open = 1000, high = 1002, low = 998, close = 1000) => [new Date(time).toISOString(), open, high, low, close, 0]
 const history = (at = start, count = 50) => Array.from({ length: count }, (_, i) => row(at + i * duration))
 const contract = (name = 'Gold', root = 'GOLD') => ({ name, root, token: '123456', symbol: `${root}20NOV26FUT`, exchange: 'MCX', exchangeType: 5, expiry: '2026-11-20', expiresAt: mcxSession(Date.parse('2026-11-20T12:00:00+05:30')).close, tickSize: 1 })
+test('zero-entry replay explains reconstructed blockers and never reuses a current ATM snapshot as historical data',()=>{
+ const candles=history(start,72),current={atmVwap:require('./helpers/atmVwap.cjs')('Nifty 50',1000,start+72*duration)}
+ const result=replayStrategy({instrument:'Nifty 50',candles,current},evaluateReplayAdaptiveSetup)
+ assert.equal(result.summary.entered,0);assert.equal(result.diagnostics.source,'RECONSTRUCTED_CANDLES')
+ assert.equal(result.diagnostics.missingRequiredInputs.length,1)
+ assert.equal(result.diagnostics.recentAssessments.length,20)
+ for(const side of['CALL','PUT']){
+  const row=result.diagnostics.bySide[side]
+  assert.equal(row.evaluations,result.data.evaluations);assert.equal(row.confirmed,0)
+  assert.equal(row.failures.VWAP_CONFIRMATION,result.data.evaluations)
+  assert(row.failures.NO_CONFIRMED_PATTERN>0)
+ }
+ assert.equal(result.diagnostics.recentAssessments.at(-1).candle,candles.at(-2)[0],'the final candle closes at the entry cutoff and cannot create a new entry')
+ assert(result.diagnostics.recentAssessments.every(a=>Date.parse(a.evaluatedAt)===Date.parse(a.candle)+duration))
+})
 function evaluator(side = 'CALL') {
   return ({ instrument, contract, candles, now }) => candles.length === 50 ? { id: `${instrument}:${side}:${now}`, instrument, contract, interval: 'FIVE_MINUTE', side, stage: 'CONFIRMED', strategyVersion: 'technical-v2', signalCandleTime: candles.at(-1)[0], generatedAt: now, expiresAt: now + duration, entry: 1000, stopLoss: side === 'CALL' ? 990 : 1010, target: side === 'CALL' ? 1020 : 980 } : undefined
 }
@@ -38,10 +53,24 @@ test('gap-to-target and shock-invalidated opens cannot enter an already consumed
   for (const side of ['CALL', 'PUT']) for (const open of [side === 'CALL' ? 1021 : 979, side === 'CALL' ? 989 : 1011]) {
     const result = replayStrategy({ instrument: 'Nifty 50', candles: [...history(), row(start + 50 * duration, open, open + 1, open - 1, open)] }, evaluator(side))
     assert.equal(result.summary.entered, 0)
-    assert(Object.keys(result.rejected).some(key => /RR|TRIGGER/.test(key)))
+    assert(Object.keys(result.rejected).some(key => /LEVELS|TRIGGER/.test(key)))
   }
   const missed = replayStrategy({ instrument: 'Nifty 50', candles: [...history(), row(start + 50 * duration, 999, 1025, 998, 1020)] }, evaluator())
   assert.equal(missed.summary.entered, 0, 'intrabar trigger fill must not be inferred from high/low')
+})
+
+test('replay accepts sub-1.20 planned and slipped-entry ratios without stretching targets', () => {
+  for (const side of ['CALL', 'PUT']) {
+    const d = side === 'CALL' ? 1 : -1, open = 1000 + d * 4
+    const base = evaluator(side)
+    const evaluate = input => { const plan = base(input); return plan ? { ...plan, target: 1000 + d * 5 } : undefined }
+    const candles = [...history(), row(start + 50 * duration, open, open + .2, open - .2, open)]
+    const result = replayStrategy({ instrument: 'Nifty 50', candles }, evaluate)
+    assert.equal(result.summary.entered, 1)
+    assert.equal(result.trades[0].entry, open)
+    assert.equal(result.trades[0].target, 1000 + d * 5)
+    assert.match(result.assumptions.entry, /no minimum reward\/risk ratio/)
+  }
 })
 
 test('dual-touch OHLC is excluded, while stop gaps use the observed worse open symmetrically', () => {
@@ -97,7 +126,7 @@ test('index cutoff is 15:15; MCX retains its own later session and squares off a
   }
 })
 
-test('production replay requires higher warmup, confirms both MCX directions and requires archived ATM for indices', () => {
+test('archived adaptive replay requires higher warmup, confirms both MCX directions and requires archived ATM for indices', () => {
   const { markets, fixture } = require('./helpers/confirmation.cjs')
   const at = Date.parse('2026-10-26T14:00:00+05:30')
   for (const market of markets) for (const d of [1, -1]) {
@@ -106,12 +135,12 @@ test('production replay requires higher warmup, confirms both MCX directions and
     // lower-only impulse cannot pass the revised policy's higher-trend warmup.
     const { candles } = fixture(market, d, 'FIVE_MINUTE', at, 'ACCEPTED_BREAK', 180)
     const matched = root ? { ...contract(instrument, root), tickSize: root === 'NATURALGAS' ? .1 : 1 } : undefined
-    assert.equal(evaluateReplaySetup({ instrument, contract: matched, candles: candles.slice(-52), now: at }), undefined)
-    const plan = evaluateReplaySetup({ instrument, contract: matched, candles, now: at })
+    assert.equal(evaluateReplayAdaptiveSetup({ instrument, contract: matched, candles: candles.slice(-52), now: at }), undefined)
+    const plan = evaluateReplayAdaptiveSetup({ instrument, contract: matched, candles, now: at })
     if (!root) {
       assert.equal(plan, undefined, `${instrument}: missing ATM VWAP cannot pass the explicit VWAP confirmation gate`)
       const atmVwap = require('./helpers/atmVwap.cjs')(instrument, candles.at(-1)[4], at, d)
-      assert.equal(evaluateReplaySetup({ instrument, candles, now: at, atmVwap })?.stage, 'CONFIRMED', `${instrument}: archived ATM and complete higher history permit confirmation`)
+      assert.equal(evaluateReplayAdaptiveSetup({ instrument, candles, now: at, atmVwap })?.stage, 'CONFIRMED', `${instrument}: archived ATM and complete higher history permit confirmation`)
       continue
     }
     assert.equal(plan?.stage, 'CONFIRMED', instrument)
@@ -141,13 +170,13 @@ test('offline CLI emits honest JSON and only creates an explicitly chosen new re
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'strategy-replay-'))
   try {
     const source = path.join(folder, 'candles.json'), output = path.join(folder, 'report.json')
-    fs.writeFileSync(source, JSON.stringify({ instrument: 'Nifty 50', candles: history(start, 49) }))
+    fs.writeFileSync(source, JSON.stringify({ instrument: 'Nifty 50', candles: history(start, 19) }))
     const cli = path.resolve(__dirname, '../scripts/replay-agent.cjs')
     const run = spawnSync(process.execPath, [cli, source], { encoding: 'utf8' })
     assert.equal(run.status, 0, run.stderr)
     const report = JSON.parse(run.stdout)
     assert.equal(report.summary.resolved, 0); assert.equal(report.data.evaluations, 0)
-    assert(report.assumptions.missingContext.includes('Historical India VIX'))
+    assert.equal(report.data.minimumBars,20);assert.deepEqual(report.assumptions.missingContext,[])
     const save = spawnSync(process.execPath, [cli, source, '--output', output], { encoding: 'utf8' })
     assert.equal(save.status, 0, save.stderr); assert.equal(save.stdout, '')
     assert.equal(JSON.parse(fs.readFileSync(output, 'utf8')).version, 'offline-candle-replay-v1')
@@ -171,7 +200,8 @@ test('archived option context is visible only from its recorded fetch time, neve
 test('legacy and revised evaluators remain distinct and comparison never changes the live exit policy', () => {
  const {evaluateReplayLegacySetup}=require('../src/analysis/strategyReplay.ts')
  const input={instrument:'Nifty 50',candles:history()}
- assert.match(replayStrategy(input).assumptions.strategy,/adaptive-confirmation-v3/)
+ assert.match(replayStrategy(input).assumptions.strategy,/five-minute-candles-v2/)
+ assert.match(replayStrategy(input,evaluateReplayAdaptiveSetup).assumptions.strategy,/adaptive-confirmation-v3/)
  assert.match(replayStrategy(input,evaluateReplayLegacySetup).assumptions.strategy,/Legacy technical-v2/)
  assert.match(replayStrategy(input).assumptions.exitPolicy,/Fixed-target comparison/)
 })

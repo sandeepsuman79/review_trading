@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { optionIndices } from './optionPremiums.js'
-const minute = 60_000, day = 86_400_000
+import { latestIndexSession } from './indexSession.js'
+const minute = 60_000
 const date = time => new Date(time + 330 * minute).toISOString().slice(0, 10)
 const formatted = time => new Date(time + 330 * minute).toISOString().slice(0, 16).replace('T', ' ')
 export function candleVwap(raw, start, end) {
@@ -21,10 +22,8 @@ export function createAtmVwapService({ loadOptions, history, quotes, now = Date.
     const time = now()
     // Keep the most recent session visible before open, after close and on weekends.
     // Signal eligibility remains a separate client freshness check.
-    let start = Math.floor((time + 330 * minute) / day) * day - 330 * minute + 555 * minute
-    if (time < start + minute) start -= day
-    while ([0, 6].includes(new Date(start + 330 * minute).getUTCDay())) start -= day
-    const end = Math.min(Math.floor(time / minute) * minute, start + 375 * minute)
+    const session = latestIndexSession(time, optionIndices[input.index].exchange)
+    const start = session.open, end = Math.min(Math.floor(time / minute) * minute, session.close)
     const options = (await loadOptions(input.index))[input.index], nominal = Math.round(input.price / optionIndices[input.index].step) * optionIndices[input.index].step
     if (!options || options.expiryAt <= time) throw Object.assign(new Error('Current option expiry unavailable.'),{status:503})
     const strike = nominal

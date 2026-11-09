@@ -2,6 +2,7 @@ import type { AngelOneCandle } from '../api/angelOne'
 import type { GlobalQuote, InstitutionalFlow, MarketContext, MarketOutlook, PublicSnapshot } from '../api/marketContext'
 import commodityMarkets from '../data/commodityMarkets.json'
 import { isCommodity } from './commodities'
+import { instrumentSession } from './tradingSession'
 import globalMarkets from '../data/globalMarkets.json'
 import type { PriceActionAnalysis } from './priceAction'
 import { calculateSessionVwap, candleSession } from './vwap'
@@ -74,7 +75,9 @@ export function observedFlows(value: unknown, next?: InstitutionalFlow): Institu
 }
 
 export function openingRange(candles: AngelOneCandle[], session: string, now: number, instrument?: string) {
-  const starts = isCommodity(instrument) ? [540, 545, 550] : [555, 560, 565] // 09:15, 09:20 and 09:25 IST; use the cached 5-minute chart.
+  const schedule = instrumentSession(Date.parse(`${session}T12:00:00+05:30`), instrument)
+  if (!schedule.tradingDay) return undefined
+  const starts = [schedule.openMinute, schedule.openMinute + 5, schedule.openMinute + 10]
   const bars = starts.map(minute => candles.find(bar => {
     const timestamp = Date.parse(bar[0]), local = new Date(timestamp + 330 * 60_000)
     return candleSession(bar[0]) === session && local.getUTCHours() * 60 + local.getUTCMinutes() === minute && timestamp + 300_000 <= now

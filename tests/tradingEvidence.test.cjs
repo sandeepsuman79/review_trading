@@ -128,12 +128,19 @@ test('legacy technical OI/PCR is separate from the four market-context budgets',
   assert.equal(changed.sentiment.bearishScore, initial.sentiment.bearishScore)
 })
 
-test('ATR excludes tight invalidation and insufficient reward without manufacturing new targets', () => {
+test('ATR and valid price geometry remain required without a minimum reward/risk ratio', () => {
   const input = fixture()
-  for (const change of [{ atr14: undefined }, { atr14: 18 }, { target: 110 }]) {
+  for (const change of [{ atr14: undefined }, { atr14: 0 }, { target: 100 }, { target: NaN }]) {
     const result = analyzeTradingEvidence({ ...input, analysis: { ...input.analysis, ...change } })
     assert.equal(result.canConfirm, false)
     assert.match(result.reason, /ATR|risk/)
+  }
+  for (const change of [{ atr14: 18 }, { target: 110 }]) {
+    const result=analyzeTradingEvidence({ ...input, analysis: { ...input.analysis, ...change } })
+    assert.equal(result.canConfirm,true,result.reason)
+    const prediction=buildEarlyPrediction({...input.analysis,...change},input.instrument,input.interval,now,input.context,input.outlook,result)
+    assert.equal(prediction.plan.target,change.target??input.analysis.target)
+    assert(prediction.plan.riskReward>0&&prediction.plan.riskReward<1.2)
   }
 })
 

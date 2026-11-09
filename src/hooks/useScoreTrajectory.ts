@@ -24,7 +24,7 @@ export function useScoreTrajectory(evidence: TradingEvidence, contract = '', ana
       const trend = scoreTrajectory(bounded, candleIntervalMs(interval))
       let indicatorSamples = bounded
       if (candles?.length) {
-        const cached = cachedCandleIndicators(candles, interval, at + candleIntervalMs(interval))
+        const cached = cachedCandleIndicators(candles, interval, at + candleIntervalMs(interval), instrument)
         indicatorSamples = cached.closed.slice(-32).map((bar, offset) => {
           const i = cached.closed.length - Math.min(32, cached.closed.length) + offset
           const average = cached.averages[i], point = cached.trajectory.indicatorSeries[i]
@@ -33,7 +33,7 @@ export function useScoreTrajectory(evidence: TradingEvidence, contract = '', ana
           return { at: Date.parse(bar[0]), bullish: observed?.bullish ?? 0, bearish: observed?.bearish ?? 0, supertrendDirection: point?.supertrendDirection, indicators: Object.fromEntries(Object.entries(values).filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1]))) }
         })
       }
-      setResult({ ...trend, indicators: indicatorTrajectoryRows(indicatorSamples, candleIntervalMs(interval)) })
+      setResult({ ...trend, indicators: indicatorTrajectoryRows(indicatorSamples, candleIntervalMs(interval), instrument) })
     } catch { setResult({ state: 'UNAVAILABLE', detail: 'Unable to save score trajectory in this browser.' }) }
   }, [instrument, contract, interval, asOf, bullishScore, bearishScore, ema20, ema50, rsi, atr, vix, supertrend, supertrendDirection, adx, plusDi, minusDi, sma20, enabled, candles])
   return result

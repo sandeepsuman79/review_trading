@@ -1,5 +1,13 @@
 # Trading Prediction Agent
 
+**Current live policy: [five-minute candlestick agent](candlestick-agent.md).**
+Since 5 November, new live confirmations and pattern exits use completed 5-minute
+OHLC only. RSI/VWAP scores, indicator coverage, ADX and higher-timeframe gates
+below describe the archived indicator policy. New candle-only trades use price-
+structure TSL. Existing saved records keep their recorded protection policy.
+The remainder of this document is retained as historical implementation detail;
+the linked current rules supersede its live-entry claims.
+
 For a consolidated checklist of current rules, weights, entry/exit timing and the
 late-entry review, see [Agent rule audit](agent-rule-audit.md).
 The [enhancement review](agent-enhancement-review.md) documents monitoring,
@@ -7,7 +15,14 @@ sentiment-age weighting and offline replay additions and their limits.
 Current confirmation uses [bounded adaptive thresholds](adaptive-confirmation.md)
 from completed 15-minute regimes. Continuation 55/15 and reversal 65/20 are lower
 bounds; volatility/chop can raise them, and extreme conditions return WAIT.
-The 1.20 entry reward/risk floor, score weights and TSL are unchanged.
+There is no minimum entry reward/risk ratio. Score weights and TSL retain their
+respective policies.
+Indicator warmup uses completed history plus today's completed bars, without
+restarting the count at each market open. EMA/RSI trajectories, indicator swings
+and regime chop carry across regular overnight/weekend closures. Coverage updates
+from those rolling calculations at each new close; 70% coverage is an availability
+budget, not a requirement to collect 70% of today's candles. Current price setups,
+live quotes and session VWAP retain their own freshness/acceptance checks.
 
 The agent has two independent analyses. Technical analysis alone confirms CALL/CE
 or PUT/PE setups. Market sentiment describes support or headwinds; it never creates,
@@ -116,7 +131,7 @@ Confirmation requires:
 - STRONG classification requires at least 60/100 support and a 20-point lead.
 - Consecutive completed bars from the current IST session and the Mon–Fri 09:15–15:15 IST new-entry window.
 - A stop outside chart invalidation and at least one ATR14 from entry, rounded outward.
-- At least 1.20:1 reward/risk after widening the stop; the chart target stays unchanged.
+- Finite positive risk and reward after widening the stop; no minimum ratio and no extension of the chart target.
 
 ATR and India VIX are risk checks rather than directional votes.
 [NSE describes India VIX](https://www.nseindia.com/static/products-services/indices-indiavix-index)
@@ -324,11 +339,11 @@ not calibrated trade probabilities.
 
 Entry is a proposed break beyond the last two completed candle highs/lows. The
 stop covers the level/candle invalidation and at least one ATR. Observed opposing
-support/resistance caps the target; insufficient room rejects the idea. When no
+support/resistance caps the target; a target at or behind entry rejects the idea. When no
 observed opposing target exists, the 2R projection is labelled explicitly. Rounded
-prices must still offer at least 1.20:1 reward/risk. Stale data, missing/distant
+prices must define positive risk and reward; there is no minimum ratio. Stale data, missing/distant
 levels, absent directional routes, insufficient score/lead, late-session data and
-poor risk/reward remain WAIT even if four arbitrary checks passed.
+invalid price geometry remain WAIT even if four arbitrary checks passed.
 
 The card shows an amber “RISKY · CONDITIONAL SETUP” label, trigger/stop/target,
 matched level, aligned/conflicting indicators and unmet confirmation checks. The
@@ -403,7 +418,7 @@ EMA20/RSI/momentum/Supertrend inputs, and fresh same-session data, valid ATR and
 entry hours. High-VIX score/lead requirements also apply to these early
 candidates. They can be displayed as EARLY while EMA50 warmup or a completed
 pattern/risk check is missing. Fifty bars, full indicator readiness, 70% coverage
-and at least 1.20:1 reward/risk remain mandatory for actual confirmation. The standard 1.5× directional ratio and strong 60/20 classification are
+and valid positive risk/reward geometry remain mandatory for this legacy technical confirmation. The standard 1.5× directional ratio and strong 60/20 classification are
 experimental thresholds chosen by the user, not calibrated probabilities. Missing weights remain undistributed.
 
 The CALL / PUT decisions disclosure shows each direction's support/opposing
@@ -413,9 +428,9 @@ candles, stale data, session gaps, indicator readiness, missing routes/patterns,
 coverage, score, lead, invalid ATR/levels, reward/risk and entry hours.
 
 A separate entry section distinguishes technical confirmation from a disconnected
-stream, missing/stale quote, quote predating issue, unreached trigger and poor
-reward/risk at the actual quote. Quote-dependent reward/risk is not checked
-until the entry is reached. Full confirmation is not an observed fill. Standard
+stream, missing/stale quote, quote predating issue, unreached trigger and invalid
+price geometry at the actual quote. The reward/risk ratio is informational;
+there is no minimum ratio. Full confirmation is not an observed fill. Standard
 versus strong quality is retained in entered-plan snapshots. No option contract
 is selected or validated by this index-level engine; it does not manufacture an
 OPTION_CONTRACT_INVALID result for an integration it does not perform.
@@ -425,6 +440,12 @@ both directions and their thresholds/reasons on each snapshot. Identical
 heartbeat evaluations are deduplicated. The download button exports the selected
 index's session log without broker credentials or news/provider responses. Reload
 clears this diagnostic memory; the existing entered-trade ledger persists.
+The monitoring panel's **Export candles and agent diagnostics** combines this
+observed trail with completed candles, saved outcomes, current plan/entry checks,
+connection/quote state and current ATM context. Broker credentials are excluded.
+Current ATM context is never treated as historical snapshots. A rejected accepted-
+price candidate remains visible with its actual blockers; missing-pattern directions
+retain adaptive checks rather than reverting to legacy ratio diagnostics.
 
 The core scorer and live entry guard both reject new entries at/after 15:15 IST.
 Open-position management automatically requests tracked square-off. The entry tracker
@@ -535,9 +556,10 @@ checks and applicable price-event blockers. Scoring budgets and confirmation
 thresholds stay as documented above.
 
 
-The requested reward/risk minimum is now **1.20:1**, shared across setup detection,
-ATR adjustment, plan creation and the actual observed entry. A gap/slippage below
-that floor cannot enter, and original reference targets are not stretched. Entered
+The requested reward/risk minimum has been **removed** from setup detection,
+ATR adjustment, plan creation and actual observed entry. Gap/slippage entries
+below the former floor can enter with valid positive remaining reward. Original
+reference targets are not stretched. Entered
 trades have open profit: reaching 1.2R, 2R, 3R or the original reference does not
 trigger take-profit. Realised reward depends on the exit. RSI/VWAP allocations, directional
 score requirements, coverage and VIX/ATR checks remain unchanged.

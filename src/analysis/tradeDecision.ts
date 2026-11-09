@@ -1,4 +1,3 @@
-import { minimumRewardRisk, meetsMinimumRewardRisk } from './tradeRisk'
 import { scoreDominates } from './scoreTrajectory'
 import type { AngelOneCandle } from '../api/angelOne'
 import type { PriceActionAnalysis } from './priceAction'
@@ -7,9 +6,11 @@ import { candleIntervalMs } from './candleData'
 import { candleSession } from './vwap'
 import { inTradingEntryWindow, marketHours, squareOffLabel } from './tradingSession'
 
-export type TradeReasonCode = 'INSUFFICIENT_CANDLES' | 'STALE_DATA' | 'SESSION_DATA_GAP' | 'INDICATOR_NOT_READY' | 'NO_DIRECTIONAL_ROUTE' | 'SCORE_BELOW_THRESHOLD' | 'DIRECTIONAL_LEAD_TOO_SMALL' | 'TECHNICAL_COVERAGE_LOW' | 'NO_CONFIRMED_PATTERN' | 'ATR_INVALID' | 'TRADE_LEVELS_INVALID' | 'RR_BELOW_MINIMUM' | 'OUTSIDE_ENTRY_WINDOW' | 'ENTRY_NOT_REACHED' | 'LIVE_STREAM_DISCONNECTED' | 'QUOTE_STALE' | 'QUOTE_BEFORE_SIGNAL' | 'SETUP_NOT_CONFIRMED' | 'TRADE_ALREADY_OPEN' | 'QUALITY_DATA' | 'TREND_REGIME' | 'HIGHER_TREND' | 'ENTRY_EXTENSION' | 'PRICE_ACCEPTANCE' | 'MOMENTUM_CONFIRMATION' | 'PARTICIPATION' | 'VWAP_CONFIRMATION'
+export type TradeReasonCode = 'CANDLE_HISTORY' | 'CANDLE_FRESHNESS' | 'CANDLE_CONTRACT' | 'CANDLE_PATTERN' | 'CANDLE_ENTRY_WINDOW' | 'CANDLE_RISK' | 'INSUFFICIENT_CANDLES' | 'STALE_DATA' | 'SESSION_DATA_GAP' | 'INDICATOR_NOT_READY' | 'NO_DIRECTIONAL_ROUTE' | 'SCORE_BELOW_THRESHOLD' | 'DIRECTIONAL_LEAD_TOO_SMALL' | 'TECHNICAL_COVERAGE_LOW' | 'NO_CONFIRMED_PATTERN' | 'ATR_INVALID' | 'TRADE_LEVELS_INVALID' | 'OUTSIDE_ENTRY_WINDOW' | 'ENTRY_NOT_REACHED' | 'LIVE_STREAM_DISCONNECTED' | 'QUOTE_STALE' | 'QUOTE_BEFORE_SIGNAL' | 'SETUP_NOT_CONFIRMED' | 'TRADE_ALREADY_OPEN' | 'QUALITY_DATA' | 'TREND_REGIME' | 'HIGHER_TREND' | 'ENTRY_EXTENSION' | 'PRICE_ACCEPTANCE' | 'MOMENTUM_CONFIRMATION' | 'PARTICIPATION' | 'VWAP_CONFIRMATION'
 export type DecisionCheck = { code: TradeReasonCode; label: string; status: 'PASS' | 'FAIL' | 'NOT_CHECKED'; detail: string }
 export type CandidateDecision = {
+  basis?: 'CANDLE_ONLY'
+  policy?: string
   side: 'CALL' | 'PUT'; state: 'EARLY' | 'CONFIRMED' | 'RISKY' | 'REJECTED' | 'WAIT'; quality?: 'STANDARD' | 'STRONG'
   supportScore: number; opposingScore: number; lead: number; coverage: number; requiredScore: number; requiredGap: number
   setup: string; pattern: string; routes: string[]; entry?: number; stopLoss?: number; target?: number; riskReward?: number
@@ -50,7 +51,6 @@ export function buildCandidateDecision(analysis: PriceActionAnalysis, evidence: 
   add('SCORE_BELOW_THRESHOLD', 'Supporting score', supportScore >= evidence.requiredScore, `${supportScore}/100 / ${evidence.requiredScore} required`)
   add('DIRECTIONAL_LEAD_TOO_SMALL', selectedConfirmation ? 'Directional lead' : 'Directional score ratio', (selectedConfirmation ? supportScore > 0 : scoreDominates(supportScore, opposingScore)) && lead >= evidence.requiredGap, `${supportScore} support / ${opposingScore} opposition; ${selectedConfirmation ? `require ≥${evidence.requiredScore} support and ≥${evidence.requiredGap} lead; no additional ratio gate` : `require positive support ≥1.5× opposition and ${evidence.requiredGap} risk-floor lead`}`)
   add('TRADE_LEVELS_INVALID', 'Trade levels', levels, 'Positive entry, ATR-adjusted stop and target on the correct sides', pattern)
-  add('RR_BELOW_MINIMUM', 'Reward/risk', riskReward !== undefined && meetsMinimumRewardRisk(riskReward), riskReward !== undefined ? `${riskReward.toFixed(2)}:1 / ${minimumRewardRisk.toFixed(2)}:1 required` : 'No validated trade levels', pattern && levels)
   for (const check of evidence.confirmation?.checks ?? []) add(check.code, check.label, check.passed, check.detail)
   const vwapCheck = evidence.confirmation && evidence.checks?.find(check => check.label === 'VWAP confirmation')
   if (vwapCheck) add('VWAP_CONFIRMATION', vwapCheck.label, vwapCheck.passed, vwapCheck.detail)

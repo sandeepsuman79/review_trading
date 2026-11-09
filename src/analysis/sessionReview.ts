@@ -1,13 +1,11 @@
 import type { AngelOneCandle } from '../api/angelOne'
 import type { PredictionRecord } from './predictionHistory'
 import { analyzeHistoricalOutcomes } from './historicalOutcomes'
-import { isCommodity, mcxSession } from './commodities'
+import { instrumentSession } from './tradingSession'
 export const reviewDate = (now: number) => new Date(now + 330 * 60000).toISOString().slice(0, 10)
 export function sessionReviewDue(instrument: string, now: number) {
-  const weekday = new Date(now + 330 * 60000).getUTCDay()
-  if (weekday === 0 || weekday === 6) return false
-  const cutoff = isCommodity(instrument) ? mcxSession(now).close : Date.parse(`${reviewDate(now)}T15:15:00+05:30`)
-  return now >= cutoff
+  const session = instrumentSession(now, instrument)
+  return session.tradingDay && now >= session.entryClose
 }
 const settled = (r: PredictionRecord) => r.stage === 'CONFIRMED' && ['TARGET_HIT', 'STOP_LOSS_HIT', 'EARLY_EXIT'].includes(r.status) && Number.isFinite(r.points) && Number.isFinite(r.entryAt) && Number.isFinite(r.exitAt) && r.exitAt! >= r.entryAt!
 /** Small supervised classifier; chronological holdout remains unseen during fitting. */

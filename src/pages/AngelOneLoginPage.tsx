@@ -1,3 +1,4 @@
+import { monitoringStartedKey } from '../analysis/monitoringSession'
 import { FormEvent, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import ErrorToast from '../components/ErrorToast'
@@ -18,6 +19,10 @@ export default function AngelOneLoginPage() {
     setLoading(true)
     try {
       const result = await loginToAngelOne({ clientcode, password, totp, state })
+      if (!result.status || !result.data?.jwtToken) {
+        setMessage(result.message || 'Angel One login failed.')
+        return
+      }
       localStorage.setItem('angelone_clientcode', clientcode.trim())
       if (result.data?.jwtToken) {
         localStorage.setItem('angelone_jwt_token', result.data.jwtToken)
@@ -28,13 +33,10 @@ export default function AngelOneLoginPage() {
       if (result.data?.feedToken) {
         localStorage.setItem('angelone_feed_token', result.data.feedToken)
       }
+      localStorage.setItem(monitoringStartedKey, String(Date.now()))
       window.dispatchEvent(new Event('angelone-auth-changed'))
-      if (result.status && result.data?.jwtToken) {
-        setMessage('Angel One login successful. Synchronizing chart history…')
-        navigate('/prediction')
-      } else {
-        setMessage(result.message || 'Angel One login failed.')
-      }
+      setMessage('Angel One login successful. Synchronizing chart history…')
+      navigate('/prediction')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Angel One login failed.')
     } finally {
